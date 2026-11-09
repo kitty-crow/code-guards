@@ -1,47 +1,73 @@
 # Code Guards
 
-Reusable, AST-based checks for TypeScript repositories. Each guard is an independent module; the CLI can run them separately or together.
+Local, engine-agnostic TypeScript quality checks. **All guards are enabled by default** and can be individually disabled. Findings are advisory unless you pass `--strict`, in which case warnings produce a non-zero exit code, suitable for npm/Bun build and test scripts. No GitHub Actions workflows are included or required.
 
-## Guards
+## Available guards
 
-| Guard | Rule | Default outcome |
+| Guard | Warnings | How it works |
 | --- | --- | --- |
-| `no-nested-if` (`CG001`) | Reject an `if` within another `if`, including `else if`. A new function scope resets the nesting count. | Error |
-| `type-reuse` (`CG101`–`CG103`) | Find potentially redundant interfaces, type aliases and related class concepts across modules. | Warning or information |
+| `no-nested-if` | `CG001` | TypeScript AST detects nested `if` and `else if` within the same function. Provides context-sensitive advice about guard clauses, early returns and safe flattening. |
+| `type-reuse` | `CG101`, `CG102`, `CG103` | TypeScript compiler identifies identical or overlapping declaration shapes; **actual zero-shot NLI** checks non-exact candidates for conceptual equivalence. |
+| `function-quality` | `CG201` to `CG205` | AST metrics propose candidates for decomposition, comments, module ownership, helper/arrow conversion and duplicated functions. **Actual zero-shot NLI** assesses the ambiguous cases; exact duplicate bodies are deterministic. |
 
-Type reuse first resolves structural shapes with the TypeScript compiler. It also compares field names, field types and a small set of lexical synonyms to suggest conceptually related declarations. **This first version does not run a language model or claim semantic equivalence.** A local embedding model may be added as an optional second-stage scorer, once the deterministic candidate generation is established.
+`no-nested-if` remains independent of NLP because its AST check and guidance are deterministic. Type reuse and function quality use **`@huggingface/transformers@3.8.1` with `Xenova/mobilebert-uncased-mnli`** on the local CPU/ONNX backend, not a predefined synonym table pretending to be NLP. Lexical/structural rules only **shortlist candidates** to keep model inference affordable. There is no online inference service; the model weights are downloaded on first use, then cached locally.
 
-Two declarations that look alike can represent intentionally different domain concepts. Type-reuse findings are suggestions, never automatic edits. Classes are not treated as interchangeable simply because their fields match. Primitive aliases and single-field records are omitted to keep noise down. A scalar and an array of that scalar are not duplicates.
+An ML prediction is **not proof** of semantic equivalence. In particular, two structurally identical types can be intentionally distinct, a scalar is not an array, and a class can carry runtime semantics beyond its fields. All reports ask for a human review. No code is rewritten automatically.
 
-## Run in another repository
+## Local installation and execution
 
-Install Bun and add TypeScript plus this repository as a development dependency, or run the source CLI directly from a checkout:
-
-```sh
-bun install
-bun src/cli.ts all --project path/to/tsconfig.json
-bun src/cli.ts no-nested-if --project path/to/tsconfig.json
-bun src/cli.ts type-reuse --project path/to/tsconfig.json
-```
-
-For a project that depends on this package, invoke `bunx code-guards type-reuse --project tsconfig.json` or `bunx code-guards all`.
-
-Options: `--format text|json|github`, `--fail-on error|warning|never`, `--include-tests` (type reuse only), and `--project`.
-
-Default exit status is 1 for errors, 2 for configuration failures and 0 for warnings/information. Set `--fail-on warning` to make structural duplication block CI. GitHub format emits workflow annotations.
-
-## Development
+Use Node.js 20+ (npm) or Bun. The package compiles to standard JavaScript, with a `code-guards` executable; the CLI itself contains no Bun-specific APIs.
 
 ```sh
-bun install
-bun run ci
+npm install
+npm run ci                 # local typecheck, tests, build and strict self-check
+npm run guards            # all guards, advisory
+npm run guards:strict     # all guards, non-zero exit on warnings
+npm run guards -- type-reuse --project tsconfig.json
+npm run guards -- --disable function-quality
+npm run guards -- --offline
 ```
 
-CI runs strict TypeScript type-checking, tests, and the independent guards. The project is MIT licensed.
+On Bun, the same package scripts work with `bun run build`, `bun run test` and `bun run guards -- --strict`. For direct execution after building: `node dist/src/cli.js --strict` or `bun dist/src/cli.js --strict`.
 
-## Current limitations
+To add it to another private project, install from the Git repository (with appropriate GitHub access):
 
-- Similarity is a heuristic: no ML-based inference yet, and synonyms are deliberately conservative.
-- Type fingerprints cover common primitives, unions, arrays, tuples, object properties, index signatures and callable types; complex generic or recursive types may require manual review.
-- Candidate generation deliberately skips extremely common field-name buckets to reduce quadratic comparisons in large projects.
-- No cross-repository index, incremental PR baseline or suppression file yet.
+```sh
+npm install --save-dev git+ssh://git@github.com/kitty-crow/code-guards.git
+```
+
+Then add to **that project's** `package.json`:
+
+```json
+{
+  "scripts": {
+    "guard": "code-guards --strict --project tsconfig.json",
+    "build": "tsc --noEmit && code-guards --strict",
+    "test": "node --test && code-guards --strict"
+  }
+}
+```
+
+Equivalent `bun run build`, `bun run test`, `npm run build` and `npm test` will fail on guard findings because the **guard command** returns exit code 1. It does not modify TypeScript's compiler or literally inject diagnostics into `tsc`.
+
+### Options
+
+- `--strict`: warnings exit with code 1. Without this flag, findings are printed but exit code is 0.
+- `--disable no-nested-if|type-reuse|function-quality`: opt out of one guard; repeat as needed.
+- `no-nested-if`, `type-reuse`, `function-quality`, `all`: optionally run just one guard, or all.
+- `--project path/to/tsconfig.json`: choose a TypeScript project.
+- `--include-tests`: include test declarations in type-reuse/function-quality checks.
+- `--format text|json|github`: plain diagnostics, machine-readable JSON or annotations.
+- `--offline`: require locally cached model weights; never fetch remote files. Equivalent to `CODE_GUARDS_OFFLINE=1`.
+
+`CODE_GUARDS_MODEL_CACHE` overrides the model cache directory. Model loading failures are **reported as errors (exit 2)**, never silently replaced by heuristic decisions. The first semantic scan requires model weights to be downloaded if not already cached.
+
+## Bootstrap and tests
+
+`npm run ci` invokes Code Guards against **its own source** after building it. Unit tests inject deterministic fake scorer responses to verify NLI integration and rejection logic without the very large model download. The full local self-check runs the real model when installed and cached.
+
+## Limitations
+
+This is an early implementation. Semantic candidate generation is conservative, complex recursive/generic type shapes are approximated, and code-quality signals are recommendations rather than correctness proofs. A local incremental inference-results cache, per-rule suppression comments and an opt-in model integration test would improve performance and reproducibility for large repositories.
+
+MIT licence.
