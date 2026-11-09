@@ -171,6 +171,25 @@ test("CG411 does not classify fenced examples or invent handover issues when NLP
   assert.ok(!findings.some(item => item.code === "CG411"));
 });
 
+test("CG411 rejects usable documentation even when one NLP question is overconfident", async () => {
+  const project = fixture({"README.md": "# Usage\\n\\nThe NO_COLOR setting disables terminal colouring. JSON output is uncoloured and retains structured fields.\\n\\nThe command validates TypeScript source and reports line-numbered findings without changing the scanned repository."});
+  const questions: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    questions.push(question.same);
+    return question.same.includes("progress, completed work") ? endorse(question) : reject(question);
+  };
+  const findings = await documentation(project, scorer);
+  assert.ok(questions.some(text => text.includes("progress, completed work")));
+  assert.ok(questions.some(text => text.includes("temporary status message")));
+  assert.ok(!findings.some(item => item.code === "CG411"), "an isolated high NLP score must not create a documentation warning");
+});
+
+test("CG411 rejects ambiguous contrary evidence even with high supporting scores", async () => {
+  const project = fixture({"README.md": "# Usage\\n\\nThe CLI accepts --strict to fail on findings. It reads source files and returns a diagnostic report with locations."});
+  const findings = await documentation(project, async () => ({sameConcept: 0.99, differentConcept: 0.8}));
+  assert.ok(!findings.some(item => item.code === "CG411"));
+});
+
 test("the complete slopdetector README is a permanent NLP documentation regression fixture", async () => {
   const readme = readFileSync(path.resolve("examples/coverage/fixtures/slopdetector-README.md"), "utf8");
   const project = fixture({"README.md": readme});

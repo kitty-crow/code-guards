@@ -221,35 +221,40 @@ function checkLinks(root: string, file: string, content: string, findings: Findi
 
 const handoverQuestions = [
   {
-    same: "this paragraph is a temporary developer handover about work performed, test execution or limitations of the development environment",
-    different: "this paragraph gives stable and relevant information about software behaviour, usage or configuration"
+    same: "the author reports progress, completed work or unverified tests from preparing this particular code delivery",
+    different: "the paragraph describes stable software behaviour, a command, an interface or an operational limitation"
   },
   {
-    same: "this paragraph is a development process or source handoff summary rather than useful instructions or reference documentation",
-    different: "this paragraph explains how to use or maintain the software, including its actual capabilities and constraints"
+    same: "the passage is a temporary status message to the person who requested the coding work, not documentation for future users",
+    different: "the passage is enduring technical reference information or usage guidance for future users and maintainers"
   }
 ] as const;
 
-// Every prose paragraph is evaluated by NLP. Word lists never decide which
-// paragraphs qualify for this check, and the model's verdict is not authorship detection.
+// Distinguish a one-off development report from durable reference material.
+// Require two independent NLP judgements: mentioning tests or implementation
+// alone is not evidence that a paragraph belongs in a handover message.
 async function checkHandover(file: string, paragraph: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
   if (releaseFile.test(file)) return;
+  let lowestSupport = 1;
+  let highestOpposition = 0;
   for (const question of handoverQuestions) {
     const verdict = await score({
       premise: `Documentation paragraph: ${paragraph.text}`,
       same: question.same,
       different: question.different
     });
-    if (!supportsReuse(verdict, 0.7)) continue;
-    issue(findings, {
-      code: "CG411", file, line: paragraph.line,
-      title: "Development handover prose in project documentation",
-      subject: paragraph.text.slice(0, 115),
-      reason: `The local model favoured a development handover or implementation-status narrative (${Math.round(verdict.sameConcept * 100)}% support versus ${Math.round(verdict.differentConcept * 100)}% opposing evidence). The paragraph does not explain a stable user-facing capability, operation or contract.`,
-      suggestion: "Replace development-session narration with current behaviour, runnable instructions or lasting limitations. Put relevant implementation history in a dated development note or changelog."
-    });
-    return;
+    // Independent NLI scores can both be high; treat ambiguity as insufficient evidence.
+    if (!supportsReuse(verdict, 0.85) || verdict.differentConcept > 0.35) return;
+    lowestSupport = Math.min(lowestSupport, verdict.sameConcept);
+    highestOpposition = Math.max(highestOpposition, verdict.differentConcept);
   }
+  issue(findings, {
+    code: "CG411", file, line: paragraph.line,
+    title: "Development handover prose in project documentation",
+    subject: paragraph.text.slice(0, 115),
+    reason: `Both independent semantic questions identified a temporary development status report (${Math.round(lowestSupport * 100)}% minimum support, ${Math.round(highestOpposition * 100)}% maximum contrary evidence). It describes the preparation or verification of a particular code delivery rather than enduring documentation.`,
+    suggestion: "Replace development-session narration with current behaviour, runnable instructions or lasting limitations. Put relevant implementation history in a dated development note or changelog."
+  });
 }
 
 async function checkProse(file: string, content: string, findings: Finding[], score: SemanticScorer): Promise<void> {

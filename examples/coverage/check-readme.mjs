@@ -32,6 +32,19 @@ try {
   }
   console.log(`CG411 real-model regression passed: ${findings.length} handover finding(s) in the full Slopdetector README.`);
   for (const finding of findings.slice(0, 5)) console.log(`  ${finding.location.file}:${finding.location.line}: ${finding.subject}`);
+  // A known useful README paragraph must not be confused with a delivery report.
+  writeFileSync(path.join(root, "README.md"), [
+    "# Usage",
+    "",
+    "The NO_COLOR setting disables terminal colouring. JSON output retains structured diagnostic fields.",
+    "",
+    "The command checks TypeScript modules and reports source locations without changing the target repository."
+  ].join("\n"));
+  const cleanFindings = (await documentation(loadProject(root))).filter(item => item.code === "CG411");
+  if (cleanFindings.length) {
+    throw new Error(`CG411 incorrectly flags usable reference documentation: ${cleanFindings.map(item => item.subject).join(" | ")}`);
+  }
+  console.log("CG411 real-model negative control passed: useful reference documentation is not flagged.");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
