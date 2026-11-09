@@ -1,4 +1,5 @@
 import ts from "typescript";
+import path from "node:path";
 import { location, type Finding } from "../model.ts";
 import type { Project } from "../project.ts";
 import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
@@ -9,6 +10,7 @@ type FunctionInfo = {
   body: ts.Block | ts.ConciseBody;
   lines: number;
   branches: number;
+  branchClauses: string[];
   statements: number;
   dependencies: Set<string>;
   calls: Set<string>;
@@ -36,6 +38,15 @@ function recordCall(project: Project, file: ts.SourceFile, node: ts.CallExpressi
   if (source && source !== file && !source.isDeclarationFile) info.dependencies.add(source.fileName);
 }
 
+function branchClause(node: ts.Node): string | undefined {
+  if (ts.isIfStatement(node)) return `if (${node.expression.getText()})`;
+  if (ts.isConditionalExpression(node)) return `conditional (${node.condition.getText()})`;
+  if (ts.isWhileStatement(node)) return `while (${node.expression.getText()})`;
+  if (ts.isForStatement(node) && node.condition) return `for (${node.condition.getText()})`;
+  if (ts.isCaseClause(node)) return `case ${node.expression.getText()}`;
+  return undefined;
+}
+
 function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
   const result: FunctionInfo[] = [];
   for (const file of project.files) {
@@ -46,7 +57,7 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
       const body = "body" in node ? node.body : undefined;
       if (!name || !body) { ts.forEachChild(node, visit); return; }
       const info: FunctionInfo = {
-        name, node, body, lines: 0, branches: 0, statements: 0,
+        name, node, body, lines: 0, branches: 0, branchClauses: [], statements: 0,
         dependencies: new Set(), calls: new Set(), comments: false, arguments: node.parameters.length, fingerprint: ""
       };
       const start = file.getLineAndCharacterOfPosition(body.getStart(file)).line;
@@ -58,6 +69,11 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
         if (current !== body && ts.isFunctionLike(current)) return;
         if (ts.isStatement(current) && current !== body) info.statements += 1;
         if (ts.isIfStatement(current) || ts.isConditionalExpression(current) || ts.isForStatement(current) || ts.isForOfStatement(current) || ts.isForInStatement(current) || ts.isWhileStatement(current) || ts.isCaseClause(current) || ts.isCatchClause(current)) info.branches += 1;
+        const clause = info.branchClauses.length < 5 ? branchClause(current) : undefined;
+        if (clause) {
+          const line = file.getLineAndCharacterOfPosition(current.getStart(file)).line + 1;
+          info.branchClauses.push(`${clause} (line ${line})`);
+        }
         if (ts.isCallExpression(current)) recordCall(project, file, current, info);
         ts.forEachChild(current, visitBody);
       };
@@ -72,7 +88,8 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
 }
 
 function evidence(info: FunctionInfo): string {
-  return `The TypeScript function ${info.name} is ${info.lines} lines long, contains ${info.branches} decision branches, ${info.statements} statements, takes ${info.arguments} arguments, and calls ${[...info.calls].slice(0, 12).join(", ") || "nothing"}. It uses ${info.dependencies.size} external source modules. ${info.comments ? "It contains comments." : "It has no explanatory comments."}`;
+  const excerpt = info.body.getText().replace(/\s+/g, " ").slice(0, 360);
+  return `The TypeScript function ${info.name} is ${info.lines} lines long, contains ${info.branches} decision branches, ${info.statements} statements, takes ${info.arguments} arguments, and calls ${[...info.calls].slice(0, 12).join(", ") || "nothing"}. It uses ${info.dependencies.size} external source modules. ${info.comments ? "It contains comments." : "It has no explanatory comments."} Example clauses: ${info.branchClauses.join("; ")}. Implementation excerpt: ${excerpt}`;
 }
 
 type Emit = (info: FunctionInfo, code: string, message: string, similarity?: number, related?: FunctionInfo) => void;
@@ -117,14 +134,64 @@ async function reviewSimilarFunctions(functions: FunctionInfo[], score: Semantic
   }
 }
 
+function nameNode(info: FunctionInfo): ts.Node {
+  const node = info.node;
+  if (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) return node.name ?? node;
+  if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isVariableDeclaration(node.parent)) return node.parent.name;
+  return node;
+}
+
+type Explanation = { title: string; reason: string; suggestion: string };
+
+function explain(info: FunctionInfo, code: string, related?: FunctionInfo): Explanation {
+  const measurements = `${info.lines} lines, ${info.statements} statements and ${info.branches} decision points`;
+  const clauses = info.branchClauses.slice(0, 3).join("; ");
+  if (code === "CG201") return {
+    title: `Consider decomposing ${info.name}`,
+    reason: `${info.name} contains ${measurements}. Example decisions: ${clauses}. The model agreed that decomposition may help.`,
+    suggestion: `Inspect the branches in ${info.name}; extract distinct validation, transformation or output phases into named helpers, then keep ${info.name} as an orchestrator. Preserve execution order and side effects.`
+  };
+  if (code === "CG202") return {
+    title: `Unexplained decisions in ${info.name}`,
+    reason: `${info.name} contains ${info.branches} decision points across ${info.lines} lines, but no explanatory comment was detected. Example clauses: ${clauses}. The model agreed that a comment could help.`,
+    suggestion: `Add a short comment or JSDoc immediately before ${info.name} describing the non-obvious rule or invariant behind its branches. Explain why the condition matters, not what each statement does.`
+  };
+  if (code === "CG203") {
+    const modules = [...info.dependencies].map(filename => path.basename(filename)).sort().join(", ");
+    return {
+      title: `High external coupling in ${info.name}`,
+      reason: `${info.name} calls into ${info.dependencies.size} other source modules: ${modules}. The model agreed that the ownership or dependency boundary warrants review.`,
+      suggestion: `Review whether ${info.name} belongs in a coordinating module. Consider passing narrower interfaces, grouping related operations or moving orchestration to an explicit service. Avoid moving it solely to reduce a metric.`
+    };
+  }
+  if (code === "CG204") return {
+    title: `Stateless method ${info.name} might be a helper`,
+    reason: `${info.name} has ${info.statements} statements and ${info.lines} lines with no detected 'this' or 'super' use. The model agreed that a helper could be clearer.`,
+    suggestion: `If ${info.name} does not rely on class identity or an override contract, consider a module-level function or arrow-function helper and call it from the class. Check public API compatibility before changing it.`
+  };
+  const other = related?.name ?? "another function";
+  return {
+    title: `Repeated implementation: ${info.name} and ${other}`,
+    reason: related?.fingerprint === info.fingerprint
+      ? `${info.name} has the same normalised function body as ${other} (in ${related.node.getSourceFile().fileName.split(/[\\/]/).pop()}).`
+      : `${info.name} and ${other} have overlapping call patterns and the zero-shot model suggested duplicated behaviour.`,
+    suggestion: `Compare ${info.name} with ${other} and their contracts. If they genuinely perform the same operation, keep one shared implementation and import or delegate to it; otherwise preserve separate domain-specific functions.`
+  };
+}
+
 export async function functionQuality(project: Project, includeTests = false, score: SemanticScorer = zeroShot): Promise<Finding[]> {
   const functions = getInfo(project, includeTests);
   const findings: Finding[] = [];
-  const emit: Emit = (info, code, message, similarity, related) => {
-    findings.push({ guard: "function-quality", severity: "warning", code, message,
-      location: location(project.root, info.node),
+  const emit: Emit = (info, code, _message, similarity, related) => {
+    const note = explain(info, code, related);
+    findings.push({ guard: "function-quality", severity: "warning", code, message: note.title,
+      location: location(project.root, nameNode(info)),
+      subject: info.name,
+      span: info.name.length,
+      reason: note.reason,
+      suggestion: note.suggestion,
       ...(similarity === undefined ? {} : { similarity }),
-      ...(related ? { related: location(project.root, related.node) } : {})
+      ...(related ? { related: location(project.root, nameNode(related)), relatedSpan: related.name.length } : {})
     });
   };
   for (const info of functions) await reviewFunction(info, score, emit);

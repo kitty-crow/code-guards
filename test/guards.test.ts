@@ -39,8 +39,8 @@ test("nested if and else-if produce advisory warnings with actionable guidance",
   const result = noNestedIf(sample);
   assert.equal(result.length, 2);
   assert.ok(result.every(finding => finding.code === "CG001" && finding.severity === "warning"));
-  assert.match(result[0]?.message ?? "", /early return/i);
-  assert.match(result[1]?.message ?? "", /mutually exclusive/i);
+  assert.match(result[0]?.suggestion ?? "", /else branch remains reachable/i);
+  assert.match(result[1]?.reason ?? "", /mutually exclusive/i);
 });
 
 test("a nested function resets control-flow nesting", () => {

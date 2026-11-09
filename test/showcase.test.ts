@@ -18,7 +18,7 @@ test("showcase detects nested control flow including else-if", () => {
   const findings = noNestedIf(loadProject(violations));
   assert.equal(findings.length, 2);
   assert.ok(findings.every(finding => finding.code === "CG001"));
-  assert.ok(findings.some(finding => /guard clause/.test(finding.message)));
+  assert.ok(findings.some(finding => /return "pending"/.test(finding.suggestion ?? "")));
 });
 
 test("showcase detects identical types and repeated implementations without NLP", async () => {
@@ -43,6 +43,8 @@ test("semantic showcase exercises every advisory function-quality category with 
   assert.ok(codes.has("CG202"));
   assert.ok(codes.has("CG203"));
   assert.ok(codes.has("CG204"));
+  assert.ok(functions.every(finding => finding.reason && finding.suggestion && finding.subject && finding.location.line > 0));
+  assert.ok(functions.some(finding => finding.code === "CG203" && /other source modules|other source modules|other source modules|a\.ts|b\.ts/.test(finding.reason ?? "")));
   const types = await typeReuse(project, false, endorse);
   assert.ok(types.some(finding => finding.code === "CG103"));
 });
@@ -51,9 +53,9 @@ test("real CLI process prints diagnostic codes and returns distinct exit codes",
   const args = ["dist/src/cli.js", "--project", violations];
   const advisory = spawnSync(process.execPath, args, { encoding: "utf8" });
   assert.equal(advisory.status, 0, advisory.stderr);
-  assert.match(advisory.stdout, /warning CG001/);
-  assert.match(advisory.stdout, /warning CG101/);
-  assert.match(advisory.stdout, /warning CG205/);
+  assert.match(advisory.stdout, /WARNING  CG001/);
+  assert.match(advisory.stdout, /WARNING  CG101/);
+  assert.match(advisory.stdout, /WARNING  CG205/);
   const strict = spawnSync(process.execPath, [...args, "--strict"], { encoding: "utf8" });
   assert.equal(strict.status, 1, strict.stderr);
   assert.match(strict.stdout, /4 finding\(s\): 4 warning\(s\)/);

@@ -12,7 +12,12 @@ export type Finding = {
   message: string;
   location: Location;
   related?: Location;
+  relatedSpan?: number;
   similarity?: number;
+  subject?: string;
+  span?: number;
+  reason?: string;
+  suggestion?: string;
 };
 
 export function location(root: string, node: ts.Node): Location {
