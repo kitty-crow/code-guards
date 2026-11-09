@@ -2,28 +2,85 @@ import ts from "typescript";
 import { location, type Finding } from "../model.ts";
 import type { Project } from "../project.ts";
 
-function guidance(node: ts.IfStatement): string {
-  if (ts.isIfStatement(node.parent) && node.parent.elseStatement === node) {
-    return "Consider extracting a decision helper or restructuring mutually exclusive branches. Separate if statements are not automatically equivalent to else-if.";
-  }
-  const outer = node.parent && ts.isBlock(node.parent) && ts.isIfStatement(node.parent.parent)
-    ? node.parent.parent : undefined;
-  if (outer?.elseStatement) return "Consider extracting a named predicate or a small helper. An early return must preserve the outer else branch's behaviour.";
-  if (outer) return "Consider a guard clause in the enclosing function: if (!condition) return; then handle the inner condition at the same level. In a loop, continue may be appropriate.";
-  return "Consider a guard clause, a named predicate or a smaller function. Preserve branch exclusivity and control-flow behaviour.";
+function outerIf(node: ts.IfStatement): ts.IfStatement | undefined {
+  if (ts.isIfStatement(node.parent)) return node.parent;
+  const parent = node.parent;
+  return ts.isBlock(parent) && ts.isIfStatement(parent.parent) ? parent.parent : undefined;
 }
 
-// Each function-like node is a fresh control-flow scope.
+function terminalStatement(statement: ts.Statement): boolean {
+  if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return true;
+  if (ts.isBlock(statement) && statement.statements.length === 1) {
+    const only = statement.statements[0];
+    return Boolean(only && (ts.isReturnStatement(only) || ts.isThrowStatement(only)));
+  }
+  return false;
+}
+
+function fallbackReturn(outer: ts.IfStatement): ts.ReturnStatement | undefined {
+  const parent = outer.parent;
+  if (!ts.isBlock(parent)) return undefined;
+  const index = parent.statements.indexOf(outer);
+  const next = parent.statements[index + 1];
+  return next && ts.isReturnStatement(next) ? next : undefined;
+}
+
+function negated(expression: ts.Expression): string {
+  if (ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.ExclamationToken) return expression.operand.getText();
+  if (ts.isIdentifier(expression) || ts.isPropertyAccessExpression(expression)) return `!${expression.getText()}`;
+  return `!(${expression.getText()})`;
+}
+
+function suggestion(node: ts.IfStatement, outer: ts.IfStatement | undefined): string {
+  const expression = node.expression.getText();
+  const before = outer?.expression.getText() ?? "the enclosing condition";
+  const isElseIf = outer?.elseStatement === node;
+  if (isElseIf && outer && terminalStatement(outer.thenStatement)) {
+    return `The preceding 'if (${before})' branch always returns or throws, so the 'else' is redundant. Replace that clause with:
+  ${node.getText()}
+Keep the final fallback unchanged.`;
+  }
+  if (isElseIf) {
+    return `The branch 'if (${expression})' is only checked when 'if (${before})' is false. Extract this decision into a named helper or simplify the branches without making them independent.`;
+  }
+  if (outer?.elseStatement) {
+    return `The outer 'if (${before})' has an else branch. Extract a helper or combine conditions only after verifying that the else branch remains reachable in exactly the same cases.`;
+  }
+  const onlyInner = outer && ts.isBlock(outer.thenStatement) && outer.thenStatement.statements.length === 1 && outer.thenStatement.statements[0] === node;
+  const fallback = outer && onlyInner ? fallbackReturn(outer) : undefined;
+  if (outer && fallback?.expression) {
+    return `Replace the outer block with an early return and the lifted inner clause:
+  if (${negated(outer.expression)}) return ${fallback.expression.getText()};
+  ${node.getText()}
+Keep the existing final return after these statements.`;
+  }
+  if (outer) {
+    return `Consider an early exit for '!(${before})', then move 'if (${expression})' one level out. Use 'return' only if ending this function is correct; use 'continue' inside a loop when appropriate.`;
+  }
+  return `Extract a named predicate or a smaller function for 'if (${expression})'; do not change which branches run or when they return.`;
+}
+
+// A function-like declaration starts a new control-flow scope. Else-if remains nesting.
 export function noNestedIf(project: Project): Finding[] {
   const findings: Finding[] = [];
   for (const file of project.files) {
     const visit = (node: ts.Node, depth: number): void => {
       if (ts.isFunctionLike(node)) { ts.forEachChild(node, child => visit(child, 0)); return; }
       if (ts.isIfStatement(node) && depth > 0) {
+        const outer = outerIf(node);
+        const current = `if (${node.expression.getText(file)})`;
+        const enclosing = outer ? `if (${outer.expression.getText(file)})` : "an enclosing if";
+        const isElseIf = outer?.elseStatement === node;
         findings.push({
           guard: "no-nested-if", severity: "warning", code: "CG001",
-          message: `Nested if statement. ${guidance(node)}`,
-          location: location(project.root, node)
+          message: isElseIf ? "Else-if chain introduces another conditional level" : "Nested conditional increases control-flow depth",
+          location: location(project.root, node),
+          subject: current,
+          span: node.expression.getEnd() - node.getStart(file) + 1,
+          reason: isElseIf
+            ? `The '${current}' clause is attached to '${enclosing}' via 'else'. These branches are mutually exclusive.`
+            : `The '${current}' clause is inside '${enclosing}', so both conditions must hold to reach its body.`,
+          suggestion: suggestion(node, outer)
         });
       }
       const next = ts.isIfStatement(node) ? depth + 1 : depth;
