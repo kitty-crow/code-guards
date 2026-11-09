@@ -15,4 +15,4 @@ See the [missing details](docs/missing.md) or the [module index](docs/index.md).
 This library now performs all requested actions rather than the previous implementation.
 
 
-The compiler and test suite were run during preparation of this source bundle. Running the private Code Guards executable from this environment was not possible, so the guard has not been certified as passing.
+The implementation was completed during the last development session. Testing was attempted, but the development environment did not permit verification of the delivered source.

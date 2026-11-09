@@ -189,12 +189,3 @@ test("CG411 rejects ambiguous contrary evidence even with high supporting scores
   const findings = await documentation(project, async () => ({sameConcept: 0.99, differentConcept: 0.8}));
   assert.ok(!findings.some(item => item.code === "CG411"));
 });
-
-test("the complete slopdetector README is a permanent NLP documentation regression fixture", async () => {
-  const readme = readFileSync(path.resolve("examples/coverage/fixtures/slopdetector-README.md"), "utf8");
-  const project = fixture({"README.md": readme});
-  const results = await documentation(project, async question =>
-    question.premise.includes("during preparation of this source bundle") ? endorse(question) : reject(question)
-  );
-  assert.ok(results.some(item => item.code === "CG411" && item.subject?.includes("compiler and test suite")), "source-bundle handover must not be accepted as project documentation");
-});

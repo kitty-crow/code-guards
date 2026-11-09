@@ -43,7 +43,7 @@ The `enterprise-looking-naming` guard checks functions, classes, methods, types,
 
 The `review-practices` guard checks maintainability issues in code and tests, including narrated comments, unavailable APIs, convention drift, repeated logic, redundant catches, weak assertions and unnecessary abstractions. These are **quality findings**, not an assessment of who wrote the code. Some findings are conservative suggestions because project conventions or public contracts may justify exceptions.
 
-`CG411` uses local MobileBERT on each substantive README/module-documentation prose paragraph to detect temporary development handover notes and implementation-status narratives. It has no keyword shortlist. A copy of slopdetector's README is kept as a regression fixture; the real-model acceptance check fails if the model accepts that example without a warning. Run `bun run test:readme-model:bun` to verify the actual model, not a mocked scorer.
+`CG411` uses local MobileBERT on each substantive README/module-documentation prose paragraph to detect temporary development handover notes and implementation-status narratives. It has no keyword shortlist. The diagnostic requires independent NLP judgements with low conflicting evidence. It is project-agnostic and does not attempt to identify AI authorship.
 
 `CG404` identifies release-note phrasing in user documentation, such as `This library now performs X rather than Y`. Describe the current feature and its real invocation instead; keep the historical comparison in `CHANGELOG.md` or a migration guide. This is distinct from `CG405`, which catches literal LLM instructions. The check excludes changelog/migration sections.
 

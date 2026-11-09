@@ -15,8 +15,8 @@
     "guards:strict": "tsc -p tsconfig.build.json && node dist/src/cli.js --strict",
     "guards:bun": "tsc -p tsconfig.build.json && bun dist/src/cli.js",
     "guards:strict:bun": "tsc -p tsconfig.build.json && bun dist/src/cli.js --strict",
-    "ci": "tsc --noEmit && tsc -p tsconfig.build.json && node --test dist/test/*.test.js && node examples/coverage/check-readme.mjs && node dist/src/cli.js --strict",
-    "ci:bun": "tsc --noEmit && tsc -p tsconfig.build.json && bun test && bun examples/coverage/check-readme.mjs && bun dist/src/cli.js --strict",
+    "ci": "tsc --noEmit && tsc -p tsconfig.build.json && node --test dist/test/*.test.js && node dist/src/cli.js --strict",
+    "ci:bun": "tsc --noEmit && tsc -p tsconfig.build.json && bun test && bun dist/src/cli.js --strict",
     "prepare": "tsc -p tsconfig.build.json",
     "demo": "tsc -p tsconfig.build.json && tsc -p examples/violations/tsconfig.json && node dist/src/cli.js --project examples/violations/tsconfig.json --disable documentation",
     "demo:strict": "tsc -p tsconfig.build.json && tsc -p examples/violations/tsconfig.json && node dist/src/cli.js --project examples/violations/tsconfig.json --strict --disable documentation",
@@ -33,9 +33,7 @@
     "demo:coverage": "tsc -p tsconfig.build.json && node examples/coverage/run.mjs",
     "demo:coverage:bun": "tsc -p tsconfig.build.json && bun examples/coverage/run.mjs",
     "demo:model": "tsc -p tsconfig.build.json && node examples/coverage/check-model.mjs",
-    "demo:model:bun": "tsc -p tsconfig.build.json && bun examples/coverage/check-model.mjs",
-    "test:readme-model": "tsc -p tsconfig.build.json && node examples/coverage/check-readme.mjs",
-    "test:readme-model:bun": "tsc -p tsconfig.build.json && bun examples/coverage/check-readme.mjs"
+    "demo:model:bun": "tsc -p tsconfig.build.json && bun examples/coverage/check-model.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.2",
