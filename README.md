@@ -31,13 +31,19 @@ bun run guards:bun no-nested-if --path ../tracker-viewer/src/main.ts
 
 The existing `--project ../tracker-viewer/tsconfig.json` flag remains available for explicit TypeScript configurations. `--project` and `--path` cannot be used together. From any working directory you can instead call `bun /absolute/path/to/code-guards/dist/src/cli.js --path /absolute/path/to/project` after building the CLI. The model weights, if needed, are cached where Code Guards runs, not installed into the target project.
 
-All 20 guards are enabled unless selected individually or disabled by name. For example, `bun run guards:bun --path ../tracker-viewer --disable documentation`. `--strict` fails on a warning; `--format json|github|text` chooses output, and `--colour auto|always|never` controls terminal colour. `--include-tests` includes test files in the optional type/function analyses. `--offline` requires a cached model. An invalid or empty path exits 2 with an explanation.
+All 21 guards are enabled unless selected individually or disabled by name. For example, `bun run guards:bun --path ../tracker-viewer --disable documentation`. `--strict` fails on a warning; `--format json|github|text` chooses output, and `--colour auto|always|never` controls terminal colour. `--include-tests` includes test files in the optional type/function analyses. `--offline` requires a cached model. An invalid or empty path exits 2 with an explanation.
 
 ## Reproducible coverage demonstrations
 
 `bun run demo:coverage:bun` prints **one formatted warning for each active code** using deliberate faults in `examples/coverage/codebase` and `examples/coverage/documentation`. `bun run demo:coverage:bun --code CG413` focuses on a single rule. `bun run demo:coverage:bun --strict` prints the same warnings and exits 1; `--json` returns machine-readable diagnostics. Node users can run `npm run demo:coverage` or `node examples/coverage/run.mjs` after building the project. The test suite verifies that every code listed in the table below appears in the demonstration.
 
-**Inference disclosure:** This coverage showcase injects fixed, labelled zero-shot verdicts for reproducibility. It validates guard integration and reporting, but is not evidence of real MobileBERT quality. `bun run demo:semantic:bun` uses the actual model. To smoke-test the ONNX model itself with a deliberately overlong premise, run `bun run demo:model:bun` (or `npm run demo:model` under native Node). It downloads and executes real MobileBERT inference; it is deliberately **not** run as part of the routine unit tests. Long NLI inputs are now tokenised and split into overlapping passages respecting MobileBERT's 512-token limit; evidence from all passages is combined conservatively.
+**Inference disclosure:** This coverage showcase injects fixed, labelled zero-shot verdicts for reproducibility. It validates guard integration and reporting, but is not evidence of real MobileBERT quality. `bun run demo:semantic:bun` uses the actual model. To smoke-test the ONNX model itself with a deliberately overlong premise, run `bun run demo:model:bun` (or `npm run demo:model` under native Node). It downloads and executes real MobileBERT inference; it is deliberately **not** run as part of the routine unit tests. Long NLI inputs are tokenised and split into overlapping passages respecting MobileBERT's 512-token limit; evidence from all passages is combined conservatively.
+
+The `enterprise-looking-naming` guard checks functions, classes, methods, types, variables, parameters, members, aliases, filenames and directories. It identifies very long descriptive names and stacked generic suffixes. For instance, a function called `veryLongNamesThatAreVerySpecificAndMightNeedShortening` can be shortened to an abbreviation such as `lngNms` if that is clear in context. It never applies renames automatically.
+
+The `review-practices` guard checks maintainability issues in code and tests, including narrated comments, unavailable APIs, convention drift, repeated logic, redundant catches, weak assertions and unnecessary abstractions. These are **quality findings**, not an assessment of who wrote the code. Some findings are conservative suggestions because project conventions or public contracts may justify exceptions.
+
+`CG404` identifies release-note phrasing in user documentation, such as `This library now performs X rather than Y`. Describe the current feature and its real invocation instead; keep the historical comparison in `CHANGELOG.md` or a migration guide. This is distinct from `CG405`, which catches literal LLM instructions. The check excludes changelog/migration sections.
 
 ## Warning reference
 
@@ -79,6 +85,17 @@ All 20 guards are enabled unless selected individually or disabled by name. For 
 | `CG313` | `let` binding never reassigned, potentially a `const` |
 | `CG314` | Test callback with no recognisable assertion |
 | `CG315` | Placeholder marker in an apparently unfinished function |
+| `CG316` | Excessively long or overdescriptive identifiers across declarations and members |
+| `CG317` | Filler-heavy identifiers and stacked enterprise-style suffixes such as `ManagerServiceImplementation` |
+| `CG318` | Overdescriptive TypeScript filenames or directory names |
+| `CG319` | Obvious narration comments that restate a loop, conditional or statement |
+| `CG320` | Unresolved methods, exports or call signatures verified against TypeScript diagnostics |
+| `CG321` | Local identifier naming style diverging from an established convention |
+| `CG322` | Three consecutive nontrivial statements repeated in separate modules |
+| `CG323` | Redundant catch handlers that only rethrow the original error |
+| `CG324` | Tautological test assertions such as `assert.ok(true)` or `expect(1).toBe(1)` |
+| `CG325` | Stateless class shells with one trivial method and no instance contract |
+| `CG326` | Multiple date-formatting mechanisms in one module requiring consistency review |
 
 ### README and documentation
 
@@ -88,6 +105,7 @@ All 20 guards are enabled unless selected individually or disabled by name. For 
 | `CG401` | Promotional wording without verifiable behaviour |
 | `CG402` | README without runnable installation, build or usage commands |
 | `CG403` | Substantially repeated documentation paragraphs |
+| `CG404` | Development or release-note narratives disguised as features in README/module documentation |
 | `CG405` | AI prompt-style instructions appearing as user documentation |
 | `CG406` | Documented `npm run`/`bun run` command not present in package scripts |
 | `CG407` | Missing `docs/index.md`, module link or README index reference |
@@ -106,7 +124,7 @@ All 20 guards are enabled unless selected individually or disabled by name. For 
 | `CG503` | Source and compiled Bun tests may be executed twice |
 | `CG504` | Duplicate commands across GitHub workflow definitions |
 
-The currently unused identifiers `CG404` and `CG411` are intentionally unassigned; they are not active rules. For implementation detail and each module's exports, consult [docs/index.md](docs/index.md).
+The identifier `CG411` remains unassigned; it is not an active rule. For implementation detail and each module's exports, consult [docs/index.md](docs/index.md).
 
 ## Semantic analysis and limitations
 
