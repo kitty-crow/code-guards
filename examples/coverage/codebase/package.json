@@ -1,0 +1,1 @@
+{"scripts":{"ci":"tsc && tsc","test:first":"bun test","test:second":"bun test","test:third":"bun test"}}
