@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
 import type { Project } from "../project.ts";
+import { zeroShot, supportsReuse, type SemanticScorer } from "../semantic.ts";
 
 type Property = { name: string; fingerprint: string };
 type Definition = {
@@ -36,20 +37,10 @@ function tokenSimilarity(left: string, right: string): number {
   return overlap / Math.max(a.size, b.size, 1);
 }
 
-function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts.Type>(), depth = 0): string {
-  const symbol = type.aliasSymbol ?? type.symbol;
-  const source = symbol?.declarations?.[0]?.getSourceFile().fileName ?? "";
-  if (source.includes("node_modules") || /(?:^|[\\/])lib\.[^\\/]+\.d\.ts$/.test(source)) {
-    return `external:${checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation)}`;
-  }
-  if (depth >= 5) return `complex:${symbol?.getName() ?? type.flags}`;
+function primitiveFingerprint(type: ts.Type, checker: ts.TypeChecker): string | undefined {
   if (type.isStringLiteral()) return `string-literal:${JSON.stringify(type.value)}`;
   if (type.isNumberLiteral()) return `number-literal:${type.value}`;
   if (type.flags & ts.TypeFlags.BooleanLiteral) return `boolean-literal:${checker.typeToString(type)}`;
-  if (type.isUnionOrIntersection()) {
-    const kind = type.isUnion() ? "union" : "intersection";
-    return `${kind}(${type.types.map(item => fingerprint(item, checker, active, depth + 1)).sort().join("|")})`;
-  }
   if (type.flags & ts.TypeFlags.StringLike) return "string";
   if (type.flags & ts.TypeFlags.NumberLike) return "number";
   if (type.flags & ts.TypeFlags.BooleanLike) return "boolean";
@@ -60,6 +51,49 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
   if (type.flags & ts.TypeFlags.Never) return "never";
   if (type.flags & ts.TypeFlags.BigIntLike) return "bigint";
   if (type.flags & ts.TypeFlags.ESSymbolLike) return "symbol";
+  return undefined;
+}
+
+function objectFingerprint(type: ts.Type, checker: ts.TypeChecker, active: Set<ts.Type>, depth: number): string {
+  const properties = checker.getPropertiesOfType(type);
+  if (properties.length > 32) return `complex:${type.symbol?.getName() ?? type.flags}`;
+  const members = properties.map(property => {
+    const declaration = property.valueDeclaration ?? property.declarations?.[0];
+    const memberType = declaration ? checker.getTypeOfSymbolAtLocation(property, declaration) : undefined;
+    const optional = property.flags & ts.SymbolFlags.Optional ? "?" : "";
+    const readonly = declaration && ts.canHaveModifiers(declaration) &&
+      ts.getModifiers(declaration)?.some(modifier => modifier.kind === ts.SyntaxKind.ReadonlyKeyword) ? "readonly " : "";
+    return `${readonly}${property.name}${optional}:${memberType ? fingerprint(memberType, checker, active, depth + 1) : "unknown"}`;
+  }).sort();
+  const index = checker.getIndexInfosOfType(type).map(item =>
+    `[${item.keyType.flags & ts.TypeFlags.NumberLike ? "number" : "string"}]:${fingerprint(item.type, checker, active, depth + 1)}`
+  ).sort();
+  const calls = checker.getSignaturesOfType(type, ts.SignatureKind.Call).map(signature => {
+    const args = signature.getParameters().map(symbol => {
+      const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
+      return declaration ? fingerprint(checker.getTypeOfSymbolAtLocation(symbol, declaration), checker, active, depth + 1) : "unknown";
+    });
+    return `(${args.join(",")}):${fingerprint(signature.getReturnType(), checker, active, depth + 1)}`;
+  }).sort();
+  if (members.length || index.length || calls.length) return `{${[...members, ...index, ...calls].join(";")}}`;
+  return checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation);
+}
+
+// Resolve shape, including optionality, literal discriminants and call signatures;
+// cap recursion to keep pathological generic/recursive types bounded.
+function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts.Type>(), depth = 0): string {
+  const symbol = type.aliasSymbol ?? type.symbol;
+  const source = symbol?.declarations?.[0]?.getSourceFile().fileName ?? "";
+  if (source.includes("node_modules") || /(?:^|[\\/])lib\.[^\\/]+\.d\.ts$/.test(source)) {
+    return `external:${checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation)}`;
+  }
+  if (depth >= 5) return `complex:${symbol?.getName() ?? type.flags}`;
+  const primitive = primitiveFingerprint(type, checker);
+  if (primitive !== undefined) return primitive;
+  if (type.isUnionOrIntersection()) {
+    const kind = type.isUnion() ? "union" : "intersection";
+    return `${kind}(${type.types.map(item => fingerprint(item, checker, active, depth + 1)).sort().join("|")})`;
+  }
   if (checker.isArrayType(type)) {
     const element = checker.getTypeArguments(type as ts.TypeReference)[0];
     return `array(${element ? fingerprint(element, checker, active, depth + 1) : "unknown"})`;
@@ -69,34 +103,8 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
   }
   if (active.has(type)) return "recursive";
   active.add(type);
-  try {
-    const properties = checker.getPropertiesOfType(type);
-    if (properties.length > 32) return `complex:${symbol?.getName() ?? type.flags}`;
-    const members = properties.map(property => {
-      const declaration = property.valueDeclaration ?? property.declarations?.[0];
-      const memberType = declaration ? checker.getTypeOfSymbolAtLocation(property, declaration) : undefined;
-      const optional = property.flags & ts.SymbolFlags.Optional ? "?" : "";
-      const readonly = declaration && ts.canHaveModifiers(declaration) &&
-        ts.getModifiers(declaration)?.some(modifier => modifier.kind === ts.SyntaxKind.ReadonlyKeyword) ? "readonly " : "";
-      return `${readonly}${property.name}${optional}:${memberType ? fingerprint(memberType, checker, active, depth + 1) : "unknown"}`;
-    }).sort();
-    const index = checker.getIndexInfosOfType(type).map(item =>
-      `[${item.keyType.flags & ts.TypeFlags.NumberLike ? "number" : "string"}]:${fingerprint(item.type, checker, active, depth + 1)}`
-    ).sort();
-    const calls = checker.getSignaturesOfType(type, ts.SignatureKind.Call).map(signature => {
-      const args = signature.getParameters().map(symbol => {
-        const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
-        return declaration ? fingerprint(checker.getTypeOfSymbolAtLocation(symbol, declaration), checker, active, depth + 1) : "unknown";
-      });
-      return `(${args.join(",")}):${fingerprint(signature.getReturnType(), checker, active, depth + 1)}`;
-    }).sort();
-    if (members.length || index.length || calls.length) {
-      return `{${[...members, ...index, ...calls].join(";")}}`;
-    }
-    return checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation);
-  } finally {
-    active.delete(type);
-  }
+  try { return objectFingerprint(type, checker, active, depth); }
+  finally { active.delete(type); }
 }
 
 function isRecordType(type: ts.Type, checker: ts.TypeChecker): boolean {
@@ -180,8 +188,7 @@ function candidatePairs(definitions: Definition[]): Set<string> {
   return pairs;
 }
 
-export function typeReuse(project: Project, includeTests = false): Finding[] {
-  const definitions = getDefinitions(project, includeTests);
+function candidatesWithExactMatches(definitions: Definition[]): Set<string> {
   const candidates = candidatePairs(definitions);
   const exact = new Map<string, number[]>();
   definitions.forEach((definition, i) => {
@@ -193,35 +200,53 @@ export function typeReuse(project: Project, includeTests = false): Finding[] {
       for (const right of indices.slice(i + 1)) candidates.add(`${left}:${right}`);
     });
   }
+  return candidates;
+}
 
+async function compareDefinitions(project: Project, a: Definition, b: Definition, score: SemanticScorer): Promise<Finding | undefined> {
+  if (a.node.getSourceFile() === b.node.getSourceFile()) return undefined;
+  const isClass = a.kind === "class" || b.kind === "class";
+  const exactMatch = a.fingerprint === b.fingerprint && !isClass;
+  const commonFields = fieldSimilarity(a, b, false);
+  const semanticFields = fieldSimilarity(a, b, true);
+  const nearMatch = commonFields >= 0.7 && !exactMatch && !isClass;
+  if (!exactMatch && !nearMatch && semanticFields < 0.5 && tokenSimilarity(a.name, b.name) < 0.5) return undefined;
+
+  // Deterministic matches need no model inference; other candidates must pass
+  // actual zero-shot entailment and contradiction checks before reporting.
+  let confidence = 1;
+  if (!exactMatch) {
+    const premise = `Two TypeScript declarations are being reviewed for reuse. The first is named ${a.name} with fields ${a.properties.map(p => `${p.name} (${p.fingerprint})`).join(", ")}. The second is named ${b.name} with fields ${b.properties.map(p => `${p.name} (${p.fingerprint})`).join(", ")}.`;
+    const verdict = await score({
+      premise,
+      same: "both declarations represent the same domain concept and may share a reusable type",
+      different: "the declarations represent different domain concepts and should remain separate"
+    });
+    confidence = supportsReuse(verdict) ? verdict.sameConcept : 0;
+  }
+  if (confidence === 0) return undefined;
+
+  const code = exactMatch ? "CG101" : nearMatch ? "CG102" : "CG103";
+  const qualification = isClass ? " Classes can have distinct runtime behaviour." : "";
+  return {
+    guard: "type-reuse", severity: "warning", code,
+    message: `Potential reuse: ${b.name} and ${a.name} (${exactMatch ? "identical structure" : nearMatch ? "overlapping fields" : "similar concepts"}). Review before consolidating.${qualification}`,
+    location: location(project.root, b.node),
+    related: location(project.root, a.node),
+    similarity: Math.round(confidence * 100) / 100
+  };
+}
+
+export async function typeReuse(project: Project, includeTests = false, score: SemanticScorer = zeroShot): Promise<Finding[]> {
+  const definitions = getDefinitions(project, includeTests);
   const findings: Finding[] = [];
-  for (const pair of candidates) {
+  for (const pair of [...candidatesWithExactMatches(definitions)].sort()) {
     const [first, second] = pair.split(":").map(Number);
     const a = definitions[first ?? -1];
     const b = definitions[second ?? -1];
     if (!a || !b) continue;
-    if (a.node.getSourceFile() === b.node.getSourceFile()) continue;
-
-    const isClass = a.kind === "class" || b.kind === "class";
-    const matchingShape = a.fingerprint === b.fingerprint;
-    const commonFields = fieldSimilarity(a, b, false);
-    const semanticFields = fieldSimilarity(a, b, true);
-    const semantics = tokenSimilarity(a.name, b.name) * 0.4 + semanticFields * 0.6;
-    const exactMatch = matchingShape && !isClass;
-    const nearMatch = commonFields >= 0.7 && !exactMatch && !isClass;
-    if (!exactMatch && !nearMatch && semantics < 0.78) continue;
-
-    const code = exactMatch ? "CG101" : nearMatch ? "CG102" : "CG103";
-    const severity = exactMatch || nearMatch ? "warning" : "info";
-    const score = exactMatch ? 1 : nearMatch ? commonFields : semantics;
-    const qualification = isClass ? " Classes can have distinct runtime behaviour." : "";
-    findings.push({
-      guard: "type-reuse", severity, code,
-      message: `Potential reuse: ${b.name} and ${a.name} (${exactMatch ? "identical structure" : nearMatch ? "overlapping fields" : "similar concepts"}). Review before consolidating.${qualification}`,
-      location: location(project.root, b.node),
-      related: location(project.root, a.node),
-      similarity: Math.round(score * 100) / 100
-    });
+    const finding = await compareDefinitions(project, a, b, score);
+    if (finding) findings.push(finding);
   }
   return findings.sort((a, b) =>
     a.location.file.localeCompare(b.location.file) || a.location.line - b.location.line || a.code.localeCompare(b.code)
