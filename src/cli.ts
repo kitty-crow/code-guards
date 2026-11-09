@@ -5,10 +5,10 @@ import { fileURLToPath } from "node:url";
 import { noNestedIf } from "./guards/no-nested-if.ts";
 import { typeReuse } from "./guards/type-reuse.ts";
 import { functionQuality } from "./guards/function-quality.ts";
-import { guards, type Finding, type GuardName } from "./model.ts";
+import { guards, type GuardName } from "./model.ts";
+import { renderFindings, type Format, type ColourMode } from "./diagnostics.ts";
 
-type Format = "text" | "json" | "github";
-type Options = { enabled: Set<GuardName>; project: string; format: Format; strict: boolean; includeTests: boolean; offline: boolean };
+type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean };
 
 function checkGuard(value: string | undefined): GuardName {
   if (!guards.some(name => name === value)) usage();
@@ -16,7 +16,7 @@ function checkGuard(value: string | undefined): GuardName {
 }
 
 function usage(): never {
-  console.error("Usage: code-guards [all|no-nested-if|type-reuse|function-quality] [--disable <guard>] [--strict] [--project tsconfig.json] [--format text|json|github] [--include-tests] [--offline]");
+  console.error("Usage: code-guards [all|no-nested-if|type-reuse|function-quality] [--disable <guard>] [--strict] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline]");
   process.exit(2);
 }
 
@@ -25,6 +25,7 @@ export function options(argv: string[]): Options {
   const enabled = new Set<GuardName>(guards);
   let project = "tsconfig.json";
   let format: Format = "text";
+  let colour: ColourMode = "auto";
   let strict = false;
   let includeTests = false;
   let offline = false;
@@ -37,6 +38,12 @@ export function options(argv: string[]): Options {
       format = next === "text" || next === "json" || next === "github" ? next : usage();
       continue;
     }
+    if (arg === "--colour" || arg === "--color") {
+      const next = argv[++i];
+      colour = next === "auto" || next === "always" || next === "never" ? next : usage();
+      continue;
+    }
+    if (arg === "--no-colour" || arg === "--no-color") { colour = "never"; continue; }
     if (arg === "--disable") {
       const next = argv[++i];
       enabled.delete(checkGuard(next));
@@ -54,27 +61,7 @@ export function options(argv: string[]): Options {
     }
     usage();
   }
-  return { enabled, project, format, strict, includeTests, offline };
-}
-
-function escapeAnnotation(value: string): string {
-  return value.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").replace(/:/g, "%3A").replace(/,/g, "%2C");
-}
-
-function render(findings: Finding[], format: Format): void {
-  if (format === "json") { console.log(JSON.stringify(findings, null, 2)); return; }
-  for (const finding of findings) {
-    const { file, line, column } = finding.location;
-    if (format === "github") {
-      const level = finding.severity === "info" ? "notice" : "warning";
-      console.log(`::${level} file=${escapeAnnotation(file)},line=${line},col=${column},title=${finding.code}::${escapeAnnotation(finding.message)}`);
-      continue;
-    }
-    const related = finding.related ? `; also ${finding.related.file}:${finding.related.line}` : "";
-    const score = finding.similarity === undefined ? "" : ` [${Math.round(finding.similarity * 100)}%]`;
-    console.log(`${file}:${line}:${column} ${finding.severity} ${finding.code}${score}: ${finding.message}${related}`);
-  }
-  if (format === "text") console.log(`${findings.length} finding(s): ${findings.filter(f => f.severity === "warning").length} warning(s).`);
+  return { enabled, project, format, colour, strict, includeTests, offline };
 }
 
 export async function run(argv: string[]): Promise<number> {
@@ -87,7 +74,7 @@ export async function run(argv: string[]): Promise<number> {
       ...(config.enabled.has("type-reuse") ? await typeReuse(project, config.includeTests) : []),
       ...(config.enabled.has("function-quality") ? await functionQuality(project, config.includeTests) : [])
     ];
-    render(findings, config.format);
+    console.log(renderFindings(findings, { format: config.format, colour: config.colour, root: project.root }));
     return config.strict && findings.some(f => f.severity === "warning") ? 1 : 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
