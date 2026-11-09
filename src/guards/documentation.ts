@@ -245,6 +245,28 @@ async function checkHandover(file: string, paragraph: Paragraph, findings: Findi
   });
 }
 
+// A README can have perfectly accurate paragraphs yet read like a development
+// report as a whole. Judge the opening together, so zero-shot inference can
+// evaluate the balance of project provenance and current user value.
+async function checkReadmeIntroduction(file: string, prose: Paragraph[], findings: Finding[], score: SemanticScorer): Promise<void> {
+  if (path.posix.basename(file).toLowerCase() !== "readme.md") return;
+  const introduction = prose.slice(0, 3);
+  if (introduction.length < 3) return;
+  const verdict = await score({
+    premise: `Opening of a software README:\n${introduction.map(item => item.text).join("\n")}`,
+    same: "this introduction is dominated by the story of how the code was created, ported, changed or verified, rather than explaining the software for its users",
+    different: "this introduction clearly and concisely explains the software's purpose, its useful behaviour and how readers can get started"
+  });
+  if (!supportsReuse(verdict, 0.8) || verdict.differentConcept > 0.4) return;
+  issue(findings, {
+    code: "CG411", file, line: introduction[0]?.line ?? 1,
+    title: "README introduction reads like an implementation history",
+    subject: introduction.map(item => item.text).join(" ").slice(0, 115),
+    reason: `The local model favoured a development-history introduction over a user-oriented overview (${Math.round(verdict.sameConcept * 100)}% support versus ${Math.round(verdict.differentConcept * 100)}% opposition). Individually factual statements can still produce a poorly focused README when the opening is dominated by the story of building the project.`,
+    suggestion: "Lead with what the software does and how to use it. Keep necessary attribution brief and put detailed porting, implementation and verification history in separate reference or release documentation."
+  });
+}
+
 async function checkProse(file: string, content: string, findings: Finding[], score: SemanticScorer): Promise<void> {
   const lines = content.split(/\r?\n/);
   let inFence = false;
@@ -258,6 +280,7 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
   }
   checkNarrative(file, lines, findings);
   const prose = paragraphs(lines);
+  await checkReadmeIntroduction(file, prose, findings, score);
   for (const [i, candidate] of prose.entries()) {
     await checkHandover(file, candidate, findings, score);
     for (const other of prose.slice(i + 1)) {

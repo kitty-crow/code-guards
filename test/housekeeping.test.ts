@@ -190,3 +190,54 @@ test("CG411 does not mistake well-documented stable behaviour for an implementat
   const findings = await documentation(project, async () => ({sameConcept: 0.3, differentConcept: 0.91}));
   assert.ok(!findings.some(item => item.code === "CG411"));
 });
+
+
+test("CG411 detects an implementation-history-heavy README introduction through NLP", async () => {
+  const project = fixture({"README.md": [
+    "# Overview",
+    "",
+    "This program was rewritten from an earlier implementation in a different programming language, and its original source layout was reorganised.",
+    "",
+    "The new version was assembled using upstream change notes, and several internal routines were replaced during preparation.",
+    "",
+    "The utility compares repository revisions and produces a summary of changed files."
+  ].join("\n")});
+  const premises: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    premises.push(question.premise);
+    return question.premise.startsWith("Opening of a software README:") ? endorse(question) : reject(question);
+  };
+  const findings = await documentation(project, scorer);
+  assert.ok(premises.some(text => text.startsWith("Opening of a software README:")));
+  assert.ok(premises.some(text => text.includes("utility compares repository revisions")));
+  assert.equal(findings.filter(item => item.code === "CG411").length, 1);
+  assert.match(findings.find(item => item.code === "CG411")?.message ?? "", /introduction/);
+});
+
+test("CG411 does not flag a functional README introduction when NLP opposes the quality concern", async () => {
+  const project = fixture({"README.md": [
+    "# Introduction",
+    "",
+    "This command-line utility reads a folder of documents and generates a searchable index.",
+    "",
+    "Install the dependencies using npm install, then run npm test to verify the package.",
+    "",
+    "Pass --output with a destination file to write JSON results without modifying the input folder."
+  ].join("\n")});
+  const findings = await documentation(project, reject);
+  assert.ok(!findings.some(item => item.code === "CG411"));
+});
+
+test("CG411 rejects contradictory NLP evidence for a multi-paragraph introduction", async () => {
+  const project = fixture({"README.md": [
+    "# Overview",
+    "",
+    "The software reads a directory and creates a report.",
+    "",
+    "Installation uses the package manager and a local configuration file.",
+    "",
+    "The command prints warnings and returns a nonzero exit status for failures."
+  ].join("\n")});
+  const findings = await documentation(project, async () => ({sameConcept: 0.96, differentConcept: 0.72}));
+  assert.ok(!findings.some(item => item.code === "CG411"));
+});
