@@ -252,18 +252,30 @@ async function checkReadmeIntroduction(file: string, prose: Paragraph[], finding
   if (path.posix.basename(file).toLowerCase() !== "readme.md") return;
   const introduction = prose.slice(0, 3);
   if (introduction.length < 3) return;
-  const verdict = await score({
-    premise: `Opening of a software README:\n${introduction.map(item => item.text).join("\n")}`,
-    same: "this introduction is dominated by the story of how the code was created, ported, changed or verified, rather than explaining the software for its users",
-    different: "this introduction clearly and concisely explains the software's purpose, its useful behaviour and how readers can get started"
-  });
-  if (!supportsReuse(verdict, 0.8) || verdict.differentConcept > 0.4) return;
+
+  // Classify the distinct purposes of the paragraphs, not one blended passage.
+  // A practical usage paragraph must not hide two paragraphs of development history.
+  const history: {paragraph: Paragraph; support: number; opposition: number}[] = [];
+  for (const paragraph of introduction) {
+    const verdict = await score({
+      premise: `README introduction paragraph: ${paragraph.text}`,
+      same: "this paragraph chiefly describes the development history, earlier implementation, changes made or work involved in producing the software",
+      different: "this paragraph chiefly explains current software functionality, usage instructions, inputs, outputs or operational requirements"
+    });
+    if (!supportsReuse(verdict, 0.75) || verdict.differentConcept > 0.55) continue;
+    history.push({paragraph, support: verdict.sameConcept, opposition: verdict.differentConcept});
+  }
+
+  if (history.length < 2) return;
+  const first = history[0];
+  if (!first) return;
+  const lines = history.map(item => item.paragraph.line).join(", ");
   issue(findings, {
-    code: "CG411", file, line: introduction[0]?.line ?? 1,
-    title: "README introduction reads like an implementation history",
-    subject: introduction.map(item => item.text).join(" ").slice(0, 115),
-    reason: `The local model favoured a development-history introduction over a user-oriented overview (${Math.round(verdict.sameConcept * 100)}% support versus ${Math.round(verdict.differentConcept * 100)}% opposition). Individually factual statements can still produce a poorly focused README when the opening is dominated by the story of building the project.`,
-    suggestion: "Lead with what the software does and how to use it. Keep necessary attribution brief and put detailed porting, implementation and verification history in separate reference or release documentation."
+    code: "CG411", file, line: first.paragraph.line,
+    title: "README introduction prioritises development history over usage",
+    subject: first.paragraph.text.slice(0, 115),
+    reason: `Zero-shot NLP classified ${history.length} of the first ${introduction.length} introduction paragraphs as primarily development-history narration (lines ${lines}). This distracts from what readers can do with the current software; genuine technical details elsewhere in the introduction do not cancel that imbalance.`,
+    suggestion: "Introduce the current purpose, key behaviour and first working command before detailed historical context. Keep essential attribution brief and move implementation history into development or release documentation."
   });
 }
 
