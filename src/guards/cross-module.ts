@@ -1,4 +1,5 @@
 import ts from "typescript";
+import path from "node:path";
 import { location, type Finding } from "../model.ts";
 import type { EmitIssue } from "./issue.ts";
 import type { Project } from "../project.ts";
@@ -20,7 +21,7 @@ function alike(left: string, right: string): boolean {
 function inspectConstants(project: Project, add: Add): void {
   const constants: Constant[] = [];
   for (const file of project.files) {
-    if (/(?:^|[\\/])(?:test|tests|examples)[\\/]/.test(file.fileName)) continue;
+    if (/(?:^|\/)(?:test|tests|examples)\//.test(path.relative(project.root, file.fileName).replace(/\\/g, "/"))) continue;
     const visit = (node: ts.Node): void => {
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const) && node.initializer && ts.isStringLiteral(node.initializer) && node.initializer.text.length >= 12) {
         constants.push({name: node.name.text, literal: node.initializer.text, node});
@@ -47,7 +48,7 @@ function inspectConventions(project: Project, add: Add): void {
   const clients: ts.Node[] = [];
   const direct: ts.Node[] = [];
   for (const file of project.files) {
-    if (/(?:^|[\\/])(?:test|tests|examples)[\\/]/.test(file.fileName)) continue;
+    if (/(?:^|\/)(?:test|tests|examples)\//.test(path.relative(project.root, file.fileName).replace(/\\/g, "/"))) continue;
     const visit = (node: ts.Node): void => {
       if (ts.isFunctionDeclaration(node) && node.name && /^(?:apiClient|requestJson|httpClient|fetchWithAuth)$/i.test(node.name.text)) clients.push(node);
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && /^(?:apiClient|httpClient)$/i.test(node.name.text)) clients.push(node);
