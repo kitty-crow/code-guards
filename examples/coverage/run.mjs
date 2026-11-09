@@ -11,6 +11,8 @@ import { codeHealth } from "../../dist/src/guards/code-health.js";
 import { crossModule } from "../../dist/src/guards/cross-module.js";
 import { documentation } from "../../dist/src/guards/documentation.js";
 import { repoHygiene } from "../../dist/src/guards/repo-hygiene.js";
+import { enterpriseLookingNaming } from "../../dist/src/guards/enterprise-looking-naming.js";
+import { reviewPractices } from "../../dist/src/guards/review-practices.js";
 import { renderFindings } from "../../dist/src/diagnostics.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -27,6 +29,8 @@ export async function collect() {
     [code.root, await functionQuality(code, false, simulatedScore)],
     [code.root, codeHealth(code)],
     [code.root, crossModule(code)],
+    [code.root, enterpriseLookingNaming(code)],
+    [code.root, reviewPractices(code)],
     [code.root, await documentation(code, simulatedScore)],
     [code.root, repoHygiene(code.root)],
     [docs.root, await documentation(docs, simulatedScore)]
