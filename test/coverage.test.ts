@@ -19,6 +19,10 @@ test("the coverage showcase produces an actionable finding for all 52 active war
   };
   assert.equal(result.supportedCodes.length, 52);
   assert.deepEqual(result.missing, []);
+  // New rules need committed source fixtures, not just passing isolated unit tests.
+  for (const code of ["CG316", "CG317", "CG318", "CG404"]) {
+    assert.ok(result.findings.some(item => item.code === code), `missing committed showcase fixture for ${code}`);
+  }
   assert.deepEqual(result.findings.map(item=>item.code), result.supportedCodes);
   for (const finding of result.findings) {
     assert.ok(finding.message, `${finding.code} lacks a title`);

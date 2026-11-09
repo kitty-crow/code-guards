@@ -101,8 +101,8 @@ function plainReport(findings: Finding[], config: ReportOptions): string {
     result.push(`  ${paint("⚠ WARNING", "yellow", colour)}  ${paint(finding.code, "bold", colour)}  ${finding.message}${confidence}`);
     result.push(`    ${paint(`${file}:${line}:${column}`, "cyan", colour)}  ${paint(`[${finding.guard}]`, "dim", colour)}`);
     result.push("");
-    result.push(...excerpt(config.root, finding.location, finding.span, colour));
-    result.push(...detail("Clause", finding.subject, colour));
+    if (finding.code !== "CG318") result.push(...excerpt(config.root, finding.location, finding.span, colour));
+    result.push(...detail(finding.code === "CG318" ? "Path" : "Clause", finding.subject, colour));
     result.push("");
     result.push(...detail("Why", finding.reason, colour));
     result.push(...detail("Fix", finding.suggestion, colour));

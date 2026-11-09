@@ -11,3 +11,5 @@ A verified release requires an implementation scan. The checks should compare ac
 A verified release requires an implementation scan. The checks should compare actual code exports against their documented interface before deciding the module is ready.
 
 See the [missing details](docs/missing.md) or the [module index](docs/index.md).
+
+This library now performs all requested actions rather than the previous implementation.
