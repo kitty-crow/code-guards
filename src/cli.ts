@@ -1,10 +1,7 @@
 #!/usr/bin/env node
-import { loadProject } from "./project.ts";
+import { analyse } from "./engine.ts";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { noNestedIf } from "./guards/no-nested-if.ts";
-import { typeReuse } from "./guards/type-reuse.ts";
-import { functionQuality } from "./guards/function-quality.ts";
 import { guards, type GuardName } from "./model.ts";
 import { renderFindings, type Format, type ColourMode } from "./diagnostics.ts";
 
@@ -16,7 +13,7 @@ function checkGuard(value: string | undefined): GuardName {
 }
 
 function usage(): never {
-  console.error("Usage: code-guards [all|no-nested-if|type-reuse|function-quality] [--disable <guard>] [--strict] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline]");
+  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline]");
   process.exit(2);
 }
 
@@ -68,13 +65,8 @@ export async function run(argv: string[]): Promise<number> {
   try {
     const config = options(argv);
     if (config.offline) process.env.CODE_GUARDS_OFFLINE = "1";
-    const project = loadProject(config.project);
-    const findings = [
-      ...(config.enabled.has("no-nested-if") ? noNestedIf(project) : []),
-      ...(config.enabled.has("type-reuse") ? await typeReuse(project, config.includeTests) : []),
-      ...(config.enabled.has("function-quality") ? await functionQuality(project, config.includeTests) : [])
-    ];
-    console.log(renderFindings(findings, { format: config.format, colour: config.colour, root: project.root }));
+    const { findings, root } = await analyse(config);
+    console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
     return config.strict && findings.some(f => f.severity === "warning") ? 1 : 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

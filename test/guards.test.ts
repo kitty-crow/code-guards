@@ -9,6 +9,7 @@ import { functionQuality } from "../src/guards/function-quality.ts";
 import { options } from "../src/cli.ts";
 import { loadProject } from "../src/project.ts";
 import { supportsReuse, type SemanticScorer } from "../src/semantic.ts";
+import { guards } from "../src/model.ts";
 
 const temporary: string[] = [];
 afterEach(() => { for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -141,10 +142,10 @@ test("exact duplicate implementations are reported without model inference", asy
 
 test("all guards default on, can disable any, and strict is explicit", () => {
   const defaults = options([]);
-  assert.equal(defaults.enabled.size, 3);
+  assert.equal(defaults.enabled.size, guards.length);
   assert.equal(defaults.strict, false);
   const configured = options(["--disable", "type-reuse", "--strict"]);
-  assert.equal(configured.enabled.size, 2);
+  assert.equal(configured.enabled.size, guards.length - 1);
   assert.equal(configured.enabled.has("type-reuse"), false);
   assert.equal(configured.strict, true);
   assert.equal(options(["no-nested-if"]).enabled.size, 1);

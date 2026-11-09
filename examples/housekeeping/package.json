@@ -1,0 +1,9 @@
+{
+  "name": "housekeeping-fixture",
+  "private": true,
+  "scripts": {
+    "check": "tsc --noEmit && tsc --noEmit",
+    "test:fast": "bun test",
+    "test:slow": "bun test"
+  }
+}
