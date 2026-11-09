@@ -4,7 +4,7 @@ Source: [`src/guards/documentation.ts`](../../../src/guards/documentation.ts)
 
 `documentation` checks for README.md, docs/index.md, a per-source-module documentation page, coverage of exported symbol names, local Markdown links and package scripts used in command examples. It also flags repeated paragraphs, generic marketing claims and leaked prompt text, and can ask `SemanticScorer` to assess candidate vague prose using local zero-shot entailment.
 
-`CG411` uses two independent MobileBERT entailment judgements on prose paragraphs without a lexical shortlist. It reports development-session handover narratives only when both support that interpretation and neither has substantial contrary evidence. Mentioning a guard, an API, a test or a limitation is not enough. It reports the paragraph location and actionable rewrite suggestion. Tests cover both temporary handover prose and ordinary technical reference passages using controlled semantic verdicts. The strict self-scan uses the actual local model.
+`CG411` evaluates each Markdown prose paragraph in README files with local zero-shot inference, without a lexical shortlist. It flags developer handover narration when semantic support is strong and opposing evidence is low. Module reference pages remain covered by the other documentation rules; they are not judged as READMEs. Both favourable and unfavourable verdicts have test coverage.
 
 ## Behaviour and boundaries
 

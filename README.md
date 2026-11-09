@@ -43,7 +43,7 @@ The `enterprise-looking-naming` guard checks functions, classes, methods, types,
 
 The `review-practices` guard checks maintainability issues in code and tests, including narrated comments, unavailable APIs, convention drift, repeated logic, redundant catches, weak assertions and unnecessary abstractions. These are **quality findings**, not an assessment of who wrote the code. Some findings are conservative suggestions because project conventions or public contracts may justify exceptions.
 
-`CG411` uses local MobileBERT on each substantive README/module-documentation prose paragraph to detect temporary development handover notes and implementation-status narratives. It has no keyword shortlist. The diagnostic requires independent NLP judgements with low conflicting evidence. It is project-agnostic and does not attempt to identify AI authorship.
+`CG411` reviews README prose with local MobileBERT, without a keyword shortlist, for temporary development handover language presented as project documentation. It reports a warning only when semantic support is strong and contradictory evidence is low. It does not identify AI authorship. Module reference pages are governed by the separate module-documentation checks.
 
 `CG404` identifies release-note phrasing in user documentation, such as `This library now performs X rather than Y`. Describe the current feature and its real invocation instead; keep the historical comparison in `CHANGELOG.md` or a migration guide. This is distinct from `CG405`, which catches literal LLM instructions. The check excludes changelog/migration sections.
 

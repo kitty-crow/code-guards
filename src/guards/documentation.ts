@@ -219,41 +219,29 @@ function checkLinks(root: string, file: string, content: string, findings: Findi
   }
 }
 
-const handoverQuestions = [
-  {
-    same: "the author reports progress, completed work or unverified tests from preparing this particular code delivery",
-    different: "the paragraph describes stable software behaviour, a command, an interface or an operational limitation"
-  },
-  {
-    same: "the passage is a temporary status message to the person who requested the coding work, not documentation for future users",
-    different: "the passage is enduring technical reference information or usage guidance for future users and maintainers"
-  }
-] as const;
+// Scope CG411 to README prose. Module API pages contain reference details that
+// are not development handovers, even when they discuss how a guard works.
+const handoverQuestion = {
+  same: "this paragraph is a temporary developer handover about work performed, test execution or limitations of the development environment",
+  different: "this paragraph gives stable and relevant information about software behaviour, usage or configuration"
+} as const;
 
-// Distinguish a one-off development report from durable reference material.
-// Require two independent NLP judgements: mentioning tests or implementation
-// alone is not evidence that a paragraph belongs in a handover message.
+// The shortlist is structural (Markdown prose), never a vocabulary heuristic.
+// Require strong support and little contradictory evidence from the local model.
 async function checkHandover(file: string, paragraph: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
-  if (releaseFile.test(file)) return;
-  let lowestSupport = 1;
-  let highestOpposition = 0;
-  for (const question of handoverQuestions) {
-    const verdict = await score({
-      premise: `Documentation paragraph: ${paragraph.text}`,
-      same: question.same,
-      different: question.different
-    });
-    // Independent NLI scores can both be high; treat ambiguity as insufficient evidence.
-    if (!supportsReuse(verdict, 0.85) || verdict.differentConcept > 0.35) return;
-    lowestSupport = Math.min(lowestSupport, verdict.sameConcept);
-    highestOpposition = Math.max(highestOpposition, verdict.differentConcept);
-  }
+  if (releaseFile.test(file) || path.posix.basename(file).toLowerCase() !== "readme.md") return;
+  const verdict = await score({
+    premise: `Documentation paragraph: ${paragraph.text}`,
+    same: handoverQuestion.same,
+    different: handoverQuestion.different
+  });
+  if (!supportsReuse(verdict, 0.85) || verdict.differentConcept > 0.35) return;
   issue(findings, {
     code: "CG411", file, line: paragraph.line,
-    title: "Development handover prose in project documentation",
+    title: "Development handover prose in README",
     subject: paragraph.text.slice(0, 115),
-    reason: `Both independent semantic questions identified a temporary development status report (${Math.round(lowestSupport * 100)}% minimum support, ${Math.round(highestOpposition * 100)}% maximum contrary evidence). It describes the preparation or verification of a particular code delivery rather than enduring documentation.`,
-    suggestion: "Replace development-session narration with current behaviour, runnable instructions or lasting limitations. Put relevant implementation history in a dated development note or changelog."
+    reason: `The local model favoured a temporary developer handover over stable documentation (${Math.round(verdict.sameConcept * 100)}% support versus ${Math.round(verdict.differentConcept * 100)}% opposing evidence). A README should explain current usage, behaviour and lasting constraints rather than narrate a coding session.`,
+    suggestion: "Replace delivery and development-session narration with current behaviour, runnable instructions or lasting limitations. Keep historical implementation notes in a changelog."
   });
 }
 

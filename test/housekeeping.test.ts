@@ -145,47 +145,48 @@ test("housekeeping showcase compiles with portable module resolution", () => {
   assert.equal(result.status, 0, result.stderr + result.stdout);
 });
 
-
-test("CG411 reviews every prose paragraph using NLP, without keyword preselection", async () => {
-  const project = fixture({"README.md": "# Usage\n\nThe compiler and test suite were run during preparation of this source bundle. Running the private guard from the build environment was not possible, so passing checks have not been certified.\n\nUse npm install to install the package and npm test to run the tests."});
-  const inspected: string[] = [];
+test("CG411 uses semantic evidence, not README keywords or repository names", async () => {
+  const project = fixture({"README.md": "# Usage\n\nThe implementation was prepared for delivery and the integration suite could not be executed in the development environment.\n\nRun npm test to exercise the source package."});
+  const premises: string[] = [];
   const scorer: SemanticScorer = async question => {
-    inspected.push(question.premise);
-    assert.match(question.premise, /Documentation paragraph:/);
-    return question.premise.includes("source bundle") ? endorse(question) : reject(question);
+    premises.push(question.premise);
+    return question.premise.includes("prepared for delivery")
+      ? {sameConcept: 0.875, differentConcept: 0.332}
+      : {sameConcept: 0.05, differentConcept: 0.95};
   };
   const findings = await documentation(project, scorer);
-  assert.ok(inspected.some(text => text.includes("source bundle")), "the handover paragraph must reach NLP");
-  assert.ok(inspected.some(text => text.includes("Use npm install")), "ordinary prose must also reach NLP");
+  assert.ok(premises.some(text => text.includes("prepared for delivery")));
+  assert.ok(premises.some(text => text.includes("Run npm test")));
   assert.equal(findings.filter(item => item.code === "CG411").length, 1);
   assert.match(findings.find(item => item.code === "CG411")?.suggestion ?? "", /current behaviour/);
 });
 
-test("CG411 does not classify fenced examples or invent handover issues when NLP rejects them", async () => {
-  const project = fixture({"README.md": "# Usage\n\nRun npm test to execute the local tests. The command prints failing test cases and exits with a nonzero status when validation fails.\n\n```text\nThe compiler and test suite were run during preparation of this source bundle.\n```"});
+test("CG411 ignores fenced code and non-README module reference pages", async () => {
+  const project = fixture({
+    "README.md": "# Usage\n\nRun npm test to execute the local tests.\n\n`\`\`text\nThis paragraph reports the author's coding session.\n`\`\`",
+    "docs/modules/module.md": "# Module\n\nThe module scans TypeScript and reports line-numbered results."
+  });
   const premises: string[] = [];
-  const scorer: SemanticScorer = async question => { premises.push(question.premise); return reject(question); };
+  const scorer: SemanticScorer = async question => {
+    premises.push(question.premise);
+    return {sameConcept: 0.92, differentConcept: 0.2};
+  };
   const findings = await documentation(project, scorer);
   assert.ok(premises.some(text => text.includes("Run npm test")));
-  assert.ok(premises.every(text => !text.includes("source bundle")));
+  assert.ok(premises.every(text => !text.includes("coding session")));
+  assert.ok(premises.every(text => !text.includes("module scans TypeScript")));
+  assert.equal(findings.filter(item => item.code === "CG411").length, 1);
+  assert.equal(findings.find(item => item.code === "CG411")?.location.file, "README.md");
+});
+
+test("CG411 respects contradictory semantic evidence despite strong support", async () => {
+  const project = fixture({"README.md": "# Usage\n\nThe command accepts --strict and reports structured diagnostics without writing any files."});
+  const findings = await documentation(project, async () => ({sameConcept: 0.91, differentConcept: 0.44}));
   assert.ok(!findings.some(item => item.code === "CG411"));
 });
 
-test("CG411 rejects usable documentation even when one NLP question is overconfident", async () => {
-  const project = fixture({"README.md": "# Usage\n\nThe NO_COLOR setting disables terminal colouring. JSON output is uncoloured and retains structured fields.\n\nThe command validates TypeScript source and reports line-numbered findings without changing the scanned repository."});
-  const questions: string[] = [];
-  const scorer: SemanticScorer = async question => {
-    questions.push(question.same);
-    return question.same.includes("progress, completed work") ? endorse(question) : reject(question);
-  };
-  const findings = await documentation(project, scorer);
-  assert.ok(questions.some(text => text.includes("progress, completed work")));
-  assert.ok(questions.some(text => text.includes("temporary status message")));
-  assert.ok(!findings.some(item => item.code === "CG411"), "an isolated high NLP score must not create a documentation warning");
-});
-
-test("CG411 rejects ambiguous contrary evidence even with high supporting scores", async () => {
-  const project = fixture({"README.md": "# Usage\n\nThe CLI accepts --strict to fail on findings. It reads source files and returns a diagnostic report with locations."});
-  const findings = await documentation(project, async () => ({sameConcept: 0.99, differentConcept: 0.8}));
+test("CG411 does not mistake well-documented stable behaviour for an implementation handover", async () => {
+  const project = fixture({"README.md": "# Usage\n\nThe checker reads TypeScript source files, reports warnings by location, and exits 1 under --strict."});
+  const findings = await documentation(project, async () => ({sameConcept: 0.3, differentConcept: 0.91}));
   assert.ok(!findings.some(item => item.code === "CG411"));
 });
