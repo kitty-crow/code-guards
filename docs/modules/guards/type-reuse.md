@@ -7,3 +7,5 @@ Source: [`src/guards/type-reuse.ts`](../../../src/guards/type-reuse.ts)
 ## Behaviour and boundaries
 
 Classes with different runtime behaviour are never declared exact duplicates solely from matching properties. Scalar and array aliases are not equivalent. The tool makes suggestions and does not automatically merge types.
+
+`CG103` requires compatible resolved field types and at least 65% semantic field-name overlap before the local model is consulted. Matching declaration names alone, or sharing only a small subset of configuration fields, is not sufficient evidence of reuse. `CG102` requires at least 70% exact field overlap plus model agreement.

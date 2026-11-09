@@ -31,6 +31,8 @@ function negated(expression: ts.Expression): string {
   return `!(${expression.getText()})`;
 }
 
+// Lifting a nested condition is safe only when the outer branch terminates or
+// the original fallback is preserved. Otherwise recommend review, not a rewrite.
 function suggestion(node: ts.IfStatement, outer: ts.IfStatement | undefined): string {
   const expression = node.expression.getText();
   const before = outer?.expression.getText() ?? "the enclosing condition";

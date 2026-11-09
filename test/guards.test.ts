@@ -156,3 +156,22 @@ test("NLP verdict must exceed confidence and contradictory score", () => {
   assert.equal(supportsReuse({ sameConcept: 0.91, differentConcept: 0.9 }), false);
   assert.equal(supportsReuse({ sameConcept: 0.4, differentConcept: 0.05 }), false);
 });
+
+
+test("similar option names do not imply reusable types without field-level evidence", async () => {
+  const sample = project({
+    "cli.ts": "export type Options = { enabled: Set<string>; project: string; includeTests: boolean; format: string; colour: string; strict: boolean; offline: boolean };",
+    "engine.ts": "export type AnalysisOptions = { enabled: Set<string>; project: string; includeTests: boolean };",
+    "report.ts": "export type ReportOptions = { root: string; format: string; colour: string; isTTY?: boolean };",
+    "model.ts": "export type ClassifierOptions = { multi_label: boolean; hypothesis_template: string };"
+  });
+  const findings = await typeReuse(sample, false, endorse);
+  assert.deepEqual(findings, [], "even a high NLI score cannot substitute for meaningful structural overlap");
+});
+
+test("complex functions with documented invariants are not reported as unexplained", async () => {
+  const sample = loadProject(path.resolve("tsconfig.json"));
+  const findings = await functionQuality(sample, false, endorse);
+  const documented = new Set(["suggestion", "explain", "inspectFunction", "checkNarrative", "documentation"]);
+  assert.deepEqual(findings.filter(item => item.code === "CG202" && documented.has(item.subject ?? "")), []);
+});

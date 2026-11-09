@@ -143,6 +143,8 @@ function nameNode(info: FunctionInfo): ts.Node {
 
 type Explanation = { title: string; reason: string; suggestion: string };
 
+// These suggestions are deliberately conditional: similar syntax does not
+// establish that two functions have the same contract or side effects.
 function explain(info: FunctionInfo, code: string, related?: FunctionInfo): Explanation {
   const measurements = `${info.lines} lines, ${info.statements} statements and ${info.branches} decision points`;
   const clauses = info.branchClauses.slice(0, 3).join("; ");

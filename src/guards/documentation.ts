@@ -35,6 +35,8 @@ const narrative = [
   /\b(?:no longer)\b.{0,120}\b(?:instead|rather than|previously)\b/i
 ];
 
+// Before-and-after descriptions belong in migration notes and release history.
+// Exclude those sections so this rule targets misleading current-usage docs.
 function checkNarrative(file: string, lines: string[], findings: Finding[]): void {
   if (releaseFile.test(file)) return;
   let releaseDepth: number | undefined;
@@ -252,6 +254,8 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
   }
 }
 
+// Markdown is not part of TypeScript's source graph, so inspect the target
+// repository directly when validating user-facing usage and module coverage.
 export async function documentation(project: Project, score: SemanticScorer = zeroShot): Promise<Finding[]> {
   const findings: Finding[] = [];
   const root = project.root;

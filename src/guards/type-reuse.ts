@@ -228,7 +228,9 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
   const commonFields = fieldSimilarity(a, b, false);
   const semanticFields = fieldSimilarity(a, b, true);
   const nearMatch = commonFields >= 0.7 && !exactMatch && !isClass;
-  if (!exactMatch && !nearMatch && semanticFields < 0.5 && tokenSimilarity(a.name, b.name) < 0.5) return undefined;
+  // A similar name alone is not evidence that two types share a reusable contract.
+  // Require matching field names and compatible types before asking the model.
+  if (!exactMatch && !nearMatch && semanticFields < 0.65) return undefined;
 
   // Deterministic matches need no model inference; other candidates must pass
   // actual zero-shot entailment and contradiction checks before reporting.

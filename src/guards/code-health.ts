@@ -31,6 +31,8 @@ function readCalls(node: ts.Node, calls: Set<string>): void {
   ts.forEachChild(node, child => readCalls(child, calls));
 }
 
+// A method with no apparent instance-state dependency can still be a required
+// public API boundary, so design findings must advise review, not removal.
 function inspectFunction(node: ts.Node, project: Project, report: Report): void {
   const body = bodyOf(node);
   if (!body) return;
