@@ -52,6 +52,19 @@ Then add to **that project's** `package.json`:
 
 Equivalent `bun run build`, `bun run test`, `npm run build` and `npm test` will fail on guard findings because the **guard command** returns exit code 1. It does not modify TypeScript's compiler or literally inject diagnostics into `tsc`.
 
+### Readable diagnostics
+
+By default, the terminal reporter uses yellow warning headings, source lines with an underline on the precise clause, a reason grounded in that declaration, a suggested change and a location for any related duplicate. Output is separated into distinct blocks so multiple warnings remain readable. For example, the nested-`if` demonstration identifies `if (allowed)` under `if (connected)` and suggests replacing the outer block with a concrete `if (!connected) return "pending";` guard plus a lifted inner condition. An `else if` is only suggested as an independent `if` when the preceding branch provably returns or throws.
+
+Colour is automatic for an interactive terminal and disabled for redirected output or when `NO_COLOR` is set. Use `--colour always` (or `--color always`) to force colour, `--colour never` or `--no-color` to disable it. `--format json` and `--format github` never contain terminal escape codes; they retain the clause, reason, suggestion and related location where available. The reporter does not require another formatting dependency.
+
+```sh
+bun run demo:bun                    # readable warnings and code excerpts
+bun run demo:strict:bun             # same warnings, exit 1 (expected)
+bun dist/src/cli.js --project examples/violations/tsconfig.json --colour always
+bun dist/src/cli.js --project examples/violations/tsconfig.json --format json
+```
+
 ### Options
 
 - `--strict`: warnings exit with code 1. Without this flag, findings are printed but exit code is 0.
@@ -59,7 +72,8 @@ Equivalent `bun run build`, `bun run test`, `npm run build` and `npm test` will 
 - `no-nested-if`, `type-reuse`, `function-quality`, `all`: optionally run just one guard, or all.
 - `--project path/to/tsconfig.json`: choose a TypeScript project.
 - `--include-tests`: include test declarations in type-reuse/function-quality checks.
-- `--format text|json|github`: plain diagnostics, machine-readable JSON or annotations.
+- `--format text|json|github`: human-readable diagnostics with code excerpts, machine-readable JSON or annotations.
+- `--colour auto|always|never` (also `--color`): terminal colour policy; `--no-colour`/`--no-color` disables colour.
 - `--offline`: require locally cached model weights; never fetch remote files. Equivalent to `CODE_GUARDS_OFFLINE=1`.
 
 `CODE_GUARDS_MODEL_CACHE` overrides the model cache directory. Model loading failures are **reported as errors (exit 2)**, never silently replaced by heuristic decisions. The first semantic scan requires model weights to be downloaded if not already cached.
