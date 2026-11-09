@@ -22,6 +22,47 @@ const marketing = /\b(?:seamlessly|cutting.edge|state.of.the.art|robust and scal
 const promptLeak = /\b(?:you are an (?:expert|assistant)|as an ai language model|your task is to|do not hallucinate|act as a (?:senior|professional|helpful)|here is the prompt|follow these instructions)\b/i;
 const vague = /\b(?:easy.to.use|highly flexible|powerful|robust|comprehensive|best.in.class|intuitive|efficient|enterprise.ready|production.ready|modern solution)\b/i;
 
+// A change log belongs in release notes; a feature description should describe current usage.
+const releaseFile = /(?:^|\/)(?:changelog|history|release[-_]?notes?|migrations?)(?:\.[^/]+|\/)/i;
+const releaseHeading = /\b(?:changelog|change log|release notes?|what(?:'|’)s new|migration(?: guide)?|upgrad(?:e|ing)|version history)\b/i;
+const narrative = [
+  /\b(?:this|the|our)\s+(?:library|package|tool|system|application|app|module|component|service|project|bot|feature)\s+(?:now|no longer)\s+\w+/i,
+  /\b\w+\s+now\s+(?:supports|provides|performs|uses|handles|implements|offers|allows|includes|accepts|detects|runs|writes|does|returns|integrates|contains|works|operates)\b/i,
+  /\b(?:we|i)\s+(?:have\s+)?(?:now\s+)?(?:added|introduced|implemented|updated|rewritten|refactored|replaced|migrated|improved|fixed|changed|enhanced|built|created|made|removed)\b/i,
+  /\b(?:has|have)\s+(?:now\s+)?(?:been\s+)?(?:added|introduced|updated|rewritten|refactored|replaced|migrated|improved|fixed|changed|enhanced|removed)\b/i,
+  /\b(?:previously|formerly|before this change|unlike before|in the previous version)\b.{0,120}\b(?:now|currently|instead|no longer)\b/i,
+  /\b(?:instead of|rather than)\b.{0,120}\b(?:we now|now (?:uses|supports|does|performs)|have replaced|has replaced)\b/i,
+  /\b(?:no longer)\b.{0,120}\b(?:instead|rather than|previously)\b/i
+];
+
+function checkNarrative(file: string, lines: string[], findings: Finding[]): void {
+  if (releaseFile.test(file)) return;
+  let releaseDepth: number | undefined;
+  let inFence = false;
+  for (const [i, line] of lines.entries()) {
+    if (/^\s*```/.test(line)) { inFence = !inFence; continue; }
+    if (inFence) continue;
+    const heading = line.match(/^\s*(#{1,6})\s+(.+?)\s*$/);
+    if (heading) {
+      const level = heading[1]?.length ?? 1;
+      releaseDepth = releaseHeading.test(heading[2] ?? "") ? level :
+        releaseDepth !== undefined && level <= releaseDepth ? undefined : releaseDepth;
+      continue;
+    }
+    if (releaseDepth !== undefined || /^\s*(?:>|[-*]\s+`|\d+\.\s+`)/.test(line)) continue;
+    const prose = line.replace(/`[^`]*`/g, "");
+    const match = narrative.map(rule => rule.exec(prose)).find(Boolean);
+    if (!match) continue;
+    const subject = line.trim();
+    issue(findings, {code: "CG404", file, line: i + 1,
+      title: "Change narrative presented as a feature",
+      subject,
+      reason: `The phrase \`${match[0]}\` describes a historical change rather than the current behaviour someone can use. That reads like a development summary, not product documentation.`,
+      suggestion: "Describe the current behaviour directly with a working command, API, inputs/outputs or relevant limitation. Move the before/after explanation into a changelog or migration guide if history matters."});
+  }
+}
+
+
 function read(root: string, file: string): string | undefined {
   try { return readFileSync(path.join(root, file), "utf8"); }
   catch { return undefined; }
@@ -187,6 +228,7 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
     if (promptLeak.test(line)) issue(findings, {code: "CG405", file, line: i + 1, title: "Prompt-style instructions in user documentation", subject: line.trim(),
       reason: "The sentence addresses an AI agent rather than someone trying to use or maintain this project.", suggestion: "Describe what the software does and how to use it, not instructions for generating a README."});
   }
+  checkNarrative(file, lines, findings);
   const prose = paragraphs(lines);
   for (const [i, candidate] of prose.entries()) {
     for (const other of prose.slice(i + 1)) {
