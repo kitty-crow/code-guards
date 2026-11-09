@@ -172,7 +172,7 @@ test("CG411 does not classify fenced examples or invent handover issues when NLP
 });
 
 test("CG411 rejects usable documentation even when one NLP question is overconfident", async () => {
-  const project = fixture({"README.md": "# Usage\\n\\nThe NO_COLOR setting disables terminal colouring. JSON output is uncoloured and retains structured fields.\\n\\nThe command validates TypeScript source and reports line-numbered findings without changing the scanned repository."});
+  const project = fixture({"README.md": "# Usage\n\nThe NO_COLOR setting disables terminal colouring. JSON output is uncoloured and retains structured fields.\n\nThe command validates TypeScript source and reports line-numbered findings without changing the scanned repository."});
   const questions: string[] = [];
   const scorer: SemanticScorer = async question => {
     questions.push(question.same);
@@ -185,7 +185,7 @@ test("CG411 rejects usable documentation even when one NLP question is overconfi
 });
 
 test("CG411 rejects ambiguous contrary evidence even with high supporting scores", async () => {
-  const project = fixture({"README.md": "# Usage\\n\\nThe CLI accepts --strict to fail on findings. It reads source files and returns a diagnostic report with locations."});
+  const project = fixture({"README.md": "# Usage\n\nThe CLI accepts --strict to fail on findings. It reads source files and returns a diagnostic report with locations."});
   const findings = await documentation(project, async () => ({sameConcept: 0.99, differentConcept: 0.8}));
   assert.ok(!findings.some(item => item.code === "CG411"));
 });
