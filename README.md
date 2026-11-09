@@ -66,7 +66,7 @@ Equivalent `bun run build`, `bun run test`, `npm run build` and `npm test` will 
 
 ## Bootstrap and tests
 
-`npm run ci` (or `bun run ci:bun`) invokes Code Guards against **its own source** after building it. Unit tests inject deterministic fake scorer responses to verify NLI integration and rejection logic without the very large model download. The full local self-check runs the real model when installed and cached. Transformers.js 4.3.2 also moves away from the ONNX Runtime dependency chain that brought in the deprecated `boolean@3.2.0` package in Transformers.js 3.8.1. Verify your installed tree with `npm ls boolean` if using npm; an empty result is expected.
+`npm run ci` (or `bun run ci:bun`) invokes Code Guards against **its own source** after building it. Bun test discovery is constrained to the source `test/` directory via `bunfig.toml` so compiled `dist/test` files are not executed a second time. Unit tests inject deterministic fake scorer responses to verify NLI integration and rejection logic without the very large model download. The full local self-check runs the real model when installed and cached. Transformers.js 4.3.2 also moves away from the ONNX Runtime dependency chain that brought in the deprecated `boolean@3.2.0` package in Transformers.js 3.8.1. Verify your installed tree with `npm ls boolean` if using npm; an empty result is expected.
 
 ## Limitations
 
