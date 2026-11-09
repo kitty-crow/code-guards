@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli.ts";
@@ -59,4 +60,13 @@ test("real CLI process prints diagnostic codes and returns distinct exit codes",
   const strict = spawnSync(process.execPath, [...args, "--strict"], { encoding: "utf8" });
   assert.equal(strict.status, 1, strict.stderr);
   assert.match(strict.stdout, /4 finding\(s\): 4 warning\(s\)/);
+});
+
+test("all demo and guard scripts rebuild the CLI before executing dist", () => {
+  const packageFile = JSON.parse(readFileSync(path.resolve("package.json"), "utf8")) as { scripts: Record<string, string> };
+  for (const [name, command] of Object.entries(packageFile.scripts)) {
+    if (!name.startsWith("demo") && !name.startsWith("guards")) continue;
+    assert.ok(command.startsWith("tsc -p tsconfig.build.json && "), `${name} must compile the current CLI`);
+    assert.match(command, /dist\/src\/cli\.js/, `${name} should invoke the compiled CLI`);
+  }
 });

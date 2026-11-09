@@ -102,6 +102,8 @@ bun run demo:semantic:bun      # run actual local MobileBERT zero-shot inference
 bun run demo:semantic:strict:bun  # fail if the model endorses a warning
 ```
 
+Every `demo` and `guards` command first recompiles Code Guards itself, ensuring a `git pull` cannot leave the demo executing an outdated `dist/src/cli.js`.
+
 The deterministic `demo` detects nested `if`/`else if` (`CG001`), redundant cross-module types (`CG101`) and duplicated function bodies (`CG205`). It does not need model weights. The `demo:semantic` fixtures exercise similar but non-identical `Customer`/`Client` declarations (`CG103`), an overly long function (`CG201`), missing explanatory comments (`CG202`), external module coupling (`CG203`) and a small stateless class method (`CG204`). These are genuine zero-shot inferences: a warning only appears if the classifier's confidence passes the guard threshold. The unit tests inject controlled scorer verdicts so these code paths remain reliably testable offline, while the live demo uses real model weights.
 
 For Node/npm users, the equivalent scripts omit `:bun`, for example `npm run demo` and `npm run demo:strict`. The strict command failing with exit code 1 is intentional. **It does not turn the `tsc` binary into a custom compiler**; it makes a combined local build or test script fail after type-checking.
