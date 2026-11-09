@@ -7,7 +7,8 @@ export const guards = [
   "type-assertions", "state-exhaustiveness", "responsibility",
   "overengineering", "project-conventions", "naming", "coupling",
   "function-contracts", "derived-state", "test-quality",
-  "incomplete-implementation", "documentation", "repo-hygiene"
+  "incomplete-implementation", "documentation", "repo-hygiene",
+  "enterprise-looking-naming", "review-practices"
 ] as const;
 export type GuardName = typeof guards[number];
 export type Severity = "warning" | "info";
