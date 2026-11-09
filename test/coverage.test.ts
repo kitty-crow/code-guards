@@ -9,7 +9,7 @@ function invoke(args: string[]) {
   return spawnSync(process.execPath, [script, ...args], {encoding: "utf8"});
 }
 
-test("the coverage showcase produces an actionable finding for all 40 active warning codes", () => {
+test("the coverage showcase produces an actionable finding for all 52 active warning codes", () => {
   const execution = invoke(["--json"]);
   assert.equal(execution.status, 0, execution.stderr);
   const result = JSON.parse(execution.stdout) as {
@@ -17,7 +17,7 @@ test("the coverage showcase produces an actionable finding for all 40 active war
     missing: string[];
     findings: {code: string; message: string; reason?: string; suggestion?: string; location: {file: string; line: number}}[];
   };
-  assert.equal(result.supportedCodes.length, 40);
+  assert.equal(result.supportedCodes.length, 52);
   assert.deepEqual(result.missing, []);
   assert.deepEqual(result.findings.map(item=>item.code), result.supportedCodes);
   for (const finding of result.findings) {
