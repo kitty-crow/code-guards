@@ -29,7 +29,11 @@
     "demo:housekeeping": "tsc -p tsconfig.build.json && tsc -p examples/housekeeping/tsconfig.json && node dist/src/cli.js --project examples/housekeeping/tsconfig.json --disable type-reuse --disable function-quality",
     "demo:housekeeping:strict": "tsc -p tsconfig.build.json && tsc -p examples/housekeeping/tsconfig.json && node dist/src/cli.js --project examples/housekeeping/tsconfig.json --disable type-reuse --disable function-quality --strict",
     "demo:housekeeping:bun": "tsc -p tsconfig.build.json && tsc -p examples/housekeeping/tsconfig.json && bun dist/src/cli.js --project examples/housekeeping/tsconfig.json --disable type-reuse --disable function-quality",
-    "demo:housekeeping:strict:bun": "tsc -p tsconfig.build.json && tsc -p examples/housekeeping/tsconfig.json && bun dist/src/cli.js --project examples/housekeeping/tsconfig.json --disable type-reuse --disable function-quality --strict"
+    "demo:housekeeping:strict:bun": "tsc -p tsconfig.build.json && tsc -p examples/housekeeping/tsconfig.json && bun dist/src/cli.js --project examples/housekeeping/tsconfig.json --disable type-reuse --disable function-quality --strict",
+    "demo:coverage": "tsc -p tsconfig.build.json && node examples/coverage/run.mjs",
+    "demo:coverage:bun": "tsc -p tsconfig.build.json && bun examples/coverage/run.mjs",
+    "demo:model": "tsc -p tsconfig.build.json && node examples/coverage/check-model.mjs",
+    "demo:model:bun": "tsc -p tsconfig.build.json && bun examples/coverage/check-model.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.2",
