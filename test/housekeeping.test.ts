@@ -147,25 +147,22 @@ test("housekeeping showcase compiles with portable module resolution", () => {
 
 
 test("CG411 reviews every prose paragraph using NLP, without keyword preselection", async () => {
-  const project = fixture({
-    "README.md": "# Usage\\n\\nThe compiler and test suite were run during preparation of this source bundle. Running the private guard from the build environment was not possible, so passing checks have not been certified.\\n\\nUse npm install to install the package and npm test to run the tests."
-  });
-  let inspected = 0;
+  const project = fixture({"README.md": "# Usage\n\nThe compiler and test suite were run during preparation of this source bundle. Running the private guard from the build environment was not possible, so passing checks have not been certified.\n\nUse npm install to install the package and npm test to run the tests."});
+  const inspected: string[] = [];
   const scorer: SemanticScorer = async question => {
-    inspected += 1;
+    inspected.push(question.premise);
     assert.match(question.premise, /Documentation paragraph:/);
     return question.premise.includes("source bundle") ? endorse(question) : reject(question);
   };
   const findings = await documentation(project, scorer);
-  assert.ok(inspected >= 2, "the guard must examine prose even without an existing slop keyword");
+  assert.ok(inspected.some(text => text.includes("source bundle")), "the handover paragraph must reach NLP");
+  assert.ok(inspected.some(text => text.includes("Use npm install")), "ordinary prose must also reach NLP");
   assert.equal(findings.filter(item => item.code === "CG411").length, 1);
   assert.match(findings.find(item => item.code === "CG411")?.suggestion ?? "", /current behaviour/);
 });
 
 test("CG411 does not classify fenced examples or invent handover issues when NLP rejects them", async () => {
-  const project = fixture({
-    "README.md": "# Usage\\n\\nRun npm test to execute the local tests. The command prints failing test cases and exits with a nonzero status when validation fails.\\n\\n`\`\`text\\nThe compiler and test suite were run during preparation of this source bundle.\\n`\`\`"
-  });
+  const project = fixture({"README.md": "# Usage\n\nRun npm test to execute the local tests. The command prints failing test cases and exits with a nonzero status when validation fails.\n\n```text\nThe compiler and test suite were run during preparation of this source bundle.\n```"});
   const premises: string[] = [];
   const scorer: SemanticScorer = async question => { premises.push(question.premise); return reject(question); };
   const findings = await documentation(project, scorer);
