@@ -1,7 +1,14 @@
 import path from "node:path";
 import ts from "typescript";
 
-export const guards = ["no-nested-if", "type-reuse", "function-quality"] as const;
+export const guards = [
+  "no-nested-if", "type-reuse", "function-quality",
+  "dead-code", "simplify-code", "async-safety", "single-source",
+  "type-assertions", "state-exhaustiveness", "responsibility",
+  "overengineering", "project-conventions", "naming", "coupling",
+  "function-contracts", "derived-state", "test-quality",
+  "incomplete-implementation", "documentation", "repo-hygiene"
+] as const;
 export type GuardName = typeof guards[number];
 export type Severity = "warning" | "info";
 export type Location = { file: string; line: number; column: number };
