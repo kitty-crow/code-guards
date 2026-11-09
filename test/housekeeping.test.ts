@@ -144,3 +144,41 @@ test("housekeeping showcase compiles with portable module resolution", () => {
   const result = spawnSync("tsc", ["-p", config, "--pretty", "false"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr + result.stdout);
 });
+
+
+test("CG411 reviews every prose paragraph using NLP, without keyword preselection", async () => {
+  const project = fixture({
+    "README.md": "# Usage\\n\\nThe compiler and test suite were run during preparation of this source bundle. Running the private guard from the build environment was not possible, so passing checks have not been certified.\\n\\nUse npm install to install the package and npm test to run the tests."
+  });
+  let inspected = 0;
+  const scorer: SemanticScorer = async question => {
+    inspected += 1;
+    assert.match(question.premise, /Documentation paragraph:/);
+    return question.premise.includes("source bundle") ? endorse(question) : reject(question);
+  };
+  const findings = await documentation(project, scorer);
+  assert.ok(inspected >= 2, "the guard must examine prose even without an existing slop keyword");
+  assert.equal(findings.filter(item => item.code === "CG411").length, 1);
+  assert.match(findings.find(item => item.code === "CG411")?.suggestion ?? "", /current behaviour/);
+});
+
+test("CG411 does not classify fenced examples or invent handover issues when NLP rejects them", async () => {
+  const project = fixture({
+    "README.md": "# Usage\\n\\nRun npm test to execute the local tests. The command prints failing test cases and exits with a nonzero status when validation fails.\\n\\n`\`\`text\\nThe compiler and test suite were run during preparation of this source bundle.\\n`\`\`"
+  });
+  const premises: string[] = [];
+  const scorer: SemanticScorer = async question => { premises.push(question.premise); return reject(question); };
+  const findings = await documentation(project, scorer);
+  assert.ok(premises.some(text => text.includes("Run npm test")));
+  assert.ok(premises.every(text => !text.includes("source bundle")));
+  assert.ok(!findings.some(item => item.code === "CG411"));
+});
+
+test("the complete slopdetector README is a permanent NLP documentation regression fixture", async () => {
+  const readme = readFileSync(path.resolve("examples/coverage/fixtures/slopdetector-README.md"), "utf8");
+  const project = fixture({"README.md": readme});
+  const results = await documentation(project, async question =>
+    question.premise.includes("during preparation of this source bundle") ? endorse(question) : reject(question)
+  );
+  assert.ok(results.some(item => item.code === "CG411" && item.subject?.includes("compiler and test suite")), "source-bundle handover must not be accepted as project documentation");
+});

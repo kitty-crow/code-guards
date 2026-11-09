@@ -219,6 +219,39 @@ function checkLinks(root: string, file: string, content: string, findings: Findi
   }
 }
 
+const handoverQuestions = [
+  {
+    same: "this paragraph is a temporary developer handover about work performed, test execution or limitations of the development environment",
+    different: "this paragraph gives stable and relevant information about software behaviour, usage or configuration"
+  },
+  {
+    same: "this paragraph is a development process or source handoff summary rather than useful instructions or reference documentation",
+    different: "this paragraph explains how to use or maintain the software, including its actual capabilities and constraints"
+  }
+] as const;
+
+// Every prose paragraph is evaluated by NLP. Word lists never decide which
+// paragraphs qualify for this check, and the model's verdict is not authorship detection.
+async function checkHandover(file: string, paragraph: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
+  if (releaseFile.test(file)) return;
+  for (const question of handoverQuestions) {
+    const verdict = await score({
+      premise: `Documentation paragraph: ${paragraph.text}`,
+      same: question.same,
+      different: question.different
+    });
+    if (!supportsReuse(verdict, 0.7)) continue;
+    issue(findings, {
+      code: "CG411", file, line: paragraph.line,
+      title: "Development handover prose in project documentation",
+      subject: paragraph.text.slice(0, 115),
+      reason: `The local model favoured a development handover or implementation-status narrative (${Math.round(verdict.sameConcept * 100)}% support versus ${Math.round(verdict.differentConcept * 100)}% opposing evidence). The paragraph does not explain a stable user-facing capability, operation or contract.`,
+      suggestion: "Replace development-session narration with current behaviour, runnable instructions or lasting limitations. Put relevant implementation history in a dated development note or changelog."
+    });
+    return;
+  }
+}
+
 async function checkProse(file: string, content: string, findings: Finding[], score: SemanticScorer): Promise<void> {
   const lines = content.split(/\r?\n/);
   let inFence = false;
@@ -233,6 +266,7 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
   checkNarrative(file, lines, findings);
   const prose = paragraphs(lines);
   for (const [i, candidate] of prose.entries()) {
+    await checkHandover(file, candidate, findings, score);
     for (const other of prose.slice(i + 1)) {
       if (candidate.text.length <= 75 || other.text.length < 75 || similarity(candidate.text, other.text) < 0.91) continue;
       issue(findings, {code: "CG403", file, line: other.line, title: "Documentation repeats earlier content", subject: other.text.slice(0, 110),
