@@ -13,14 +13,22 @@ function checkGuard(value: string | undefined): GuardName {
 }
 
 function usage(): never {
-  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline]");
+  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline]");
   process.exit(2);
+}
+
+function readTarget(argv: string[], index: number, selected: boolean): string {
+  if (selected) usage();
+  const target = argv[index + 1] ?? usage();
+  if (target.startsWith("--")) usage();
+  return target;
 }
 
 // Parse local CI flags explicitly: all guards are enabled unless opted out.
 export function options(argv: string[]): Options {
   const enabled = new Set<GuardName>(guards);
   let project = "tsconfig.json";
+  let targetSelected = false;
   let format: Format = "text";
   let colour: ColourMode = "auto";
   let strict = false;
@@ -29,7 +37,12 @@ export function options(argv: string[]): Options {
   let selected = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--project") { project = argv[++i] ?? usage(); continue; }
+    if (arg === "--project" || arg === "--path") {
+      project = readTarget(argv, i, targetSelected);
+      i += 1;
+      targetSelected = true;
+      continue;
+    }
     if (arg === "--format") {
       const next = argv[++i];
       format = next === "text" || next === "json" || next === "github" ? next : usage();

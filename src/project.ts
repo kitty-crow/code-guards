@@ -1,3 +1,4 @@
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 
@@ -8,11 +9,27 @@ export type Project = {
   files: readonly ts.SourceFile[];
 };
 
-export function loadProject(configFile: string): Project {
-  const filename = path.resolve(configFile);
+const excludedDirectories = [
+  "**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**",
+  "**/coverage/**", "**/.next/**", "**/.cache/**", "**/out/**"
+];
+
+function createProject(root: string, names: string[], options: ts.CompilerOptions): Project {
+  if (!names.length) throw new Error(`No TypeScript source files found in ${root}. Provide --project with a tsconfig.json if sources are elsewhere.`);
+  const program = ts.createProgram({ rootNames: names, options });
+  const files = program.getSourceFiles().filter(file => {
+    const relative = path.relative(root, file.fileName);
+    return !file.isDeclarationFile &&
+      !file.fileName.split(/[\\/]/).includes("node_modules") &&
+      relative !== ".." && !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative);
+  });
+  return { program, checker: program.getTypeChecker(), root, files };
+}
+
+function configuredProject(filename: string): Project {
   const config = ts.readConfigFile(filename, ts.sys.readFile);
   if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
-
   const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, path.dirname(filename), {
     noEmit: true
   }, filename);
@@ -23,12 +40,33 @@ export function loadProject(configFile: string): Project {
       getNewLine: () => ts.sys.newLine
     }));
   }
+  return createProject(path.dirname(filename), parsed.fileNames, parsed.options);
+}
 
-  const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options });
-  const files = program.getSourceFiles().filter(file =>
-    !file.isDeclarationFile &&
-    !file.fileName.split(/[\\/]/).includes("node_modules")
-  );
+function inferredProject(root: string, explicit?: string): Project {
+  const names = explicit ? [explicit] : ts.sys.readDirectory(
+    root, [".ts", ".tsx", ".mts", ".cts"], excludedDirectories, ["**/*"]
+  ).filter(name => !/\.d\.[cm]?ts$/.test(name));
+  return createProject(root, names, {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    jsx: ts.JsxEmit.Preserve,
+    strict: true,
+    noEmit: true
+  });
+}
 
-  return { program, checker: program.getTypeChecker(), root: path.dirname(filename), files };
+/** Accept a tsconfig, an external directory, or an individual TypeScript source file. */
+export function loadProject(target: string): Project {
+  const resolved = path.resolve(target);
+  if (!existsSync(resolved)) throw new Error(`Target does not exist: ${resolved}. Supply --path <directory> or --project <tsconfig.json>.`);
+  const file = statSync(resolved);
+  if (file.isDirectory()) {
+    const config = path.join(resolved, "tsconfig.json");
+    return existsSync(config) ? configuredProject(config) : inferredProject(resolved);
+  }
+  if (/tsconfig[^/\\]*\.json$/i.test(resolved)) return configuredProject(resolved);
+  if (/\.[cm]?tsx?$/.test(resolved) && !/\.d\.[cm]?ts$/.test(resolved)) return inferredProject(path.dirname(resolved), resolved);
+  throw new Error(`Unsupported target: ${resolved}. Expected a directory, tsconfig*.json, or a .ts/.tsx/.mts/.cts source file.`);
 }
