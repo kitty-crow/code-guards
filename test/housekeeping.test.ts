@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -135,4 +136,11 @@ test("clean internal module docs and established scripts produce no housekeeping
   const project = loadProject(path.resolve("tsconfig.json"));
   assert.deepEqual(await documentation(project, reject), []);
   assert.deepEqual(repoHygiene(project.root), []);
+});
+
+// The example must compile independently of the caller's ambient Node type tree.
+test("housekeeping showcase compiles with portable module resolution", () => {
+  const config = path.resolve("examples/housekeeping/tsconfig.json");
+  const result = spawnSync("tsc", ["-p", config, "--pretty", "false"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
 });
