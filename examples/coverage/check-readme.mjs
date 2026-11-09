@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProject } from "../../dist/src/project.js";
 import { documentation } from "../../dist/src/guards/documentation.js";
+import { zeroShot } from "../../dist/src/semantic.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const readme = readFileSync(path.join(here, "fixtures/slopdetector-README.md"), "utf8");
@@ -18,7 +19,14 @@ try {
     include: ["src/**/*.ts"]
   }));
   writeFileSync(path.join(root, "README.md"), readme);
-  const findings = (await documentation(loadProject(root))).filter(item => item.code === "CG411");
+  const findings = (await documentation(loadProject(root), async question => {
+    const verdict = await zeroShot(question);
+    // Print the model's actual evidence for the known problematic paragraph.
+    if (question.premise.includes("during preparation of this source bundle")) {
+      console.log(`Regression evidence: supporting=${verdict.sameConcept.toFixed(3)}, opposing=${verdict.differentConcept.toFixed(3)}`);
+    }
+    return verdict;
+  })).filter(item => item.code === "CG411");
   if (!findings.length) {
     throw new Error("Real MobileBERT regression failed: the known handover-heavy Slopdetector README passed CG411. Refine NLP classification before shipping this guard.");
   }
