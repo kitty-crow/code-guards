@@ -18,7 +18,7 @@ An ML prediction is **not proof** of semantic equivalence. In particular, two st
 
 Use Node.js 20+ (npm) or Bun. The package compiles to standard JavaScript, with a `code-guards` executable; the CLI itself contains no Bun-specific APIs. The library works across Linux, Windows and macOS.
 
-**WSL note:** Run the **Linux** version of your package manager. If WSL resolves `npm` to a Windows executable, npm scripts may invoke `cmd.exe` on the `\\wsl.localhost` UNC path and fail at `C:\Windows`. Check `type -a npm node bun` and `node -p "process.platform"` (must say `linux` for WSL). Use a Linux-native Bun (`bun install && bun run ci:bun`) or install/use Linux Node/npm; do not run Windows npm against files under `/home/...` in WSL.
+**WSL note:** Run the **Linux** version of your package manager. If WSL resolves `npm` to a Windows executable, npm scripts may invoke `cmd.exe` on the `\\wsl.localhost` UNC path and fail at `C:\\Windows`. Check `type -a npm node bun` and `node -p "process.platform"` (must say `linux` for WSL). Use a Linux-native Bun (`bun install && bun run ci:bun`) or install/use Linux Node/npm; do not run Windows npm against files under `/home/...` in WSL.
 
 ```sh
 npm install
@@ -66,10 +66,30 @@ Equivalent `bun run build`, `bun run test`, `npm run build` and `npm test` will 
 
 ## Bootstrap and tests
 
-`npm run ci` (or `bun run ci:bun`) invokes Code Guards against **its own source** after building it. Bun test discovery is constrained to the source `test/` directory via `bunfig.toml` so compiled `dist/test` files are not executed a second time. Unit tests inject deterministic fake scorer responses to verify NLI integration and rejection logic without the very large model download. The full local self-check runs the real model when installed and cached. Transformers.js 4.3.2 also moves away from the ONNX Runtime dependency chain that brought in the deprecated `boolean@3.2.0` package in Transformers.js 3.8.1. Verify your installed tree with `npm ls boolean` if using npm; an empty result is expected.
+`npm run ci` (or `bun run ci:bun`) invokes Code Guards against **its own source** after building it. Unit tests inject deterministic fake scorer responses to verify NLI integration and rejection logic without the very large model download. The full local self-check runs the real model when installed and cached. Transformers.js 4.3.2 also moves away from the ONNX Runtime dependency chain that brought in the deprecated `boolean@3.2.0` package in Transformers.js 3.8.1. Verify your installed tree with `npm ls boolean` if using npm; an empty result is expected.
 
 ## Limitations
 
 This is an early implementation. Semantic candidate generation is conservative, complex recursive/generic type shapes are approximated, and code-quality signals are recommendations rather than correctness proofs. A local incremental inference-results cache, per-rule suppression comments and an opt-in model integration test would improve performance and reproducibility for large repositories.
 
 MIT licence.
+
+## Demonstrate actual warnings and strict failures
+
+The deliberately problematic TypeScript under `examples/` is **excluded** from the library's own `tsconfig.json`. This keeps `bun run ci:bun` a clean strict self-check while allowing independent examples of rule violations. Both example projects type-check successfully with `tsc`; the quality warnings come from Code Guards, not from TypeScript diagnostics.
+
+With Linux-native Bun:
+
+```sh
+bun run ci:bun                 # normal library tests and strict self-check
+bun run demo:bun               # four visible warnings, exits successfully
+bun run demo:strict:bun        # same four warnings, exits with code 1 (expected)
+bun run demo:semantic:bun      # run actual local MobileBERT zero-shot inference
+bun run demo:semantic:strict:bun  # fail if the model endorses a warning
+```
+
+The deterministic `demo` detects nested `if`/`else if` (`CG001`), redundant cross-module types (`CG101`) and duplicated function bodies (`CG205`). It does not need model weights. The `demo:semantic` fixtures exercise similar but non-identical `Customer`/`Client` declarations (`CG103`), an overly long function (`CG201`), missing explanatory comments (`CG202`), external module coupling (`CG203`) and a small stateless class method (`CG204`). These are genuine zero-shot inferences: a warning only appears if the classifier's confidence passes the guard threshold. The unit tests inject controlled scorer verdicts so these code paths remain reliably testable offline, while the live demo uses real model weights.
+
+For Node/npm users, the equivalent scripts omit `:bun`, for example `npm run demo` and `npm run demo:strict`. The strict command failing with exit code 1 is intentional. **It does not turn the `tsc` binary into a custom compiler**; it makes a combined local build or test script fail after type-checking.
+
+If Bun reports blocked post-install scripts, use `bun pm untrusted` to inspect the exact dependencies before deciding whether to run `bun pm trust <package-name>`. Only trust the packages you have reviewed.
