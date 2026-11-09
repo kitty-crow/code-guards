@@ -1,10 +1,12 @@
 import path from "node:path";
 import ts from "typescript";
 
-export type Severity = "error" | "warning" | "info";
+export const guards = ["no-nested-if", "type-reuse", "function-quality"] as const;
+export type GuardName = typeof guards[number];
+export type Severity = "warning" | "info";
 export type Location = { file: string; line: number; column: number };
 export type Finding = {
-  guard: "no-nested-if" | "type-reuse";
+  guard: GuardName;
   severity: Severity;
   code: string;
   message: string;
