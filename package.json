@@ -1,26 +1,26 @@
 {
   "name": "@kitty-crow/code-guards",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "bin": {
     "code-guards": "./dist/src/cli.js"
   },
-  "engines": {
-    "node": ">=20"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "pretest": "npm run build",
-    "test": "node --test dist/test/*.test.js",
+    "test": "tsc -p tsconfig.build.json && node --test dist/test/*.test.js",
+    "test:bun": "tsc -p tsconfig.build.json && bun test",
     "guards": "node dist/src/cli.js",
     "guards:strict": "node dist/src/cli.js --strict",
-    "ci": "npm run typecheck && npm run test && npm run guards:strict",
-    "prepare": "npm run build"
+    "guards:bun": "bun dist/src/cli.js",
+    "guards:strict:bun": "bun dist/src/cli.js --strict",
+    "ci": "tsc --noEmit && tsc -p tsconfig.build.json && node --test dist/test/*.test.js && node dist/src/cli.js --strict",
+    "ci:bun": "tsc --noEmit && tsc -p tsconfig.build.json && bun test && bun dist/src/cli.js --strict",
+    "prepare": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@huggingface/transformers": "3.8.1",
+    "@huggingface/transformers": "4.3.2",
     "typescript": "^5.8.3"
   },
   "devDependencies": {
