@@ -67,6 +67,6 @@ test("all demo and guard scripts rebuild the CLI before executing dist", () => {
   for (const [name, command] of Object.entries(packageFile.scripts)) {
     if (!name.startsWith("demo") && !name.startsWith("guards")) continue;
     assert.ok(command.startsWith("tsc -p tsconfig.build.json && "), `${name} must compile the current CLI`);
-    assert.match(command, /dist\/src\/cli\.js/, `${name} should invoke the compiled CLI`);
+    assert.match(command, /dist\/src\/cli\.js|examples\/coverage\/(?:run|check-model)\.mjs/, `${name} should invoke the compiled CLI or compiled showcase runner`);
   }
 });
