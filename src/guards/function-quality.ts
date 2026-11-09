@@ -29,7 +29,9 @@ function functionName(node: ts.Node): string | undefined {
 function recordCall(project: Project, file: ts.SourceFile, node: ts.CallExpression, info: FunctionInfo): void {
   const target = node.expression;
   info.calls.add(target.getText(file));
-  const symbol = project.checker.getSymbolAtLocation(ts.isPropertyAccessExpression(target) ? target.name : target);
+  const reference = project.checker.getSymbolAtLocation(ts.isPropertyAccessExpression(target) ? target.name : target);
+  const symbol = reference && (reference.flags & ts.SymbolFlags.Alias)
+    ? project.checker.getAliasedSymbol(reference) : reference;
   const source = symbol?.declarations?.[0]?.getSourceFile();
   if (source && source !== file && !source.isDeclarationFile) info.dependencies.add(source.fileName);
 }
