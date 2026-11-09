@@ -43,6 +43,9 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
     return `external:${checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation)}`;
   }
   if (depth >= 5) return `complex:${symbol?.getName() ?? type.flags}`;
+  if (type.isStringLiteral()) return `string-literal:${JSON.stringify(type.value)}`;
+  if (type.isNumberLiteral()) return `number-literal:${type.value}`;
+  if (type.flags & ts.TypeFlags.BooleanLiteral) return `boolean-literal:${checker.typeToString(type)}`;
   if (type.isUnionOrIntersection()) {
     const kind = type.isUnion() ? "union" : "intersection";
     return `${kind}(${type.types.map(item => fingerprint(item, checker, active, depth + 1)).sort().join("|")})`;

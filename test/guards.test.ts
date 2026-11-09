@@ -98,3 +98,12 @@ test("string literal unions must not be compared as record declarations", () => 
   });
   assert.equal(typeReuse(sample).length, 0);
 });
+
+
+test("different discriminant literal values are not structurally identical", () => {
+  const sample = project({
+    "one.ts": "export type Open = { kind: 'open'; value: string }",
+    "two.ts": "export type Closed = { kind: 'closed'; value: string }"
+  });
+  assert.ok(typeReuse(sample).every(item => item.code !== "CG101"));
+});
