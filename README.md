@@ -11,6 +11,7 @@ bun install
 bun run ci:bun
 bun run demo:bun
 bun run demo:strict:bun
+bun run demo:coverage:bun
 ```
 
 `ci:bun` type-checks, builds, runs tests and scans Code Guards itself in strict mode. The demo uses intentionally bad TypeScript. The strict demo exits 1 by design. Use a Linux-native toolchain in WSL; Windows npm cannot run reliably from a WSL UNC working directory.
@@ -31,6 +32,12 @@ bun run guards:bun no-nested-if --path ../tracker-viewer/src/main.ts
 The existing `--project ../tracker-viewer/tsconfig.json` flag remains available for explicit TypeScript configurations. `--project` and `--path` cannot be used together. From any working directory you can instead call `bun /absolute/path/to/code-guards/dist/src/cli.js --path /absolute/path/to/project` after building the CLI. The model weights, if needed, are cached where Code Guards runs, not installed into the target project.
 
 All 20 guards are enabled unless selected individually or disabled by name. For example, `bun run guards:bun --path ../tracker-viewer --disable documentation`. `--strict` fails on a warning; `--format json|github|text` chooses output, and `--colour auto|always|never` controls terminal colour. `--include-tests` includes test files in the optional type/function analyses. `--offline` requires a cached model. An invalid or empty path exits 2 with an explanation.
+
+## Reproducible coverage demonstrations
+
+`bun run demo:coverage:bun` prints **one formatted warning for each active code** using deliberate faults in `examples/coverage/codebase` and `examples/coverage/documentation`. `bun run demo:coverage:bun --code CG413` focuses on a single rule. `bun run demo:coverage:bun --strict` prints the same warnings and exits 1; `--json` returns machine-readable diagnostics. Node users can run `npm run demo:coverage` or `node examples/coverage/run.mjs` after building the project. The test suite verifies that every code listed in the table below appears in the demonstration.
+
+**Inference disclosure:** This coverage showcase injects fixed, labelled zero-shot verdicts for reproducibility. It validates guard integration and reporting, but is not evidence of real MobileBERT quality. `bun run demo:semantic:bun` uses the actual model. To smoke-test the ONNX model itself with a deliberately overlong premise, run `bun run demo:model:bun` (or `npm run demo:model` under native Node). It downloads and executes real MobileBERT inference; it is deliberately **not** run as part of the routine unit tests. Long NLI inputs are now tokenised and split into overlapping passages respecting MobileBERT's 512-token limit; evidence from all passages is combined conservatively.
 
 ## Warning reference
 

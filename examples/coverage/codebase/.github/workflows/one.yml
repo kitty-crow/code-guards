@@ -1,0 +1,5 @@
+name: one
+jobs:
+  quality:
+    steps:
+      - run: bun run ci:bun

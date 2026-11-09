@@ -1,23 +1,32 @@
-/** Real zero-shot entailment, executed locally by Transformers.js (CPU/ONNX). */
-export type SimilarityVerdict = { sameConcept: number; differentConcept: number };
+/** Local zero-shot entailment over token-bounded, overlapping evidence windows. */
+export type SimilarityVerdict = {
+  sameConcept: number;
+  differentConcept: number;
+  evidence?: { windows: number; supportWindow: number; oppositionWindow: number };
+};
 export type SemanticQuestion = { premise: string; same: string; different: string };
 export type SemanticScorer = (question: SemanticQuestion) => Promise<SimilarityVerdict>;
 
 export const MODEL = "Xenova/mobilebert-uncased-mnli";
+export const MAX_MODEL_TOKENS = 512;
 const MODEL_PACKAGE = "@huggingface/transformers";
+const TEMPLATE = "The evidence indicates that {}.";
+const OVERLAP = 48;
+const SAFETY_TOKENS = 8;
 
 type Classification = { labels: string[]; scores: number[] };
-type Classifier = (
-  premise: string,
-  labels: string[],
-  options: { multi_label: boolean; hypothesis_template: string }
-) => Promise<Classification>;
+type ClassifierOptions = { multi_label: boolean; hypothesis_template: string };
+type Tokenizer = {
+  encode: (text: string, options: { add_special_tokens: false }) => number[];
+  decode: (ids: number[], options: { skip_special_tokens: true }) => string;
+};
+type Classifier = ((premise: string, labels: string[], options: ClassifierOptions) => Promise<Classification>) & {
+  tokenizer: Tokenizer;
+};
 
 let classifierPromise: Promise<Classifier> | undefined;
 
 async function loadClassifier(): Promise<Classifier> {
-  // Lazy loading: syntax-only guards never download a model. Semantic guards do.
-  // Dynamic import deliberately keeps the package independent of Bun-specific APIs.
   const transformers = await import(MODEL_PACKAGE) as {
     pipeline: (task: string, model: string, options: { device: "cpu"; dtype: "q8" }) => Promise<Classifier>;
     env: { allowRemoteModels: boolean; cacheDir: string };
@@ -27,18 +36,66 @@ async function loadClassifier(): Promise<Classifier> {
   return transformers.pipeline("zero-shot-classification", MODEL, { device: "cpu", dtype: "q8" });
 }
 
+/** Budget the premise after allowing for BOTH hypothesis labels and pair separators. */
+export function premiseWindows(question: SemanticQuestion, tokenizer: Tokenizer): string[] {
+  const labels = [question.same, question.different];
+  const hypothesisLength = Math.max(...labels.map(label =>
+    tokenizer.encode(TEMPLATE.replace("{}", label), { add_special_tokens: false }).length
+  ));
+  // BERT pairs contain [CLS], two [SEP] tokens and possibly tokeniser-added tokens.
+  const capacity = MAX_MODEL_TOKENS - hypothesisLength - 3 - SAFETY_TOKENS;
+  if (capacity < 48) throw new Error("Zero-shot hypothesis is too long for MobileBERT's 512-token context; shorten the rule labels.");
+  const tokens = tokenizer.encode(question.premise, { add_special_tokens: false });
+  if (tokens.length <= capacity) return [question.premise];
+  const windows: string[] = [];
+  const step = Math.max(1, capacity - OVERLAP);
+  for (let start = 0; start < tokens.length; start += step) {
+    const part = tokens.slice(start, start + capacity);
+    windows.push(tokenizer.decode(part, { skip_special_tokens: true }));
+    if (start + capacity >= tokens.length) break;
+  }
+  return windows;
+}
+
+function scores(result: Classification, question: SemanticQuestion): SimilarityVerdict {
+  const byLabel = new Map(result.labels.map((label, i) => [label, result.scores[i] ?? 0]));
+  return {
+    sameConcept: byLabel.get(question.same) ?? 0,
+    differentConcept: byLabel.get(question.different) ?? 0
+  };
+}
+
+/** Combine evidence without ignoring contradicting windows or averaging away strong evidence. */
+export async function assessWindows(question: SemanticQuestion, classifier: Classifier): Promise<SimilarityVerdict> {
+  const windows = premiseWindows(question, classifier.tokenizer);
+  let sameConcept = 0;
+  let differentConcept = 0;
+  let supportWindow = 0;
+  let oppositionWindow = 0;
+  for (const [index, premise] of windows.entries()) {
+    const result = scores(await classifier(premise, [question.same, question.different], {
+      multi_label: true,
+      hypothesis_template: TEMPLATE
+    }), question);
+    if (result.sameConcept > sameConcept) {
+      sameConcept = result.sameConcept;
+      supportWindow = index + 1;
+    }
+    if (result.differentConcept > differentConcept) {
+      differentConcept = result.differentConcept;
+      oppositionWindow = index + 1;
+    }
+  }
+  return {
+    sameConcept,
+    differentConcept,
+    evidence: { windows: windows.length, supportWindow, oppositionWindow }
+  };
+}
+
 export async function zeroShot(question: SemanticQuestion): Promise<SimilarityVerdict> {
   classifierPromise ??= loadClassifier();
-  const classifier = await classifierPromise;
-  const result = await classifier(question.premise, [question.same, question.different], {
-    multi_label: true,
-    hypothesis_template: "The evidence indicates that {}."
-  });
-  const scores = new Map(result.labels.map((label, i) => [label, result.scores[i] ?? 0]));
-  return {
-    sameConcept: scores.get(question.same) ?? 0,
-    differentConcept: scores.get(question.different) ?? 0
-  };
+  return assessWindows(question, await classifierPromise);
 }
 
 export function supportsReuse(verdict: SimilarityVerdict, minimum = 0.78): boolean {
