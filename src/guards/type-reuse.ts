@@ -1,4 +1,5 @@
 import ts from "typescript";
+import path from "node:path";
 import { location, type Finding } from "../model.ts";
 import type { Project } from "../project.ts";
 import { zeroShot, supportsReuse, type SemanticScorer } from "../semantic.ts";
@@ -203,6 +204,23 @@ function candidatesWithExactMatches(definitions: Definition[]): Set<string> {
   return candidates;
 }
 
+function declarationName(node: ts.Node): ts.Node {
+  if (ts.isInterfaceDeclaration(node) || ts.isClassDeclaration(node) || ts.isTypeAliasDeclaration(node)) return node.name ?? node;
+  return node;
+}
+
+function reuseAdvice(a: Definition, b: Definition, exact: boolean): string {
+  if (!exact) return `Compare fields in ${a.name} and ${b.name}. Extract a shared base interface only for genuinely shared responsibilities; leave domain-specific fields separate.`;
+  const source = a.node.getSourceFile().fileName;
+  const destination = b.node.getSourceFile().fileName;
+  const relative = path.relative(path.dirname(destination), source).replace(/\\/g, "/").replace(/\.[cm]?tsx?$/, ".js");
+  const module = relative.startsWith(".") ? relative : `./${relative}`;
+  const declaration = a.node;
+  const exported = ts.canHaveModifiers(declaration) && ts.getModifiers(declaration)?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword);
+  const prefix = exported ? "" : `Export ${a.name} from ${path.basename(source)} first. `;
+  return `${prefix}Prefer importing the existing definition: import type { ${a.name} } from "${module}"; If callers require the ${b.name} name, expose an alias: export type ${b.name} = ${a.name}; Confirm both concepts should evolve together.`;
+}
+
 async function compareDefinitions(project: Project, a: Definition, b: Definition, score: SemanticScorer): Promise<Finding | undefined> {
   if (a.node.getSourceFile() === b.node.getSourceFile()) return undefined;
   const isClass = a.kind === "class" || b.kind === "class";
@@ -227,12 +245,22 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
   if (confidence === 0) return undefined;
 
   const code = exactMatch ? "CG101" : nearMatch ? "CG102" : "CG103";
-  const qualification = isClass ? " Classes can have distinct runtime behaviour." : "";
+  const shared = b.properties.filter(property => a.properties.some(other => other.name === property.name && other.fingerprint === property.fingerprint));
+  const fields = shared.slice(0, 8).map(property => property.name).join(", ");
+  const fieldNote = shared.length > 8 ? `${fields}, plus ${shared.length - 8} more` : fields;
+  const reason = exactMatch
+    ? `${b.name} duplicates the complete resolved shape of ${a.name} (${b.properties.length} fields: ${b.properties.map(property => property.name).join(", ")}).`
+    : `${b.name} and ${a.name} may overlap. ${shared.length} exactly matching field(s)${shared.length ? `: ${fieldNote}` : ""}; zero-shot confidence ${Math.round(confidence * 100)}%. ${isClass ? "Class runtime behaviour may still differ." : "This is not proof of equivalent domain meaning."}`;
   return {
     guard: "type-reuse", severity: "warning", code,
-    message: `Potential reuse: ${b.name} and ${a.name} (${exactMatch ? "identical structure" : nearMatch ? "overlapping fields" : "similar concepts"}). Review before consolidating.${qualification}`,
-    location: location(project.root, b.node),
-    related: location(project.root, a.node),
+    message: exactMatch ? `Duplicate type definition: ${b.name} matches ${a.name}` : `Potential type overlap: ${b.name} and ${a.name}`,
+    location: location(project.root, declarationName(b.node)),
+    related: location(project.root, declarationName(a.node)),
+    relatedSpan: a.name.length,
+    span: b.name.length,
+    subject: b.name,
+    reason,
+    suggestion: reuseAdvice(a, b, exactMatch),
     similarity: Math.round(confidence * 100) / 100
   };
 }
