@@ -1,0 +1,21 @@
+{
+  "name": "@kitty-crow/code-guards",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "code-guards": "./src/cli.ts"
+  },
+  "scripts": {
+    "guard": "bun src/cli.ts all",
+    "guard:no-nested-if": "bun src/cli.ts no-nested-if",
+    "guard:type-reuse": "bun src/cli.ts type-reuse",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "ci": "bun run typecheck && bun test && bun run guard"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}
