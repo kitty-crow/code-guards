@@ -222,8 +222,8 @@ function checkLinks(root: string, file: string, content: string, findings: Findi
 // Scope CG411 to README prose. Module API pages contain reference details that
 // are not development handovers, even when they discuss how a guard works.
 const handoverQuestion = {
-  same: "this paragraph is a temporary developer handover about work performed, test execution or limitations of the development environment",
-  different: "this paragraph gives stable and relevant information about software behaviour, usage or configuration"
+  same: "this paragraph is a developer-facing progress report, delivery note or self-justification about how work was completed, checked or left unfinished, not lasting user documentation",
+  different: "this paragraph provides useful enduring information for readers about the software, such as behaviour, commands, interfaces, genuine limitations or concise attribution"
 } as const;
 
 // The shortlist is structural (Markdown prose), never a vocabulary heuristic.
@@ -253,14 +253,14 @@ async function checkReadmeIntroduction(file: string, prose: Paragraph[], finding
   const introduction = prose.slice(0, 3);
   if (introduction.length < 3) return;
 
-  // Classify the distinct purposes of the paragraphs, not one blended passage.
-  // A practical usage paragraph must not hide two paragraphs of development history.
+  // Compare reader value with author-centred narration, paragraph by paragraph.
+  // Do not look for project names, phrases or words from any example README.
   const history: Paragraph[] = [];
   for (const paragraph of introduction) {
     const verdict = await score({
       premise: `README introduction paragraph: ${paragraph.text}`,
-      same: "this paragraph chiefly describes the development history, earlier implementation, changes made or work involved in producing the software",
-      different: "this paragraph chiefly explains current software functionality, usage instructions, inputs, outputs or operational requirements"
+      same: "this paragraph spends its attention on how the author produced, adapted or justified the implementation instead of giving readers a useful account of the software itself",
+      different: "this paragraph concisely documents what readers need to know about the current software, including its purpose, use, behaviour, essential attribution or real operating constraints"
     });
     if (!supportsReuse(verdict, 0.75) || verdict.differentConcept > 0.55) continue;
     history.push(paragraph);

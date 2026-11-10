@@ -257,3 +257,26 @@ test("routine CI excludes warning-showcase tests but full CI preserves them", ()
   assert.match(scripts["ci"] ?? "", /node --test dist\/test\/\*\.test\.js/);
   assert.match(scripts["ci:full"] ?? "", /dist\/test\/showcase\/\*\.test\.js/);
 });
+
+test("CG411 uses general documentation-quality hypotheses without lexical matching", async () => {
+  const project = fixture({"README.md": [
+    "# Introduction",
+    "",
+    "The author spent several iterations replacing an early design and describes the process that led to the current implementation.",
+    "",
+    "The tool validates data files and emits a report with each record's status.",
+    "",
+    "The team selected a different architecture while preparing the deliverable, although its effect on users is not explained."
+  ].join("\n")});
+  const comparisons: {same: string; different: string; premise: string}[] = [];
+  const scorer: SemanticScorer = async question => {
+    comparisons.push(question);
+    if (!question.premise.startsWith("README introduction paragraph:")) return reject(question);
+    return question.premise.includes("tool validates data files") ? reject(question) : endorse(question);
+  };
+  const findings = await documentation(project, scorer);
+  const introduction = comparisons.filter(question => question.premise.startsWith("README introduction paragraph:"));
+  assert.equal(introduction.length, 3);
+  assert.ok(introduction.every(question => question.same.includes("author") && question.different.includes("readers")));
+  assert.ok(findings.some(finding => finding.code === "CG411" && finding.message.includes("introduction")));
+});
