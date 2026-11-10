@@ -1,6 +1,6 @@
 import { loadProject } from "./project.ts";
 import {
-  noNestedIf, typeReuse, functionQuality, codeHealth, crossModule,
+  noNestedIf, typeReuse, functionQuality, moduleCohesion, codeHealth, crossModule,
   documentation, repoHygiene, enterpriseLookingNaming, reviewPractices
 } from "./guards/index.ts";
 import type { Finding, GuardName } from "./model.ts";
@@ -14,6 +14,7 @@ export async function analyse(config: AnalysisOptions): Promise<Analysis> {
     ...(config.enabled.has("no-nested-if") ? noNestedIf(project) : []),
     ...(config.enabled.has("type-reuse") ? await typeReuse(project, config.includeTests) : []),
     ...(config.enabled.has("function-quality") ? await functionQuality(project, config.includeTests) : []),
+    ...(config.enabled.has("module-cohesion") ? await moduleCohesion(project, config.includeTests) : []),
     ...codeHealth(project, config.includeTests).filter(item => config.enabled.has(item.guard)),
     ...crossModule(project).filter(item => config.enabled.has(item.guard)),
     ...(config.enabled.has("documentation") ? await documentation(project) : []),

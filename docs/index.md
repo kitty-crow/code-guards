@@ -21,6 +21,7 @@ Code Guards runs locally; the source entry point is `src/cli.ts`. These pages de
 - [Cross-cutting review practices](modules/guards/review-practices.md)
 - [Guard exports](modules/guards/index.md)
 - [Function and method quality checks](modules/guards/function-quality.md)
+- [Module responsibility and cohesion](modules/guards/module-cohesion.md)
 - [Nested conditional detection](modules/guards/no-nested-if.md)
 - [Repository script and workflow checks](modules/guards/repo-hygiene.md)
 - [Cross-module type reuse](modules/guards/type-reuse.md)

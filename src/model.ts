@@ -2,7 +2,7 @@ import path from "node:path";
 import ts from "typescript";
 
 export const guards = [
-  "no-nested-if", "type-reuse", "function-quality",
+  "no-nested-if", "type-reuse", "function-quality", "module-cohesion",
   "dead-code", "simplify-code", "async-safety", "single-source",
   "type-assertions", "state-exhaustiveness", "responsibility",
   "overengineering", "project-conventions", "naming", "coupling",
