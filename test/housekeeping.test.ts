@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import ts from "typescript";
 import { afterEach, test } from "node:test";
 import { loadProject } from "../src/project.ts";
 import { codeHealth } from "../src/guards/code-health.ts";
@@ -44,7 +45,25 @@ test("compiler checks: dead code, boolean simplification, unsafe async, casts, s
 });
 
 test("CG303 leaves test-runner registration to the runner but catches unrelated ignored Promises", () => {
-  const project = fixture({"test/registration.test.ts": `
+  const project = fixture({
+    "tsconfig.json": JSON.stringify({compilerOptions: {strict: true, noEmit: true, target: "ES2022"}, include: ["src/**/*.ts", "test/**/*.ts"]}),
+    "src/runner.d.ts": `
+      declare module "node:test" {
+        interface Registration {
+          (name: string, callback: () => void): Promise<void>;
+          only: Registration;
+          skip: Registration;
+        }
+        const test: Registration;
+        export default test;
+        export {test};
+        export const describe: Registration;
+      }
+      declare module "bun:test" {
+        export function test(name: string, callback: () => void): Promise<void>;
+      }
+    `,
+    "test/registration.test.ts": `
     import test, {test as scenario, describe} from "node:test";
     import * as runner from "node:test";
     import {test as bunCase} from "bun:test";
@@ -58,6 +77,13 @@ test("CG303 leaves test-runner registration to the runner but catches unrelated 
     bunCase("Bun registration", () => {});
     dispatch();
   `});
+  const source = project.files.find(file => file.fileName.endsWith("registration.test.ts"));
+  assert.ok(source);
+  const directRegistration = source.statements.find(statement =>
+    ts.isExpressionStatement(statement) && statement.expression.getText(source).startsWith('test("default import"')
+  );
+  assert.ok(directRegistration && ts.isExpressionStatement(directRegistration));
+  assert.equal(project.checker.typeToString(project.checker.getTypeAtLocation(directRegistration.expression)), "Promise<void>");
   const findings = codeHealth(project, true).filter(item => item.code === "CG303");
   assert.equal(findings.length, 1, JSON.stringify(findings));
   assert.match(findings[0]?.reason ?? "", /dispatch/);
