@@ -17,12 +17,12 @@ const testFile = /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]
 function inspect(file: ts.SourceFile, name: string, node: ts.Node, body: ts.Node): Unit {
   const operations = new Set<string>();
   const localCalls = new Set<string>();
+  const recordCall = (expression: ts.LeftHandSideExpression): void => {
+    if (operations.size < 10) operations.add(expression.getText(file).slice(0, 64));
+    if (ts.isIdentifier(expression)) localCalls.add(expression.text);
+  };
   const walk = (current: ts.Node): void => {
-    if (ts.isCallExpression(current) || ts.isNewExpression(current)) {
-      const expression = current.expression;
-      if (operations.size < 10) operations.add(expression.getText(file).slice(0, 64));
-      if (ts.isIdentifier(expression)) localCalls.add(expression.text);
-    }
+    if (ts.isCallExpression(current) || ts.isNewExpression(current)) recordCall(current.expression);
     ts.forEachChild(current, walk);
   };
   walk(body);
@@ -30,49 +30,53 @@ function inspect(file: ts.SourceFile, name: string, node: ts.Node, body: ts.Node
   return {name, node, operations: [...operations], localCalls, detail: preview};
 }
 
-function operations(file: ts.SourceFile): Unit[] {
+function classUnit(file: ts.SourceFile, statement: ts.ClassDeclaration): Unit[] {
+  if (!statement.name) return [];
+  const implementations = statement.members.filter(member => "body" in member && member.body);
+  if (!implementations.length) return [];
+  const unit = inspect(file, statement.name.text, statement.name, statement);
+  const methods = implementations.flatMap(member => {
+    if (ts.isMethodDeclaration(member) || ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
+      return [member.name.getText(file)];
+    }
+    return ts.isConstructorDeclaration(member) ? ["constructor"] : [];
+  });
+  unit.detail = `Class methods: ${methods.join(", ")}. ${unit.detail}`;
+  return [unit];
+}
+
+function variableUnits(file: ts.SourceFile, statement: ts.VariableStatement): Unit[] {
   const result: Unit[] = [];
-  for (const statement of file.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) {
-      result.push(inspect(file, statement.name.text, statement.name, statement.body));
+  for (const declaration of statement.declarationList.declarations) {
+    const initializer = declaration.initializer;
+    if (!initializer || !ts.isIdentifier(declaration.name)) continue;
+    if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+      result.push(inspect(file, declaration.name.text, declaration.name, initializer.body));
       continue;
     }
-    if (ts.isClassDeclaration(statement) && statement.name) {
-      const implementations = statement.members.filter(member => "body" in member && member.body);
-      if (!implementations.length) continue;
-      const unit = inspect(file, statement.name.text, statement.name, statement);
-      const methods = implementations.flatMap(member => {
-        if (ts.isMethodDeclaration(member) || ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
-          return [member.name.getText(file)];
-        }
-        return ts.isConstructorDeclaration(member) ? ["constructor"] : [];
-      });
-      unit.detail = `Class methods: ${methods.join(", ")}. ${unit.detail}`;
-      result.push(unit);
-      continue;
-    }
-    if (ts.isVariableStatement(statement)) {
-      for (const declaration of statement.declarationList.declarations) {
-        const initializer = declaration.initializer;
-        if (!initializer || !ts.isIdentifier(declaration.name)) continue;
-        if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
-          result.push(inspect(file, declaration.name.text, declaration.name, initializer.body));
-          continue;
-        }
-        if (ts.isCallExpression(initializer) || ts.isNewExpression(initializer) || ts.isAwaitExpression(initializer)) {
-          result.push(inspect(file, `initialisation of ${declaration.name.text}`, declaration.name, initializer));
-        }
-      }
-      continue;
-    }
-    if (ts.isExpressionStatement(statement) && (
-      ts.isCallExpression(statement.expression) || ts.isAwaitExpression(statement.expression)
-    )) {
-      const line = file.getLineAndCharacterOfPosition(statement.getStart(file)).line + 1;
-      result.push(inspect(file, `top-level operation at line ${line}`, statement, statement.expression));
+    if (ts.isCallExpression(initializer) || ts.isNewExpression(initializer) || ts.isAwaitExpression(initializer)) {
+      result.push(inspect(file, `initialisation of ${declaration.name.text}`, declaration.name, initializer));
     }
   }
   return result;
+}
+
+function statementUnits(file: ts.SourceFile, statement: ts.Statement): Unit[] {
+  if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) {
+    return [inspect(file, statement.name.text, statement.name, statement.body)];
+  }
+  if (ts.isClassDeclaration(statement)) return classUnit(file, statement);
+  if (ts.isVariableStatement(statement)) return variableUnits(file, statement);
+  if (!ts.isExpressionStatement(statement)) return [];
+  if (!ts.isCallExpression(statement.expression) && !ts.isAwaitExpression(statement.expression)) return [];
+  const line = file.getLineAndCharacterOfPosition(statement.getStart(file)).line + 1;
+  return [inspect(file, `top-level operation at line ${line}`, statement, statement.expression)];
+}
+
+// A declaration is collected by its implementation shape, so helpers, classes
+// and script initialisation remain separate units without nesting AST tests.
+function operations(file: ts.SourceFile): Unit[] {
+  return file.statements.flatMap(statement => statementUnits(file, statement));
 }
 
 function related(left: Unit, right: Unit): boolean {

@@ -4,16 +4,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProject } from "../../src/project.ts";
-import { noNestedIf } from "../../src/guards/no-nested-if.ts";
-import { typeReuse } from "../../src/guards/type-reuse.ts";
-import { functionQuality } from "../../src/guards/function-quality.ts";
-import { moduleCohesion } from "../../src/guards/module-cohesion.ts";
-import { codeHealth } from "../../src/guards/code-health.ts";
-import { crossModule } from "../../src/guards/cross-module.ts";
-import { documentation } from "../../src/guards/documentation.ts";
-import { repoHygiene } from "../../src/guards/repo-hygiene.ts";
-import { enterpriseLookingNaming } from "../../src/guards/enterprise-looking-naming.ts";
-import { reviewPractices } from "../../src/guards/review-practices.ts";
+import {
+  noNestedIf, typeReuse, functionQuality, moduleCohesion, codeHealth,
+  crossModule, documentation, repoHygiene, enterpriseLookingNaming, reviewPractices
+} from "../../src/guards/index.ts";
 import { renderFindings } from "../../src/diagnostics.ts";
 import type { Finding } from "../../src/model.ts";
 import type { SemanticScorer } from "../../src/semantic.ts";
@@ -55,26 +49,31 @@ export async function collect(): Promise<{examples: Example[]; supportedCodes: s
   };
 }
 
-const entrypoint = process.argv[1] ? path.resolve(process.argv[1]) : "";
-if (entrypoint === fileURLToPath(import.meta.url)) {
+async function showCoverage(): Promise<void> {
   const result = await collect();
   const json = process.argv.includes("--json");
   const strict = process.argv.includes("--strict");
   const onlyAt = process.argv.indexOf("--code");
   const only = onlyAt < 0 ? undefined : process.argv[onlyAt + 1];
   const shown = only ? result.examples.filter(item => item.finding.code === only) : result.examples;
+
   if (json) {
     console.log(JSON.stringify({
       supportedCodes: result.supportedCodes, missing: result.missing,
       findings: shown.map(item => item.finding)
     }, null, 2));
-  } else {
-    console.log(`Code Guards rule showcase: ${shown.length}/${result.supportedCodes.length} codes`);
-    console.log("NLI verdicts are SIMULATED. Run demo:semantic:bun for real MobileBERT inference.");
-    for (const item of shown) {
-      console.log(renderFindings([item.finding], {root: item.root, format: "text", colour: "auto"}));
-    }
-    if (result.missing.length) console.error(`Showcase missing codes: ${result.missing.join(", ")}`);
+    process.exitCode = result.missing.length ? 2 : strict && shown.length ? 1 : 0;
+    return;
   }
+
+  console.log(`Code Guards rule showcase: ${shown.length}/${result.supportedCodes.length} codes`);
+  console.log("NLI verdicts are SIMULATED. Run demo:semantic:bun for real MobileBERT inference.");
+  for (const item of shown) {
+    console.log(renderFindings([item.finding], {root: item.root, format: "text", colour: "auto"}));
+  }
+  if (result.missing.length) console.error(`Showcase missing codes: ${result.missing.join(", ")}`);
   process.exitCode = result.missing.length ? 2 : strict && shown.length ? 1 : 0;
 }
+
+const entrypoint = process.argv[1] ? path.resolve(process.argv[1]) : "";
+if (entrypoint === fileURLToPath(import.meta.url)) await showCoverage();
