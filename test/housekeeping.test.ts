@@ -246,3 +246,14 @@ test("CG411 rejects contradictory NLP evidence for a multi-paragraph introductio
   const findings = await documentation(project, async () => ({sameConcept: 0.96, differentConcept: 0.72}));
   assert.ok(!findings.some(item => item.code === "CG411"));
 });
+
+test("routine CI excludes warning-showcase tests but full CI preserves them", () => {
+  const packageFile = JSON.parse(readFileSync(path.resolve("package.json"), "utf8")) as {scripts: Record<string, string>};
+  const scripts = packageFile.scripts;
+  assert.match(scripts["ci:bun"] ?? "", /bun test \.\/test\/\*\.test\.ts/);
+  assert.match(scripts["ci:bun"] ?? "", /bun dist\/src\/cli\.js --strict/);
+  assert.match(scripts["test:showcase:bun"] ?? "", /bun test \.\/test\/showcase\/\*\.test\.ts/);
+  assert.match(scripts["ci:full:bun"] ?? "", /bun test && bun dist\/src\/cli\.js --strict/);
+  assert.match(scripts["ci"] ?? "", /node --test dist\/test\/\*\.test\.js/);
+  assert.match(scripts["ci:full"] ?? "", /dist\/test\/showcase\/\*\.test\.js/);
+});

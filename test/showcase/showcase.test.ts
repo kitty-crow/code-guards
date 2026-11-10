@@ -3,12 +3,12 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { run } from "../src/cli.ts";
-import { noNestedIf } from "../src/guards/no-nested-if.ts";
-import { typeReuse } from "../src/guards/type-reuse.ts";
-import { functionQuality } from "../src/guards/function-quality.ts";
-import { loadProject } from "../src/project.ts";
-import type { SemanticScorer } from "../src/semantic.ts";
+import { run } from "../../src/cli.ts";
+import { noNestedIf } from "../../src/guards/no-nested-if.ts";
+import { typeReuse } from "../../src/guards/type-reuse.ts";
+import { functionQuality } from "../../src/guards/function-quality.ts";
+import { loadProject } from "../../src/project.ts";
+import type { SemanticScorer } from "../../src/semantic.ts";
 
 const violations = path.resolve("examples/violations/tsconfig.json");
 const semantic = path.resolve("examples/semantic/tsconfig.json");
