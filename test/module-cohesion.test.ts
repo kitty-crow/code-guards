@@ -133,13 +133,17 @@ test("CG206 inspects top-level script operations without requiring exported func
   const seen: string[] = [];
   const scorer: SemanticScorer = async question => {
     seen.push(question.premise);
-    return endorse(question);
+    if (question.premise.startsWith("TypeScript module")) return endorse(question);
+    const distinctInitialisers = question.premise.includes("initialisation of records") &&
+      question.premise.includes("initialisation of digest");
+    return distinctInitialisers ? endorse(question) : reject(question);
   };
   const found = await moduleCohesion(project, false, scorer);
   assert.equal(found.length, 1);
   assert.match(found[0]?.suggestion ?? "", /initialisation of records/);
   assert.match(found[0]?.suggestion ?? "", /initialisation of digest/);
   assert.ok(seen.some(item => item.startsWith("TypeScript module")));
+  assert.ok(seen.some(item => item.startsWith("Two implementations") && item.includes("initialisation of records") && item.includes("initialisation of digest")));
 });
 
 
