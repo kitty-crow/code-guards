@@ -245,6 +245,38 @@ async function checkHandover(file: string, paragraph: Paragraph, findings: Findi
   });
 }
 
+// Review the phrasing of individual sentences, not just their subject matter.
+// Structural punctuation identifies candidates; no lexical triggers or examples
+// are used to decide which sentences are problematic.
+const styleQuestion = {
+  same: "the highlighted sentence is formulaic or overexplained technical prose, using needless clarification, self-conscious reassurance or an artificial explanatory cadence instead of making a useful point",
+  different: "the highlighted sentence is direct, relevant technical documentation that concisely explains useful behaviour, an instruction, a real constraint or meaningful context"
+} as const;
+
+function sentencesIn(paragraph: Paragraph): string[] {
+  return paragraph.text.split(/(?<=[.!?])\\s+(?=[`*_(\[]?[A-Z])/u).map(text => text.trim()).filter(Boolean);
+}
+
+async function checkStyle(file: string, paragraph: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
+  if (releaseFile.test(file)) return;
+  for (const sentence of sentencesIn(paragraph)) {
+    if (sentence.length < 55) continue;
+    const verdict = await score({
+      premise: `Documentation paragraph: ${paragraph.text}\\nSentence to review: ${sentence}`,
+      same: styleQuestion.same,
+      different: styleQuestion.different
+    });
+    if (!supportsReuse(verdict, 0.81) || verdict.differentConcept > 0.35) continue;
+    issue(findings, {
+      code: "CG411", file, line: paragraph.line,
+      title: "Formulaic or unnecessary wording in documentation",
+      subject: sentence.slice(0, 115),
+      reason: `The local language model judged this sentence more like padded or mechanical explanation than useful technical documentation (${Math.round(verdict.sameConcept * 100)}% support versus ${Math.round(verdict.differentConcept * 100)}% opposing evidence). This is an editorial judgement, not a claim about who wrote it.`,
+      suggestion: "Avoid prompt-like wording in README and documentation. State relevant facts directly, remove redundant clarification and defensive assurances, and keep necessary technical detail."
+    });
+  }
+}
+
 // A README can have perfectly accurate paragraphs yet read like a development
 // report as a whole. Judge the opening together, so zero-shot inference can
 // evaluate the balance of project provenance and current user value.
@@ -294,7 +326,11 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
   const prose = paragraphs(lines);
   await checkReadmeIntroduction(file, prose, findings, score);
   for (const [i, candidate] of prose.entries()) {
+    const priorFindings = findings.length;
     await checkHandover(file, candidate, findings, score);
+    if (!findings.slice(priorFindings).some(item => item.code === "CG411")) {
+      await checkStyle(file, candidate, findings, score);
+    }
     for (const other of prose.slice(i + 1)) {
       if (candidate.text.length <= 75 || other.text.length < 75 || similarity(candidate.text, other.text) < 0.91) continue;
       issue(findings, {code: "CG403", file, line: other.line, title: "Documentation repeats earlier content", subject: other.text.slice(0, 110),

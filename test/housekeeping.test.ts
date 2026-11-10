@@ -280,3 +280,54 @@ test("CG411 uses general documentation-quality hypotheses without lexical matchi
   assert.ok(introduction.every(question => question.same.includes("author") && question.different.includes("readers")));
   assert.ok(findings.some(finding => finding.code === "CG411" && finding.message.includes("introduction")));
 });
+
+test("CG411 reviews individual sentences for formulaic cadence even within a practical paragraph", async () => {
+  const project = fixture({"README.md": [
+    "# Introduction",
+    "",
+    "The converter accepts plain text files and produces an index. The implementation is delivered as a distinct arrangement, for reasons associated with the team's preparation process."
+  ].join("\\n")});
+  const seen: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    seen.push(question.premise);
+    if (question.same.includes("formulaic or overexplained") && question.premise.includes("distinct arrangement")) {
+      return {sameConcept: 0.91, differentConcept: 0.12};
+    }
+    return reject(question);
+  };
+  const findings = await documentation(project, scorer);
+  const issues = findings.filter(item => item.code === "CG411");
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0]?.message, "Formulaic or unnecessary wording in documentation");
+  assert.match(issues[0]?.subject ?? "", /distinct arrangement/);
+  assert.ok(!issues[0]?.subject?.includes("converter accepts"));
+  assert.ok(seen.some(premise => premise.includes("Sentence to review:")));
+});
+
+test("CG411 editorial review applies to ordinary Markdown documentation, not only README", async () => {
+  const project = fixture({"README.md": "# Introduction\\n\\nThe program accepts JSON files and writes a validated report.",
+    "docs/guide.md": "# Guide\\n\\nThis description exists in the present arrangement solely to reflect the implementation decisions taken during delivery."});
+  const scorer: SemanticScorer = async question => question.same.includes("formulaic or overexplained")
+    ? {sameConcept: 0.93, differentConcept: 0.14}
+    : reject(question);
+  const findings = await documentation(project, scorer);
+  assert.ok(findings.some(item => item.code === "CG411" && item.location.file === "docs/guide.md"));
+});
+
+test("CG411 editorial check requires semantic support and excludes fenced examples", async () => {
+  const project = fixture({"README.md": [
+    "# Usage", "",
+    "The command reads a configuration file, validates the records and exits nonzero if any record is invalid.", "",
+    "```text",
+    "A deliberately unnatural passage about internal delivery decisions belongs inside this code example.",
+    "```"
+  ].join("\\n")});
+  const premises: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    premises.push(question.premise);
+    return {sameConcept: 0.94, differentConcept: 0.69};
+  };
+  const findings = await documentation(project, scorer);
+  assert.ok(!findings.some(item => item.code === "CG411"));
+  assert.ok(premises.every(premise => !premise.includes("deliberately unnatural")));
+});
