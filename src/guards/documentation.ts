@@ -254,18 +254,29 @@ const styleQuestion = {
 } as const;
 
 function sentencesIn(paragraph: Paragraph): string[] {
-  return paragraph.text.split(/(?<=[.!?])\s+(?=[`*_(\[]?[A-Z])/u).map(text => text.trim()).filter(Boolean);
+  const sentences = paragraph.text.split(/(?<=[.!?])(?:[*_`"'’”)\]]{0,4})\s+(?=[`*_(\[]?[A-Z])/u);
+  return sentences.flatMap(sentence => {
+    const trimmed = sentence.trim();
+    const clauses = trimmed.split(/;\s+(?=\S)/u).map(part => part.trim());
+    return clauses.length > 1 ? [trimmed, ...clauses.slice(1)] : [trimmed];
+  }).filter(Boolean);
+}
+
+function traceStyle(file: string, line: number, excerpt: string, score: {sameConcept: number; differentConcept: number}): void {
+  if (process.env.CODE_GUARDS_SEMANTIC_TRACE !== "1") return;
+  console.error(JSON.stringify({guard: "CG411", file, line, support: score.sameConcept, opposition: score.differentConcept, excerpt}));
 }
 
 async function checkStyle(file: string, paragraph: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
   if (releaseFile.test(file)) return;
   for (const sentence of sentencesIn(paragraph)) {
-    if (sentence.length < 55) continue;
+    if (sentence.length < 40) continue;
     const verdict = await score({
       premise: `Documentation paragraph: ${paragraph.text}\nSentence to review: ${sentence}`,
       same: styleQuestion.same,
       different: styleQuestion.different
     });
+    traceStyle(file, paragraph.line, sentence, verdict);
     if (!supportsReuse(verdict, 0.81) || verdict.differentConcept > 0.35) continue;
     issue(findings, {
       code: "CG411", file, line: paragraph.line,

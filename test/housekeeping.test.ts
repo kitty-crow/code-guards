@@ -331,3 +331,24 @@ test("CG411 editorial check requires semantic support and excludes fenced exampl
   assert.ok(!findings.some(item => item.code === "CG411"));
   assert.ok(premises.every(premise => !premise.includes("deliberately unnatural")));
 });
+
+test("CG411 identifies sentence boundaries after Markdown emphasis and semicolon qualifications", async () => {
+  const project = fixture({"README.md": [
+    "# Instructions",
+    "",
+    "**The importer reads spreadsheet rows.** The output is generated in a distinct form for reasons related to packaging.",
+    "",
+    "The index can be written as JSON; this extra qualification merely restates a design choice without helping the reader."
+  ].join("\n")});
+  const excerpts: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    if (!question.same.includes("formulaic or overexplained")) return reject(question);
+    const excerpt = question.premise.split("Sentence to review: ")[1] ?? "";
+    excerpts.push(excerpt);
+    return excerpt.startsWith("this extra qualification") ? {sameConcept: 0.91, differentConcept: 0.1} : reject(question);
+  };
+  const findings = await documentation(project, scorer);
+  assert.ok(excerpts.some(text => text.startsWith("The output is generated")));
+  assert.ok(excerpts.some(text => text.startsWith("this extra qualification")));
+  assert.equal(findings.filter(item => item.code === "CG411" && item.message.includes("Formulaic")).length, 1);
+});
