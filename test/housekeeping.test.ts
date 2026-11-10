@@ -43,6 +43,36 @@ test("compiler checks: dead code, boolean simplification, unsafe async, casts, s
   for (const code of ["CG301", "CG302", "CG303", "CG305", "CG306", "CG313"]) assert.ok(actual.has(code), `missing ${code}`);
 });
 
+test("CG303 leaves test-runner registration to the runner but catches unrelated ignored Promises", () => {
+  const project = fixture({"test/registration.test.ts": `
+    import test, {test as scenario, describe} from "node:test";
+    import * as runner from "node:test";
+    import {test as bunCase} from "bun:test";
+    async function dispatch(): Promise<void> { return; }
+    test("default import", () => {});
+    test.only("selected test", () => {});
+    scenario("named alias", () => {});
+    describe("a suite", () => {});
+    runner.test("namespace import", () => {});
+    runner.test.skip("skipped registration", () => {});
+    bunCase("Bun registration", () => {});
+    dispatch();
+  `});
+  const findings = codeHealth(project, true).filter(item => item.code === "CG303");
+  assert.equal(findings.length, 1, JSON.stringify(findings));
+  assert.match(findings[0]?.reason ?? "", /dispatch/);
+});
+
+test("CG303 does not exempt local functions just because they are named test", () => {
+  const project = fixture({"test/local.test.ts": `
+    function test(): Promise<void> { return Promise.resolve(); }
+    test();
+  `});
+  const findings = codeHealth(project, true).filter(item => item.code === "CG303");
+  assert.equal(findings.length, 1);
+  assert.match(findings[0]?.reason ?? "", /test\(/);
+});
+
 test("design checks: responsibility, wrapper, names, contracts, placeholders, tests and coupling", () => {
   const dependencies = Array.from({length: 10}, (_, i) => `import { value${i} } from './dep${i}.ts';`).join("\n");
   const modules = Object.fromEntries(Array.from({length: 10}, (_, i) => [`src/dep${i}.ts`, `export const value${i} = ${i};`]));

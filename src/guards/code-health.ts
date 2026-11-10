@@ -76,6 +76,45 @@ function checkIf(stmt: ts.IfStatement, report: Report): void {
   report({guard: "simplify-code", code: "CG302", node: stmt, message: "Conditional returns its own boolean test", reason: `The true branch returns true and the false branch returns false, duplicating the test ${conditionType}.`, suggestion: `If ${conditionType} has a boolean type, replace this whole conditional with return ${conditionType};. Check narrowing and side effects first.`});
 }
 
+const registrationNames = new Set(["test", "it", "describe", "suite"]);
+const registrationModifiers = new Set(["only", "skip", "todo", "concurrent"]);
+
+/**
+ * Test-runner registration Promises are handled by the runner itself.
+ * Resolve the imported binding so an unrelated local test() or a shadowed
+ * identifier still receives the normal unhandled-Promise warning.
+ */
+function isRunnerRegistration(call: ts.CallExpression, project: Project): boolean {
+  const members: string[] = [];
+  let callee: ts.Expression = call.expression;
+  while (ts.isPropertyAccessExpression(callee)) {
+    members.unshift(callee.name.text);
+    callee = callee.expression;
+  }
+  if (!ts.isIdentifier(callee)) return false;
+
+  const symbol = project.checker.getSymbolAtLocation(callee);
+  for (const declaration of symbol?.declarations ?? []) {
+    let source: ts.Node;
+    if (ts.isImportSpecifier(declaration)) {
+      const exported = declaration.propertyName?.text ?? declaration.name.text;
+      if (!registrationNames.has(exported)) continue;
+      source = declaration.parent.parent.parent;
+    } else if (ts.isImportClause(declaration)) {
+      source = declaration.parent;
+    } else if (ts.isNamespaceImport(declaration)) {
+      if (!registrationNames.has(members.shift() ?? "")) continue;
+      source = declaration.parent.parent;
+    } else {
+      continue;
+    }
+    if (!members.every(member => registrationModifiers.has(member))) continue;
+    if (!ts.isImportDeclaration(source) || !ts.isStringLiteral(source.moduleSpecifier)) continue;
+    if (source.moduleSpecifier.text === "node:test" || source.moduleSpecifier.text === "bun:test") return true;
+  }
+  return false;
+}
+
 function checkAsync(node: ts.Node, project: Project, report: Report): void {
   if (ts.isCatchClause(node) && ts.isBlock(node.block) && node.block.statements.length === 0) {
     report({guard: "async-safety", code: "CG303", node: node, message: "Caught error is silently discarded", reason: "This empty catch clause hides the failure and makes diagnosis difficult.", suggestion: "Handle the error, propagate it or document an intentional best-effort failure with a specific justification."});
@@ -83,6 +122,7 @@ function checkAsync(node: ts.Node, project: Project, report: Report): void {
   if (!ts.isExpressionStatement(node) || !ts.isCallExpression(node.expression)) return;
   const callee = node.expression.expression;
   if (ts.isPropertyAccessExpression(callee) && ["catch", "then"].includes(callee.name.text)) return;
+  if (isRunnerRegistration(node.expression, project)) return;
   const type = project.checker.getTypeAtLocation(node.expression);
   if (!/^Promise(?:Like)?</.test(project.checker.typeToString(type)) && type.symbol?.getName() !== "Promise") return;
   report({guard: "async-safety", code: "CG303", node: node.expression, message: "Promise result is ignored", reason: `The expression ${node.expression.getText().slice(0, 65)} returns a Promise but is neither awaited nor explicitly handled.`, suggestion: "Await the call, return its Promise, or attach an error handler. For intentionally detached work, use an explicit void expression with a documented failure policy."});
