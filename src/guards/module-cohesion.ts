@@ -55,8 +55,13 @@ function operations(file: ts.SourceFile): Unit[] {
       for (const declaration of statement.declarationList.declarations) {
         const initializer = declaration.initializer;
         if (!initializer || !ts.isIdentifier(declaration.name)) continue;
-        if (!ts.isArrowFunction(initializer) && !ts.isFunctionExpression(initializer)) continue;
-        result.push(inspect(file, declaration.name.text, declaration.name, initializer.body));
+        if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+          result.push(inspect(file, declaration.name.text, declaration.name, initializer.body));
+          continue;
+        }
+        if (ts.isCallExpression(initializer) || ts.isNewExpression(initializer) || ts.isAwaitExpression(initializer)) {
+          result.push(inspect(file, `initialisation of ${declaration.name.text}`, declaration.name, initializer));
+        }
       }
       continue;
     }
@@ -84,7 +89,8 @@ function breakout(anchor: Unit, other: Unit, all: Unit[]): string {
   ));
   const names = members.map(unit => unit.name).join(", ");
   const actions = anchor.operations.slice(0, 4).join(", ");
-  return `${anchor.name} responsibility (declarations: ${names}; operations: ${actions || "local computation"})`;
+  const purpose = anchor.name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").toLowerCase();
+  return `module focused on ${purpose} (declarations: ${names}; operations: ${actions || "local computation"})`;
 }
 
 /**

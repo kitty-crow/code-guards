@@ -59,8 +59,8 @@ test("CG206 uses semantic evidence to identify unrelated module responsibilities
   assert.match(found[0]?.reason ?? "", /parseRecords/);
   assert.match(found[0]?.reason ?? "", /dispatchAlerts/);
   assert.match(found[0]?.suggestion ?? "", /Proposed responsibility breakout/);
-  assert.match(found[0]?.suggestion ?? "", /parseRecords responsibility/);
-  assert.match(found[0]?.suggestion ?? "", /dispatchAlerts responsibility/);
+  assert.match(found[0]?.suggestion ?? "", /module focused on parse records/);
+  assert.match(found[0]?.suggestion ?? "", /module focused on dispatch alerts/);
   assert.ok(questions.some(question => question.startsWith("TypeScript module")));
   assert.ok(questions.some(question => question.startsWith("Two implementations")));
 });
@@ -119,4 +119,25 @@ test("CG206 excludes tests unless requested and supports class-based responsibil
   assert.equal(found.length, 1);
   assert.match(found[0]?.suggestion ?? "", /InputProcessor/);
   assert.match(found[0]?.suggestion ?? "", /EmailSender/);
+});
+
+
+test("CG206 inspects top-level script operations without requiring exported functions", async () => {
+  const project = fixture({"src/runner.ts": [
+    "import {readFileSync} from 'node:fs';",
+    "import {createHash} from 'node:crypto';",
+    "const records = readFileSync('records.txt', 'utf8');",
+    "const digest = createHash('sha256');",
+    "console.log(records, digest);"
+  ].join("\n")});
+  const seen: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    seen.push(question.premise);
+    return endorse(question);
+  };
+  const found = await moduleCohesion(project, false, scorer);
+  assert.equal(found.length, 1);
+  assert.match(found[0]?.suggestion ?? "", /initialisation of records/);
+  assert.match(found[0]?.suggestion ?? "", /initialisation of digest/);
+  assert.ok(seen.some(item => item.startsWith("TypeScript module")));
 });

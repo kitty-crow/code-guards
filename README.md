@@ -39,7 +39,7 @@ bun run guards:bun no-nested-if --path ../tracker-viewer/src/main.ts
 
 The existing `--project ../tracker-viewer/tsconfig.json` flag remains available for explicit TypeScript configurations. `--project` and `--path` cannot be used together. From any working directory you can instead call `bun /absolute/path/to/code-guards/dist/src/cli.js --path /absolute/path/to/project` after building the CLI. The model weights, if needed, are cached where Code Guards runs, not installed into the target project.
 
-All 22 guards run by default. Pass a guard name to select it, or use `--disable` to exclude it:
+All 23 guards run by default. Pass a guard name to select it, or use `--disable` to exclude it:
 
 ```sh
 bun run guards:bun --path ../tracker-viewer --disable documentation
