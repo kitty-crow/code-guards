@@ -41,7 +41,12 @@ function operations(file: ts.SourceFile): Unit[] {
       const implementations = statement.members.filter(member => "body" in member && member.body);
       if (!implementations.length) continue;
       const unit = inspect(file, statement.name.text, statement.name, statement);
-      const methods = implementations.map(member => member.name?.getText(file)).filter((name): name is string => Boolean(name));
+      const methods = implementations.flatMap(member => {
+        if (ts.isMethodDeclaration(member) || ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
+          return [member.name.getText(file)];
+        }
+        return ts.isConstructorDeclaration(member) ? ["constructor"] : [];
+      });
       unit.detail = `Class methods: ${methods.join(", ")}. ${unit.detail}`;
       result.push(unit);
       continue;
