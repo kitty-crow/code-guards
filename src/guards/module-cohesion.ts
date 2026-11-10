@@ -83,6 +83,21 @@ function evidence(unit: Unit): string {
   return `${unit.name}: calls ${unit.operations.join(", ") || "none"}; implementation: ${unit.detail}`;
 }
 
+// Sample the complete implementation for semantic context, including its tail.
+// Sampling bounds the model input, but never decides whether to warn.
+function overview(units: Unit[]): string {
+  const count = Math.min(units.length, 14);
+  const selected = new Set<number>();
+  for (let i = 0; i < count; i += 1) {
+    selected.add(count === 1 ? 0 : Math.round(i * (units.length - 1) / (count - 1)));
+  }
+  return [...selected].map(index => {
+    const unit = units[index];
+    if (!unit) return "";
+    return `${unit.name}: ${unit.operations.slice(0, 3).join(", ") || "local computation"}; ${unit.detail.slice(0, 85)}`;
+  }).join(" | ");
+}
+
 function breakout(anchor: Unit, other: Unit, all: Unit[]): string {
   const members = all.filter(unit => unit === anchor || (
     anchor.localCalls.has(unit.name) && unit !== other && !other.localCalls.has(unit.name)
@@ -115,7 +130,7 @@ export async function moduleCohesion(
     if (!pairs.length) continue;
 
     const moduleVerdict = await score({
-      premise: `TypeScript module ${relative} contains these implemented operations: ${units.map(evidence).join(" | ").slice(0, 1400)}`,
+      premise: `TypeScript module ${relative} contains these implemented operations: ${overview(units)}`,
       same: "this module combines separate operational responsibilities that could be maintained as focused modules with distinct purposes",
       different: "these operations implement a single cohesive responsibility or deliberately coordinate one workflow"
     });

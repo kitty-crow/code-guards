@@ -141,3 +141,23 @@ test("CG206 inspects top-level script operations without requiring exported func
   assert.match(found[0]?.suggestion ?? "", /initialisation of digest/);
   assert.ok(seen.some(item => item.startsWith("TypeScript module")));
 });
+
+
+test("CG206 represents operations across the entire file rather than only the opening", async () => {
+  const helpers = Array.from({length: 26}, (_, i) =>
+    `export function dataStep${i}(value: string): string { return value.trim(); }`
+  );
+  const project = fixture({"src/pipeline.ts": [
+    ...helpers,
+    "export function deliverNotification(address: string): void { console.log(address); }"
+  ].join("\n")});
+  const premises: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    premises.push(question.premise);
+    return reject(question);
+  };
+  assert.deepEqual(await moduleCohesion(project, false, scorer), []);
+  const initial = premises.find(text => text.startsWith("TypeScript module")) ?? "";
+  assert.ok(initial.includes("dataStep0"));
+  assert.ok(initial.includes("deliverNotification"), "the module overview must include the end of a large file");
+});

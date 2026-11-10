@@ -114,7 +114,7 @@ test("README includes all emitted warning codes with descriptions", () => {
   const readme = readFileSync(path.resolve("README.md"), "utf8");
   const sourceFiles = [
     "src/guards/no-nested-if.ts", "src/guards/type-reuse.ts",
-    "src/guards/function-quality.ts", "src/guards/code-health.ts",
+    "src/guards/function-quality.ts", "src/guards/module-cohesion.ts", "src/guards/code-health.ts",
     "src/guards/cross-module.ts", "src/guards/documentation.ts",
     "src/guards/repo-hygiene.ts"
   ];
