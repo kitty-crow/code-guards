@@ -139,7 +139,7 @@ Release history belongs in `CHANGELOG.md` or a migration guide.
 | `CG408` | Source module lacking its own documentation page |
 | `CG409` | Module documentation too brief or missing public exports |
 | `CG410` | Ambiguous/vague prose endorsed by local zero-shot inference |
-| `CG411` | NLP-classified development handover or implementation-status narration in user documentation |
+| `CG411` | Sentence-level wording quality, implementation-history narration and development handover assessed with local NLP |
 | `CG412` | Broken relative Markdown link |
 | `CG413` | Documented completion claim conflicts with a source placeholder |
 
