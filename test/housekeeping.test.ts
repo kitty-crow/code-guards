@@ -257,3 +257,15 @@ test("routine CI excludes warning-showcase tests but full CI preserves them", ()
   assert.match(scripts["ci"] ?? "", /node --test dist\/test\/\*\.test\.js/);
   assert.match(scripts["ci:full"] ?? "", /dist\/test\/showcase\/\*\.test\.js/);
 });
+
+test("external scenario executes only after successful self CI and remains opt-in", () => {
+  const packageFile = JSON.parse(readFileSync(path.resolve("package.json"), "utf8")) as {scripts: Record<string, string>};
+  const scripts = packageFile.scripts;
+  assert.equal(scripts["ci:scenario:bun"], "bun run ci:bun && bun scripts/scenario-check.mjs");
+  assert.ok(!scripts["ci:bun"]?.includes("scenario-check"));
+  const scenario = readFileSync(path.resolve("scripts/scenario-check.mjs"), "utf8");
+  assert.match(scenario, /new Set\(guards\)/);
+  assert.match(scenario, /renderFindings\(findings/);
+  assert.match(scenario, /README introduction prioritises development history over usage/);
+  assert.match(scenario, /Development handover prose in README/);
+});

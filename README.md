@@ -14,7 +14,9 @@ bun run demo:strict:bun
 bun run demo:coverage:bun
 ```
 
-`ci:bun` type-checks, builds, runs core tests and scans Code Guards itself in strict mode. The warning-heavy showcase tests are optional: `bun run test:showcase:bun` runs them separately, while `bun run ci:full:bun` includes them alongside the normal checks. The demo uses intentionally bad TypeScript. The strict demo exits 1 by design. Use a Linux-native toolchain in WSL; Windows npm cannot run reliably from a WSL UNC working directory.
+`ci:bun` type-checks, builds, runs core tests and scans Code Guards itself in strict mode. The warning-heavy showcase tests are optional: `bun run test:showcase:bun` runs them separately, while `bun run ci:full:bun` includes them alongside the normal checks.
+
+To check the external regression scenario after a successful self-check, clone `kitty-crow/slopdetector` next to Code Guards and run `bun run ci:scenario:bun`. The command first completes `ci:bun`, then scans the external checkout with every guard and prints the full report. The scenario fails if the README introduction and development-handover diagnostics are absent. To use a different local checkout, set `CODE_GUARDS_SCENARIO_PATH=/absolute/path`. This is an opt-in integration check, not part of routine CI; no scenario-specific rules are added to the classifier. The demo uses intentionally bad TypeScript. The strict demo exits 1 by design. Use a Linux-native toolchain in WSL; Windows npm cannot run reliably from a WSL UNC working directory.
 
 ## Scan any local TypeScript project without installing Code Guards there
 

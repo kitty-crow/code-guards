@@ -39,7 +39,8 @@
     "test:all": "tsc -p tsconfig.build.json && node --test dist/test/*.test.js dist/test/showcase/*.test.js",
     "test:all:bun": "tsc -p tsconfig.build.json && bun test",
     "ci:full": "tsc --noEmit && tsc -p tsconfig.build.json && node --test dist/test/*.test.js dist/test/showcase/*.test.js && node dist/src/cli.js --strict",
-    "ci:full:bun": "tsc --noEmit && tsc -p tsconfig.build.json && bun test && bun dist/src/cli.js --strict"
+    "ci:full:bun": "tsc --noEmit && tsc -p tsconfig.build.json && bun test && bun dist/src/cli.js --strict",
+    "ci:scenario:bun": "bun run ci:bun && bun scripts/scenario-check.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.2",
