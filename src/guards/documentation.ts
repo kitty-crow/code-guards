@@ -282,7 +282,7 @@ async function checkStyle(file: string, paragraph: Paragraph, findings: Finding[
       code: "CG411", file, line: paragraph.line,
       title: "Formulaic or unnecessary wording in documentation",
       subject: sentence.slice(0, 115),
-      reason: `The local language model judged this sentence more like padded or mechanical explanation than useful technical documentation (${Math.round(verdict.sameConcept * 100)}% support versus ${Math.round(verdict.differentConcept * 100)}% opposing evidence). This is an editorial judgement, not a claim about who wrote it.`,
+      reason: `The local language model judged this sentence more like padded or mechanical explanation than useful technical documentation (${Math.round(verdict.sameConcept * 100)}% support versus ${Math.round(verdict.differentConcept * 100)}% opposing evidence).`,
       suggestion: "Avoid prompt-like wording in README and documentation. State relevant facts directly, remove redundant clarification and defensive assurances, and keep necessary technical detail."
     });
   }
