@@ -286,7 +286,7 @@ test("CG411 reviews individual sentences for formulaic cadence even within a pra
     "# Introduction",
     "",
     "The converter accepts plain text files and produces an index. The implementation is delivered as a distinct arrangement, for reasons associated with the team's preparation process."
-  ].join("\\n")});
+  ].join("\n")});
   const seen: string[] = [];
   const scorer: SemanticScorer = async question => {
     seen.push(question.premise);
@@ -305,8 +305,8 @@ test("CG411 reviews individual sentences for formulaic cadence even within a pra
 });
 
 test("CG411 editorial review applies to ordinary Markdown documentation, not only README", async () => {
-  const project = fixture({"README.md": "# Introduction\\n\\nThe program accepts JSON files and writes a validated report.",
-    "docs/guide.md": "# Guide\\n\\nThis description exists in the present arrangement solely to reflect the implementation decisions taken during delivery."});
+  const project = fixture({"README.md": "# Introduction\n\nThe program accepts JSON files and writes a validated report.",
+    "docs/guide.md": "# Guide\n\nThis description exists in the present arrangement solely to reflect the implementation decisions taken during delivery."});
   const scorer: SemanticScorer = async question => question.same.includes("formulaic or overexplained")
     ? {sameConcept: 0.93, differentConcept: 0.14}
     : reject(question);
@@ -321,7 +321,7 @@ test("CG411 editorial check requires semantic support and excludes fenced exampl
     "```text",
     "A deliberately unnatural passage about internal delivery decisions belongs inside this code example.",
     "```"
-  ].join("\\n")});
+  ].join("\n")});
   const premises: string[] = [];
   const scorer: SemanticScorer = async question => {
     premises.push(question.premise);

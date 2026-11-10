@@ -254,7 +254,7 @@ const styleQuestion = {
 } as const;
 
 function sentencesIn(paragraph: Paragraph): string[] {
-  return paragraph.text.split(/(?<=[.!?])\\s+(?=[`*_(\[]?[A-Z])/u).map(text => text.trim()).filter(Boolean);
+  return paragraph.text.split(/(?<=[.!?])\s+(?=[`*_(\[]?[A-Z])/u).map(text => text.trim()).filter(Boolean);
 }
 
 async function checkStyle(file: string, paragraph: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
@@ -262,7 +262,7 @@ async function checkStyle(file: string, paragraph: Paragraph, findings: Finding[
   for (const sentence of sentencesIn(paragraph)) {
     if (sentence.length < 55) continue;
     const verdict = await score({
-      premise: `Documentation paragraph: ${paragraph.text}\\nSentence to review: ${sentence}`,
+      premise: `Documentation paragraph: ${paragraph.text}\nSentence to review: ${sentence}`,
       same: styleQuestion.same,
       different: styleQuestion.different
     });
