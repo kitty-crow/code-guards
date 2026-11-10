@@ -10,7 +10,8 @@
   },
   "include": [
     "src/**/*.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "examples/coverage/*.mts"
   ],
   "exclude": []
 }

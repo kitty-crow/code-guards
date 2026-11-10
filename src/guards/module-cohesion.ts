@@ -117,7 +117,7 @@ export async function moduleCohesion(
 
     // A second, concrete judgement must identify separable operations.
     // A large, cohesive module receives no warning merely for its size.
-    for (const {left, right} of pairs.slice(0, 24)) {
+    for (const {left, right} of pairs.sort((a, b) => Math.abs(b.right.node.pos - b.left.node.pos) - Math.abs(a.right.node.pos - a.left.node.pos)).slice(0, 24)) {
       const verdict = await score({
         premise: `Two implementations in one TypeScript module. First: ${evidence(left)}. Second: ${evidence(right)}.`,
         same: "these implementations have independent responsibilities and should be placed in distinct focused modules",
