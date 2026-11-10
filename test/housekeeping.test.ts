@@ -161,7 +161,7 @@ test("CG411 uses semantic evidence, not README keywords or repository names", as
   assert.match(findings.find(item => item.code === "CG411")?.suggestion ?? "", /current behaviour/);
 });
 
-test("CG411 ignores fenced code and non-README module reference pages", async () => {
+test("CG411 excludes fenced examples and evaluates module prose without false positives", async () => {
   const project = fixture({
     "README.md": "# Usage\n\nRun npm test to execute the local tests.\n\n`\`\`text\nThis paragraph reports the author's coding session.\n`\`\`",
     "docs/modules/module.md": "# Module\n\nThe module scans TypeScript and reports line-numbered results."
@@ -169,12 +169,14 @@ test("CG411 ignores fenced code and non-README module reference pages", async ()
   const premises: string[] = [];
   const scorer: SemanticScorer = async question => {
     premises.push(question.premise);
-    return {sameConcept: 0.92, differentConcept: 0.2};
+    return question.premise.includes("The module scans TypeScript")
+      ? {sameConcept: 0.04, differentConcept: 0.96}
+      : {sameConcept: 0.92, differentConcept: 0.2};
   };
   const findings = await documentation(project, scorer);
   assert.ok(premises.some(text => text.includes("Run npm test")));
   assert.ok(premises.every(text => !text.includes("coding session")));
-  assert.ok(premises.every(text => !text.includes("module scans TypeScript")));
+  assert.ok(premises.some(text => text.includes("The module scans TypeScript")));
   assert.equal(findings.filter(item => item.code === "CG411").length, 1);
   assert.equal(findings.find(item => item.code === "CG411")?.location.file, "README.md");
 });
@@ -290,7 +292,8 @@ test("CG411 reviews individual sentences for formulaic cadence even within a pra
   const seen: string[] = [];
   const scorer: SemanticScorer = async question => {
     seen.push(question.premise);
-    if (question.same.includes("formulaic or overexplained") && question.premise.includes("distinct arrangement")) {
+    const sentence = question.premise.split("Sentence to review: ")[1] ?? "";
+    if (question.same.includes("formulaic or overexplained") && sentence.includes("distinct arrangement")) {
       return {sameConcept: 0.91, differentConcept: 0.12};
     }
     return reject(question);
