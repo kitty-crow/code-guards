@@ -8,7 +8,15 @@
 - `CG317` finds names with filler words or stacked role suffixes, such as `CustomerDataManagerServiceHandlerImplementation`. This is independent of length and can overlap `CG316`.
 - `CG318` finds overdescriptive `.ts`/`.tsx`/`.mts`/`.cts` file or directory segments. Each directory is reported once, even when many files share its path.
 
-The suggested names are illustrative abbreviations, not safe automatic replacements. For public declarations or published file paths, check imports, callers and compatibility before renaming. Generated and vendor sources are excluded. Tests are excluded by default, unless `--include-tests` is passed. The guard inspects declarations, not every reference, so one bad variable name does not create another warning at every use.
+## Scope and suggested changes
+
+| Area | Behaviour |
+| --- | --- |
+| Suggestions | Abbreviations to review before changing source |
+| Public APIs | Check callers, imports and compatibility before renaming |
+| Exclusions | Generated and vendor sources |
+| Tests | Excluded unless `--include-tests` is passed |
+| Locations | Reports declarations without repeating warnings at references |
 
 ## Usage
 

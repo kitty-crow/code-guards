@@ -10,4 +10,15 @@ Source: [`src/semantic.ts`](../../src/semantic.ts)
 
 ## Behaviour and boundaries
 
-The Transformers.js pipeline runs on CPU, lazily downloading and caching model weights. `CODE_GUARDS_OFFLINE=1` disables remote retrieval, and `CODE_GUARDS_MODEL_CACHE` sets an alternate model cache. Excessively long hypothesis labels produce an explicit error; the tool does not silently truncate them or substitute a heuristic score. The tokenizer splitting behaviour is regression-tested with premises of 695 tokens; real on-device ONNX execution remains an environment-specific integration check. A model score cannot prove that a proposed refactor preserves behaviour.
+The Transformers.js pipeline runs locally on CPU. Model weights are downloaded on first use and cached.
+
+| Option or condition | Behaviour |
+| --- | --- |
+| `CODE_GUARDS_OFFLINE=1` | Disable remote model retrieval |
+| `CODE_GUARDS_MODEL_CACHE` | Set the model cache location |
+| Hypothesis beyond token budget | Return an error |
+| Premise exceeding context length | Split into overlapping token windows |
+| Unit tests | Cover windowing with 695-token premises |
+| Real inference | Optional integration check on the executing machine |
+
+Model scores express semantic support; they do not prove that a refactor preserves behaviour.

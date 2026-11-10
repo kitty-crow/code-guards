@@ -22,4 +22,11 @@ bun dist/src/cli.js --project ../another-project/tsconfig.json
 bun dist/src/cli.js no-nested-if --path ../another-project/src/main.ts
 ```
 
-`--path` and `--project` are alternative target selectors, not combinable. `--path` requires a pre-existing path; it cannot scan a remote Git URL or create a temporary clone.
+## Target selectors
+
+| Selector | Use |
+| --- | --- |
+| `--path` | Existing local file or directory |
+| `--project` | TypeScript configuration file |
+
+Choose one selector per command. Remote Git URLs and automatic cloning are unsupported.

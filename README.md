@@ -1,6 +1,14 @@
 # Code Guards
 
-Local TypeScript quality checks for builds, tests and agent-generated changes. The CLI reports the offending line, why it matters and a suggested correction. With no `--strict`, findings are warnings and the command exits 0; `--strict` exits 1 if a warning is found. Code Guards does not change the `tsc` compiler, install itself into a scanned repository or require GitHub Actions.
+Code Guards checks local TypeScript projects for code quality and documentation problems. Findings include source locations and suggested corrections.
+
+| CLI mode | Result |
+| --- | --- |
+| Default | Warnings, exit 0 |
+| `--strict` | Exit 1 if any warning is reported |
+| Invalid options or target | Exit 2 |
+
+The scan does not modify the target project or change TypeScript's compiler behaviour.
 
 ## Get started
 
@@ -31,7 +39,19 @@ bun run guards:bun no-nested-if --path ../tracker-viewer/src/main.ts
 
 The existing `--project ../tracker-viewer/tsconfig.json` flag remains available for explicit TypeScript configurations. `--project` and `--path` cannot be used together. From any working directory you can instead call `bun /absolute/path/to/code-guards/dist/src/cli.js --path /absolute/path/to/project` after building the CLI. The model weights, if needed, are cached where Code Guards runs, not installed into the target project.
 
-All 21 guards are enabled unless selected individually or disabled by name. For example, `bun run guards:bun --path ../tracker-viewer --disable documentation`. `--strict` fails on a warning; `--format json|github|text` chooses output, and `--colour auto|always|never` controls terminal colour. `--include-tests` includes test files in the optional type/function analyses. `--offline` requires a cached model. An invalid or empty path exits 2 with an explanation.
+All 21 guards run by default. Pass a guard name to select it, or use `--disable` to exclude it:
+
+```sh
+bun run guards:bun --path ../tracker-viewer --disable documentation
+```
+
+| Option | Behaviour |
+| --- | --- |
+| `--strict` | Fail on warnings |
+| `--format json\|github\|text` | Select report format |
+| `--colour auto\|always\|never` | Set terminal colour |
+| `--include-tests` | Include test files in type/function analysis |
+| `--offline` | Use cached model weights only |
 
 ## Reproducible coverage demonstrations
 
@@ -41,9 +61,16 @@ All 21 guards are enabled unless selected individually or disabled by name. For 
 
 The `enterprise-looking-naming` guard checks functions, classes, methods, types, variables, parameters, members, aliases, filenames and directories. It identifies very long descriptive names and stacked generic suffixes. For instance, a function called `veryLongNamesThatAreVerySpecificAndMightNeedShortening` can be shortened to an abbreviation such as `lngNms` if that is clear in context. It never applies renames automatically.
 
-The `review-practices` guard checks maintainability issues in code and tests, including narrated comments, unavailable APIs, convention drift, repeated logic, redundant catches, weak assertions and unnecessary abstractions. These are **quality findings**, not an assessment of who wrote the code. Some findings are conservative suggestions because project conventions or public contracts may justify exceptions.
+The `review-practices` guard checks code and test maintainability:
 
-`CG404` identifies release-note phrasing in user documentation, such as `This library now performs X rather than Y`. Describe the current feature and its real invocation instead; keep the historical comparison in `CHANGELOG.md` or a migration guide. This is distinct from `CG405`, which catches literal LLM instructions. The check excludes changelog/migration sections.
+- Comments that narrate individual statements
+- Unresolved APIs and inconsistent conventions
+- Repeated logic, redundant catches and weak assertions
+- Unnecessary abstractions
+
+`CG404` flags development history presented as current functionality. `CG405` flags instructions addressed to AI agents instead of software users.
+
+Release history belongs in `CHANGELOG.md` or a migration guide.
 
 ## Warning reference
 
@@ -131,7 +158,14 @@ For implementation detail and each module's exports, consult [docs/index.md](doc
 
 The `type-reuse`, `function-quality` and `documentation` guards use `Xenova/mobilebert-uncased-mnli` through `@huggingface/transformers` for *shortlisted* ambiguous comparisons. Model inference is local on CPU and downloads weights on first use unless `--offline` is set. Semantic warnings express a likelihood, **not proof** of equivalence, an unsafe change, or factual inaccuracy. TypeScript AST checks can verify narrower issues such as duplicate structures, missing exports, undefined package scripts and broken local links. Model loading failures exit 2 rather than silently substituting a heuristic decision.
 
-To inspect the output on deliberately problematic source, run `bun run demo:bun` and `bun run demo:housekeeping:bun`. To test actual model judgement on ambiguity, run `bun run demo:semantic:bun`. Unit tests inject controlled scorer responses for repeatable tests; a passing mocked unit test is not evidence that actual MNLI inference has succeeded on your machine.
+The demonstration commands use different evidence sources:
+
+| Command | Evidence |
+| --- | --- |
+| `bun run demo:bun` | Deliberately faulty TypeScript |
+| `bun run demo:housekeeping:bun` | Housekeeping violations |
+| `bun run demo:semantic:bun` | Real MobileBERT inference |
+| `bun run test:bun` | Unit tests, including injected semantic scores |
 
 ## Development
 
@@ -141,6 +175,8 @@ bun run guards:strict:bun
 bun run test:bun
 ```
 
-Code Guards scans itself in local strict CI. New guards should include failing and passing fixtures plus a strict-mode exit-code test. No GitHub-hosted CI is configured. This private repository is not published to npm; if dependency integration is desired, install it over HTTPS from the Git repository instead of copying source files.
+`bun run ci:bun` includes the strict Code Guards self-scan. New guard tests should cover passing and failing cases plus the strict-mode exit code.
+
+Package status: private repository, not published to npm. GitHub-hosted CI is not configured.
 
 MIT licence.
