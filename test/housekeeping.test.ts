@@ -202,16 +202,21 @@ test("CG411 detects an implementation-history-heavy README introduction through 
     "",
     "The utility compares repository revisions and produces a summary of changed files."
   ].join("\n")});
-  const premises: string[] = [];
+  const introductionPremises: string[] = [];
   const scorer: SemanticScorer = async question => {
-    premises.push(question.premise);
-    return question.premise.startsWith("Opening of a software README:") ? endorse(question) : reject(question);
+    if (!question.premise.startsWith("README introduction paragraph:")) return reject(question);
+    introductionPremises.push(question.premise);
+    return introductionPremises.length <= 2 ? endorse(question) : reject(question);
   };
   const findings = await documentation(project, scorer);
-  assert.ok(premises.some(text => text.startsWith("Opening of a software README:")));
-  assert.ok(premises.some(text => text.includes("utility compares repository revisions")));
-  assert.equal(findings.filter(item => item.code === "CG411").length, 1);
-  assert.match(findings.find(item => item.code === "CG411")?.message ?? "", /introduction/);
+  assert.equal(introductionPremises.length, 3, "each introduction paragraph must be scored independently");
+  assert.ok(introductionPremises[0]?.includes("rewritten from an earlier implementation"));
+  assert.ok(introductionPremises[1]?.includes("new version was assembled"));
+  assert.ok(introductionPremises[2]?.includes("utility compares repository revisions"));
+  const introductionFindings = findings.filter(item => item.code === "CG411");
+  assert.equal(introductionFindings.length, 1);
+  assert.equal(introductionFindings[0]?.location.line, 3);
+  assert.match(introductionFindings[0]?.reason ?? "", /lines 3, 5/);
 });
 
 test("CG411 does not flag a functional README introduction when NLP opposes the quality concern", async () => {
