@@ -79,6 +79,26 @@ function checkIf(stmt: ts.IfStatement, report: Report): void {
 const registrationNames = new Set(["test", "it", "describe", "suite"]);
 const registrationModifiers = new Set(["only", "skip", "todo", "concurrent"]);
 
+function registrationImport(declaration: ts.Declaration, members: readonly string[]): ts.ImportDeclaration | undefined {
+  if (ts.isImportSpecifier(declaration) &&
+      registrationNames.has(declaration.propertyName?.text ?? declaration.name.text) &&
+      members.every(member => registrationModifiers.has(member))) {
+    const source = declaration.parent.parent.parent;
+    return ts.isImportDeclaration(source) ? source : undefined;
+  }
+  if (ts.isImportClause(declaration) && members.every(member => registrationModifiers.has(member))) {
+    const source = declaration.parent;
+    return ts.isImportDeclaration(source) ? source : undefined;
+  }
+  if (ts.isNamespaceImport(declaration) &&
+      registrationNames.has(members[0] ?? "") &&
+      members.slice(1).every(member => registrationModifiers.has(member))) {
+    const source = declaration.parent.parent;
+    return ts.isImportDeclaration(source) ? source : undefined;
+  }
+  return undefined;
+}
+
 /**
  * Test-runner registration Promises are handled by the runner itself.
  * Resolve the imported binding so an unrelated local test() or a shadowed
@@ -92,24 +112,10 @@ function isRunnerRegistration(call: ts.CallExpression, project: Project): boolea
     callee = callee.expression;
   }
   if (!ts.isIdentifier(callee)) return false;
-
   const symbol = project.checker.getSymbolAtLocation(callee);
   for (const declaration of symbol?.declarations ?? []) {
-    let source: ts.Node;
-    if (ts.isImportSpecifier(declaration)) {
-      const exported = declaration.propertyName?.text ?? declaration.name.text;
-      if (!registrationNames.has(exported)) continue;
-      source = declaration.parent.parent.parent;
-    } else if (ts.isImportClause(declaration)) {
-      source = declaration.parent;
-    } else if (ts.isNamespaceImport(declaration)) {
-      if (!registrationNames.has(members.shift() ?? "")) continue;
-      source = declaration.parent.parent;
-    } else {
-      continue;
-    }
-    if (!members.every(member => registrationModifiers.has(member))) continue;
-    if (!ts.isImportDeclaration(source) || !ts.isStringLiteral(source.moduleSpecifier)) continue;
+    const source = registrationImport(declaration, members);
+    if (!source || !ts.isStringLiteral(source.moduleSpecifier)) continue;
     if (source.moduleSpecifier.text === "node:test" || source.moduleSpecifier.text === "bun:test") return true;
   }
   return false;
