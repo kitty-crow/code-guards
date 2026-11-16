@@ -1,0 +1,19 @@
+name: Documentation scan
+description: Run Code Guards' documentation guard against a checked-out repository
+inputs:
+  repository-path:
+    description: Absolute path of the repository to inspect
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Run documentation-only guard
+      shell: bash
+      env:
+        TARGET_REPOSITORY: ${{ inputs.repository-path }}
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_ACTION_PATH/../../.."
+        bun install
+        bun run guards:strict:bun documentation --path "$TARGET_REPOSITORY" --format github
