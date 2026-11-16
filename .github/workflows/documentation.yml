@@ -1,0 +1,31 @@
+name: Documentation Checks
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out target repository
+        uses: actions/checkout@v4
+        with:
+          path: repository
+      - name: Check out Code Guards
+        uses: actions/checkout@v4
+        with:
+          repository: kitty-crow/code-guards
+          ref: main
+          path: code-guards
+          token: ${{ secrets.CODE_GUARDS_TOKEN || github.token }}
+      - uses: oven-sh/setup-bun@v2
+      - name: Install Code Guards dependencies
+        working-directory: code-guards
+        run: bun install
+      - name: Check documentation
+        working-directory: code-guards
+        run: bun run guards:strict:bun documentation --path ../repository --format github
