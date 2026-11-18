@@ -182,6 +182,23 @@ function checkModuleCoverage(project: Project, files: Set<string>, findings: Fin
   }
 }
 
+/** Resolve the closest enclosing package, including independently vendored packages. */
+function packageScripts(root: string, file: string): Record<string, string> {
+  let directory = path.dirname(file);
+  for (;;) {
+    const manifest = path.join(directory, "package.json");
+    const content = read(root, manifest);
+    if (content !== undefined) return parseScripts(content, manifest);
+    if (directory === ".") return {};
+    directory = path.dirname(directory);
+  }
+}
+
+function parseScripts(content: string, manifest: string): Record<string, string> {
+  try { return (JSON.parse(content) as {scripts?: Record<string, string>}).scripts ?? {}; }
+  catch { throw new Error(`${manifest} is invalid JSON; cannot verify documented commands`); }
+}
+
 function checkCommands(file: string, content: string, scripts: Record<string, string>, findings: Finding[]): void {
   for (const [i, line] of content.split(/\r?\n/).entries()) {
     for (const match of line.matchAll(/\b(?:bun|npm|pnpm|yarn)\s+run\s+([\w:.-]+)/g)) {
@@ -370,12 +387,6 @@ export async function documentation(project: Project, score: SemanticScorer = ze
   const root = project.root;
   const fileNames = markdownFiles(root);
   const files = new Set(fileNames);
-  const packageText = read(root, "package.json");
-  let scripts: Record<string, string> = {};
-  if (packageText) {
-    try { scripts = (JSON.parse(packageText) as {scripts?: Record<string, string>}).scripts ?? {}; }
-    catch { throw new Error("package.json is invalid JSON; cannot verify documented commands"); }
-  }
   if (!files.has("README.md")) issue(findings, {code: "CG400", file: "README.md", line: 1, title: "Repository lacks a README", subject: "README.md",
     reason: "The repository has no top-level entry point explaining how to install, run or maintain it.",
     suggestion: "Add a short README with purpose, prerequisites, working installation commands, example output, limitations and a link to docs/index.md."});
@@ -389,7 +400,7 @@ export async function documentation(project: Project, score: SemanticScorer = ze
   for (const file of fileNames) {
     const content = read(root, file);
     if (!content) continue;
-    checkCommands(file, content, scripts, findings);
+    checkCommands(file, content, packageScripts(root, file), findings);
     checkLinks(root, file, content, findings);
     await checkProse(file, content, findings, score);
     if (path.basename(file).toLowerCase() !== "readme.md" || content.length < 180) continue;

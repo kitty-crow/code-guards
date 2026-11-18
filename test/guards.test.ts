@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, test } from "node:test";
+import { documentation } from "../src/guards/documentation.ts";
 import { noNestedIf } from "../src/guards/no-nested-if.ts";
 import { typeReuse } from "../src/guards/type-reuse.ts";
 import { functionQuality } from "../src/guards/function-quality.ts";
@@ -174,4 +175,20 @@ test("complex functions with documented invariants are not reported as unexplain
   const findings = await functionQuality(sample, false, endorse);
   const documented = new Set(["suggestion", "explain", "inspectFunction", "checkNarrative", "documentation"]);
   assert.deepEqual(findings.filter(item => item.code === "CG202" && documented.has(item.subject ?? "")), []);
+});
+
+test("documentation commands use the nearest package manifest", async () => {
+  const sample = project({
+    "one.ts": "export const valid = 1;",
+    "package.json": JSON.stringify({ scripts: { build: "tsc" } }),
+    "README.md": "# Parent\n\n```sh\nnpm run build\n```\n",
+    "vendor/tool/package.json": JSON.stringify({ scripts: { bootstrap: "bun src/cli.ts" } }),
+    "vendor/tool/docs/use.md": "# Tool\n\n```sh\nnpm run bootstrap\nnpm run build\nnpm run missing\n```\n"
+  });
+  const findings = await documentation(sample, reject);
+  const commands = findings.filter(finding => finding.code === "CG406");
+  assert.deepEqual(commands.map(finding => [finding.location.file, finding.subject]), [
+    ["vendor/tool/docs/use.md", "npm run build"],
+    ["vendor/tool/docs/use.md", "npm run missing"]
+  ]);
 });
