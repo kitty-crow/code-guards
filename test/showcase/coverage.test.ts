@@ -10,16 +10,16 @@ function invoke(args: string[]) {
   return spawnSync(process.execPath, [script, ...args], {encoding: "utf8"});
 }
 
-test("the coverage showcase produces an actionable finding for all 54 active warning codes", async () => {
+test("the coverage showcase produces an actionable finding for all 55 active diagnostic codes", async () => {
   const execution = invoke(["--json"]);
   assert.equal(execution.status, 0, execution.stderr);
   const {examples, supportedCodes, missing} = await collect();
   const result = {supportedCodes, missing, findings: examples.map(item => item.finding)};
   assert.equal(execution.stdout.trim(), JSON.stringify(result, null, 2));
-  assert.equal(result.supportedCodes.length, 54);
+  assert.equal(result.supportedCodes.length, 55);
   assert.deepEqual(result.missing, []);
   // New rules need committed source fixtures, not just passing isolated unit tests.
-  for (const code of ["CG206", "CG316", "CG317", "CG318", "CG404", "CG411"]) {
+  for (const code of ["CG206", "CG316", "CG317", "CG318", "CG404", "CG411", "CG327"]) {
     assert.ok(result.findings.some(item => item.code === code), `missing committed showcase fixture for ${code}`);
   }
   assert.deepEqual(result.findings.map(item=>item.code), result.supportedCodes);

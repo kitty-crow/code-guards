@@ -9,7 +9,7 @@ import {
   crossModule, documentation, repoHygiene, enterpriseLookingNaming, reviewPractices
 } from "../../src/guards/index.ts";
 import { renderFindings } from "../../src/diagnostics.ts";
-import type { Finding } from "../../src/model.ts";
+import { failed, resolveExpectations, type Finding } from "../../src/model.ts";
 import type { SemanticScorer } from "../../src/semantic.ts";
 
 type Example = {finding: Finding; root: string};
@@ -36,8 +36,10 @@ export async function collect(): Promise<{examples: Example[]; supportedCodes: s
     [code.root, repoHygiene(code.root)],
     [docs.root, await documentation(docs, simulatedScore)]
   ];
+  const merged = groups.filter(([projectRoot]) => projectRoot === code.root).flatMap(([, findings]) => findings);
+  const checked = resolveExpectations(code.root, code.files, merged);
   const found = new Map<string, Example>();
-  for (const [projectRoot, findings] of groups) {
+  for (const [projectRoot, findings] of [[code.root, checked], ...groups.filter(([projectRoot]) => projectRoot !== code.root)] as [string, Finding[]][]) {
     for (const finding of findings) {
       if (!found.has(finding.code)) found.set(finding.code, {finding, root: projectRoot});
     }
@@ -62,7 +64,7 @@ async function showCoverage(): Promise<void> {
       supportedCodes: result.supportedCodes, missing: result.missing,
       findings: shown.map(item => item.finding)
     }, null, 2));
-    process.exitCode = result.missing.length ? 2 : strict && shown.length ? 1 : 0;
+    process.exitCode = result.missing.length ? 2 : failed(shown.map(item => item.finding), strict) ? 1 : 0;
     return;
   }
 
@@ -72,7 +74,7 @@ async function showCoverage(): Promise<void> {
     console.log(renderFindings([item.finding], {root: item.root, format: "text", colour: "auto"}));
   }
   if (result.missing.length) console.error(`Showcase missing codes: ${result.missing.join(", ")}`);
-  process.exitCode = result.missing.length ? 2 : strict && shown.length ? 1 : 0;
+  process.exitCode = result.missing.length ? 2 : failed(shown.map(item => item.finding), strict) ? 1 : 0;
 }
 
 const entry = process.argv[1] ?? "";
