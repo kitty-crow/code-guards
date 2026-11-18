@@ -7,3 +7,5 @@ Source: [`src/diagnostics.ts`](../../src/diagnostics.ts)
 ## Behaviour and boundaries
 
 `NO_COLOR` disables colour. JSON output is uncoloured and retains structured fields; missing source files do not prevent a warning from being printed.
+
+Errors use a red terminal label and GitHub error annotations. The summary includes an error count when nonzero.

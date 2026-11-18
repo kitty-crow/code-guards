@@ -91,3 +91,20 @@ test("strict CLI fails on CG305 while advisory mode remains non-blocking", async
     assert.equal(await run(["type-assertions", "--path", file, "--strict"]), 0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("expectation directives suppress findings and enforce missing diagnostics in both modes", async () => {
+  const marker = "//" + "@cg-expect-";
+  const root = mkdtempSync(join(tmpdir(), "guard-expect-"));
+  try {
+    const file = join(root, "input.ts");
+    const scan = (strict: boolean): Promise<number> => run(["type-assertions", "--path", file, ...(strict ? ["--strict"] : []), "--format", "json"]);
+    for (const kind of ["error", "warning"]) {
+      writeFileSync(file, marker + kind + "\nconst value: any = 1;\n");
+      assert.equal(await scan(false), 0);
+      assert.equal(await scan(true), 0);
+      writeFileSync(file, marker + kind + "\nconst value: number = 1;\n");
+      assert.equal(await scan(false), kind === "error" ? 1 : 0);
+      assert.equal(await scan(true), 1);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

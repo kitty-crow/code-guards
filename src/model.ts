@@ -12,7 +12,7 @@ export const guards = [
   "enterprise-looking-naming", "review-practices"
 ] as const;
 export type GuardName = typeof guards[number];
-export type Severity = "warning" | "info";
+export type Severity = "error" | "warning" | "info";
 export type Location = { file: string; line: number; column: number };
 export type Finding = {
   guard: GuardName;
@@ -61,4 +61,56 @@ export function withoutIgnored(root: string, findings: Finding[]): Finding[] {
     cache.set(file, ignored);
     return !ignored.has(line);
   });
+}
+
+type Expectation = { location: Location; severity: Severity; subject: string };
+
+// Expectations are resolved once after all selected guards have emitted their
+// findings. Evaluating each guard separately would produce false missing reports.
+function expectations(root: string, files: readonly ts.SourceFile[]): Map<string, Expectation> {
+  const pending = new Map<string, Expectation>();
+  for (const file of files) {
+    const name = path.relative(root, file.fileName).split(path.sep).join("/");
+    for (const [index, line] of file.text.split(/\r\n|\n|\r/).entries()) {
+      const match = /^\s*\/\/@cg-expect-(error|warning)\s*$/.exec(line);
+      if (!match) continue;
+      const severity = match[1] === "error" ? "error" : "warning";
+      pending.set(name + ":" + (index + 2), {
+        location: {file: name, line: index + 1, column: line.indexOf("//") + 1},
+        severity, subject: line.trim()
+      });
+    }
+  }
+  return pending;
+}
+
+function missing(item: Expectation): Finding {
+  return {
+    guard: "project-conventions", code: "CG327", severity: item.severity,
+    message: "Expected Code Guards finding did not occur",
+    location: item.location, subject: item.subject, span: item.subject.length,
+    reason: "The next line produced no warning or error from the selected guards.",
+    suggestion: "Remove the obsolete expectation or restore the intended checked contract."
+  };
+}
+
+/** Resolve next-line expectations against the combined findings from the selected guards. */
+export function resolveExpectations(root: string, files: readonly ts.SourceFile[], findings: Finding[]): Finding[] {
+  const pending = expectations(root, files);
+  const matched = new Set<string>();
+  const remaining = findings.filter(item => {
+    const key = item.location.file + ":" + item.location.line;
+    if (!pending.has(key) || item.severity === "info") return true;
+    matched.add(key);
+    return false;
+  });
+  for (const [key, item] of pending) {
+    if (!matched.has(key)) remaining.push(missing(item));
+  }
+  return remaining;
+}
+
+/** Errors fail every scan; warnings fail only strict scans. */
+export function failed(findings: Finding[], strict: boolean): boolean {
+  return findings.some(item => item.severity === "error" || (strict && item.severity === "warning"));
 }

@@ -3,7 +3,7 @@ import {
   noNestedIf, typeReuse, functionQuality, moduleCohesion, codeHealth, crossModule,
   documentation, repoHygiene, enterpriseLookingNaming, reviewPractices
 } from "./guards/index.ts";
-import type { Finding, GuardName } from "./model.ts";
+import { resolveExpectations, type Finding, type GuardName } from "./model.ts";
 
 export type AnalysisOptions = { enabled: Set<GuardName>; project: string; includeTests: boolean };
 export type Analysis = { findings: Finding[]; root: string };
@@ -22,5 +22,5 @@ export async function analyse(config: AnalysisOptions): Promise<Analysis> {
     ...(config.enabled.has("enterprise-looking-naming") ? enterpriseLookingNaming(project, config.includeTests) : []),
     ...(config.enabled.has("review-practices") ? reviewPractices(project, config.includeTests) : [])
   ];
-  return { findings, root: project.root };
+  return { findings: resolveExpectations(project.root, project.files, findings), root: project.root };
 }

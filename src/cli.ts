@@ -2,7 +2,7 @@
 import { analyse } from "./engine.ts";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { guards, type GuardName } from "./model.ts";
+import { failed, guards, type GuardName } from "./model.ts";
 import { renderFindings, type Format, type ColourMode } from "./diagnostics.ts";
 
 type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean };
@@ -80,7 +80,7 @@ export async function run(argv: string[]): Promise<number> {
     if (config.offline) process.env.CODE_GUARDS_OFFLINE = "1";
     const { findings, root } = await analyse(config);
     console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
-    return config.strict && findings.some(f => f.severity === "warning") ? 1 : 0;
+    return failed(findings, config.strict) ? 1 : 0;
   } catch (error) {
     if (error == null) {
       console.error(error === null ? "null" : "undefined");

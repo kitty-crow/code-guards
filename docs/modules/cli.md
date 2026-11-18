@@ -2,7 +2,7 @@
 
 Source: [`src/cli.ts`](../../src/cli.ts)
 
-`options` parses guard selection, `--disable`, `--strict`, external `--path`, `--project`, output formatting and offline mode. `run` invokes the analysis engine and renders findings. It exits 0 on advisory scans, 1 for warnings with `--strict`, and 2 on invalid targets or model-loading errors.
+`options` parses guard selection, `--disable`, `--strict`, external `--path`, `--project`, output formatting and offline mode. `run` invokes the analysis engine and renders findings. It exits 1 for errors in either mode or warnings in strict mode, 0 otherwise, and 2 for invalid targets or model-loading errors.
 
 ## Scan another project without installing Code Guards there
 

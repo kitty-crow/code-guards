@@ -7,3 +7,5 @@ Source: [`src/engine.ts`](../../src/engine.ts)
 ## Behaviour and boundaries
 
 Individual guards remain independent. Semantic checks only load the model when a shortlisted comparison requires it.
+
+The engine resolves line expectations against the complete selected guard output, including files with no findings.

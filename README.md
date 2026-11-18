@@ -4,8 +4,8 @@ Code Guards checks local TypeScript projects for code quality and documentation 
 
 | CLI mode | Result |
 | --- | --- |
-| Default | Warnings, exit 0 |
-| `--strict` | Exit 1 if any warning is reported |
+| Default | Exit 1 for errors, exit 0 for warnings alone |
+| `--strict` | Exit 1 for errors or warnings |
 | Invalid options or target | Exit 2 |
 
 The scan does not modify the target project or change TypeScript's compiler behaviour. CG305 reports non-deterministic types in advisory mode and rejects them in strict mode when the type-assertions guard is enabled.
@@ -55,7 +55,13 @@ bun run guards:bun --path ../tracker-viewer --disable documentation
 
 ## Line-level exceptions
 
-`//@cg-ignore` skips warnings on the next physical line. Strict mode counts the remaining warnings. Blank lines count; TypeScript compiler errors are unaffected.
+| Directive | If the next line has a finding | If no finding occurs |
+| --- | --- | --- |
+| `//@cg-ignore` | Suppress | No diagnostic |
+| `//@cg-expect-error` | Suppress | CG327 error, exit 1 |
+| `//@cg-expect-warning` | Suppress | CG327 warning, exit 1 only with strict mode |
+
+Expectations use warnings or errors from the selected guards in either mode. Blank lines count. TypeScript compiler errors are unaffected.
 
 ```ts
 // Fixed external ABI: six scalar inputs and a memory handle.
@@ -136,6 +142,7 @@ Release history belongs in `CHANGELOG.md` or a migration guide.
 | `CG324` | Tautological test assertions such as `assert.ok(true)` or `expect(1).toBe(1)` |
 | `CG325` | Stateless class shells with one trivial method and no instance contract |
 | `CG326` | Multiple date-formatting mechanisms in one module requiring consistency review |
+| `CG327` | Expected next-line finding did not occur |
 
 ### README and documentation
 

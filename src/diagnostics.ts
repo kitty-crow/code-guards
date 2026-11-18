@@ -9,6 +9,7 @@ export type ReportOptions = OutputOptions | (OutputOptions & { isTTY: boolean })
 
 const ansi = {
   yellow: "\u001b[33m",
+  red: "\u001b[31m",
   bold: "\u001b[1m",
   cyan: "\u001b[36m",
   dim: "\u001b[2m",
@@ -102,7 +103,8 @@ function plainReport(findings: Finding[], config: ReportOptions): string {
     const similarity = "similarity" in finding ? finding.similarity ?? null : null;
     const confidence = similarity === null ? "" : `  ·  ${Math.round(similarity * 100)}% match`;
     result.push("");
-    result.push(`  ${paint("⚠ WARNING", "yellow", colour)}  ${paint(finding.code, "bold", colour)}  ${finding.message}${confidence}`);
+    const severity = finding.severity === "error" ? paint("✖ ERROR", "red", colour) : finding.severity === "warning" ? paint("⚠ WARNING", "yellow", colour) : paint("INFO", "dim", colour);
+    result.push(`  ${severity}  ${paint(finding.code, "bold", colour)}  ${finding.message}${confidence}`);
     result.push(`    ${paint(`${file}:${line}:${column}`, "cyan", colour)}  ${paint(`[${finding.guard}]`, "dim", colour)}`);
     result.push("");
     const span = "span" in finding ? finding.span ?? 1 : 1;
@@ -120,9 +122,11 @@ function plainReport(findings: Finding[], config: ReportOptions): string {
     if (index < findings.length - 1) result.push(paint("  " + "─".repeat(68), "dim", colour));
   }
   const count = findings.filter(finding => finding.severity === "warning").length;
-  const summary = `${findings.length} finding(s): ${count} warning(s).`;
+  const errors = findings.filter(finding => finding.severity === "error").length;
+  const suffix = errors ? `, ${errors} error(s)` : "";
+  const summary = `${findings.length} finding(s): ${count} warning(s)${suffix}.`;
   result.push("");
-  result.push(`  ${count ? paint(summary, "yellow", colour) : summary}`);
+  result.push(`  ${errors ? paint(summary, "red", colour) : count ? paint(summary, "yellow", colour) : summary}`);
   result.push("");
   return result.join("\n");
 }
@@ -133,7 +137,7 @@ export function renderFindings(findings: Finding[], config: ReportOptions): stri
   return findings.map(finding => {
     const { file, line, column } = finding.location;
     const value = [finding.message, finding.reason, finding.suggestion].filter(Boolean).join(" | ");
-    const level = finding.severity === "warning" ? "warning" : "notice";
+    const level = finding.severity === "info" ? "notice" : finding.severity;
     return `::${level} file=${escapeAnnotation(file)},line=${line},col=${column},title=${escapeAnnotation(finding.code)}::${escapeAnnotation(value)}`;
   }).join("\n");
 }
