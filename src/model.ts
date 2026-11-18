@@ -74,7 +74,7 @@ function expectations(root: string, files: readonly ts.SourceFile[]): Map<string
     for (const [index, line] of file.text.split(/\r\n|\n|\r/).entries()) {
       const match = /^\s*\/\/@cg-expect-(error|warning)\s*$/.exec(line);
       if (!match) continue;
-      const severity = match[1] === "error" ? "error" : "warning";
+      const severity = (match[1] ?? "") === "error" ? "error" : "warning";
       pending.set(name + ":" + (index + 2), {
         location: {file: name, line: index + 1, column: line.indexOf("//") + 1},
         severity, subject: line.trim()

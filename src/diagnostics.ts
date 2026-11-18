@@ -98,6 +98,7 @@ function detail(label: string, value: string, colour: boolean): string[] {
 function plainReport(findings: Finding[], config: ReportOptions): string {
   const colour = coloursEnabled(config);
   const result: string[] = [];
+  // Preserve warning-only output while distinguishing errors for CI and terminal readers.
   for (const [index, finding] of findings.entries()) {
     const { file, line, column } = finding.location;
     const similarity = "similarity" in finding ? finding.similarity ?? null : null;
