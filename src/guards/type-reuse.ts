@@ -27,7 +27,7 @@ function words(value: string): string[] {
   const tokens = spaced.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   return tokens.map(token => {
     const singular = token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token;
-    return synonyms[token] ?? synonyms[singular] ?? singular;
+    return synonyms[token] ?? (synonyms[singular] ?? singular);
   }).filter(token => token !== "full" && token !== "address");
 }
 
@@ -38,7 +38,7 @@ function tokenSimilarity(left: string, right: string): number {
   return overlap / Math.max(a.size, b.size, 1);
 }
 
-function primitiveFingerprint(type: ts.Type, checker: ts.TypeChecker): string | undefined {
+function primitiveFingerprint(type: ts.Type, checker: ts.TypeChecker): string | null {
   if (type.isStringLiteral()) return `string-literal:${JSON.stringify(type.value)}`;
   if (type.isNumberLiteral()) return `number-literal:${type.value}`;
   if (type.flags & ts.TypeFlags.BooleanLiteral) return `boolean-literal:${checker.typeToString(type)}`;
@@ -52,18 +52,26 @@ function primitiveFingerprint(type: ts.Type, checker: ts.TypeChecker): string | 
   if (type.flags & ts.TypeFlags.Never) return "never";
   if (type.flags & ts.TypeFlags.BigIntLike) return "bigint";
   if (type.flags & ts.TypeFlags.ESSymbolLike) return "symbol";
-  return undefined;
+  return null;
+}
+
+function declarationOf(symbol: ts.Symbol): ts.Declaration | null {
+  const declarations = symbol.declarations ?? [];
+  return symbol.valueDeclaration ?? (declarations[0] ?? null);
 }
 
 function objectFingerprint(type: ts.Type, checker: ts.TypeChecker, active: Set<ts.Type>, depth: number): string {
+  // Large structural types are too costly to expand here. For smaller ones,
+  // resolve members at their declarations so aliases retain their context.
   const properties = checker.getPropertiesOfType(type);
-  if (properties.length > 32) return `complex:${type.symbol?.getName() ?? type.flags}`;
+  const symbol = type.symbol ?? null;
+  if (properties.length > 32) return `complex:${symbol ? symbol.getName() : type.flags}`;
   const members = properties.map(property => {
-    const declaration = property.valueDeclaration ?? property.declarations?.[0];
-    const memberType = declaration ? checker.getTypeOfSymbolAtLocation(property, declaration) : undefined;
+    const declaration = declarationOf(property);
+    const memberType = declaration ? checker.getTypeOfSymbolAtLocation(property, declaration) : null;
     const optional = property.flags & ts.SymbolFlags.Optional ? "?" : "";
-    const readonly = declaration && ts.canHaveModifiers(declaration) &&
-      ts.getModifiers(declaration)?.some(modifier => modifier.kind === ts.SyntaxKind.ReadonlyKeyword) ? "readonly " : "";
+    const modifiers = declaration && ts.canHaveModifiers(declaration) ? ts.getModifiers(declaration) ?? [] : [];
+    const readonly = modifiers.some(modifier => modifier.kind === ts.SyntaxKind.ReadonlyKeyword) ? "readonly " : "";
     return `${readonly}${property.name}${optional}:${memberType ? fingerprint(memberType, checker, active, depth + 1) : "unknown"}`;
   }).sort();
   const index = checker.getIndexInfosOfType(type).map(item =>
@@ -71,32 +79,35 @@ function objectFingerprint(type: ts.Type, checker: ts.TypeChecker, active: Set<t
   ).sort();
   const calls = checker.getSignaturesOfType(type, ts.SignatureKind.Call).map(signature => {
     const args = signature.getParameters().map(symbol => {
-      const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
+      const declaration = declarationOf(symbol);
       return declaration ? fingerprint(checker.getTypeOfSymbolAtLocation(symbol, declaration), checker, active, depth + 1) : "unknown";
     });
     return `(${args.join(",")}):${fingerprint(signature.getReturnType(), checker, active, depth + 1)}`;
   }).sort();
   if (members.length || index.length || calls.length) return `{${[...members, ...index, ...calls].join(";")}}`;
-  return checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation);
+  const declaration = symbol ? declarationOf(symbol) : null;
+  return declaration ? checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation) : checker.typeToString(type);
 }
 
 // Resolve shape, including optionality, literal discriminants and call signatures;
 // cap recursion to keep pathological generic/recursive types bounded.
 function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts.Type>(), depth = 0): string {
-  const symbol = type.aliasSymbol ?? type.symbol;
-  const source = symbol?.declarations?.[0]?.getSourceFile().fileName ?? "";
-  if (source.includes("node_modules") || /(?:^|[\\/])lib\.[^\\/]+\.d\.ts$/.test(source)) {
-    return `external:${checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation)}`;
+  const symbol = type.aliasSymbol ?? (type.symbol ?? null);
+  const declarations = symbol ? symbol.declarations ?? [] : [];
+  const declaration = declarations[0] ?? null;
+  const source = declaration ? declaration.getSourceFile().fileName : "";
+  if (declaration && (source.includes("node_modules") || /(?:^|[\\/])lib\.[^\\/]+\.d\.ts$/.test(source))) {
+    return `external:${checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation)}`;
   }
-  if (depth >= 5) return `complex:${symbol?.getName() ?? type.flags}`;
+  if (depth >= 5) return `complex:${symbol ? symbol.getName() : type.flags}`;
   const primitive = primitiveFingerprint(type, checker);
-  if (primitive !== undefined) return primitive;
+  if (primitive !== null) return primitive;
   if (type.isUnionOrIntersection()) {
     const kind = type.isUnion() ? "union" : "intersection";
     return `${kind}(${type.types.map(item => fingerprint(item, checker, active, depth + 1)).sort().join("|")})`;
   }
   if (checker.isArrayType(type)) {
-    const element = checker.getTypeArguments(type as ts.TypeReference)[0];
+    const element = checker.getTypeArguments(type as ts.TypeReference)[0] ?? null;
     return `array(${element ? fingerprint(element, checker, active, depth + 1) : "unknown"})`;
   }
   if (checker.isTupleType(type)) {
@@ -124,13 +135,13 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
       const isDefinition = ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isClassDeclaration(node);
       if (!isDefinition) { ts.forEachChild(node, visit); return; }
       const kind = ts.isClassDeclaration(node) ? "class" : ts.isInterfaceDeclaration(node) ? "interface" : "type";
-      const name = node.name?.text;
-      if (!name) { ts.forEachChild(node, visit); return; }
+      const identifier = node.name ?? null;
+      if (!identifier) { ts.forEachChild(node, visit); return; }
 
-      const type = project.checker.getTypeAtLocation(node.name);
+      const type = project.checker.getTypeAtLocation(identifier);
       if (!isRecordType(type, project.checker)) { ts.forEachChild(node, visit); return; }
       const properties = project.checker.getPropertiesOfType(type).map(property => {
-        const declaration = property.valueDeclaration ?? property.declarations?.[0];
+        const declaration = declarationOf(property);
         return {
           name: property.name,
           fingerprint: declaration ? fingerprint(project.checker.getTypeOfSymbolAtLocation(property, declaration), project.checker) : "unknown"
@@ -138,7 +149,7 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
       });
       // Primitive aliases, utility aliases and one-field records are too noisy.
       if (properties.length >= 2) {
-        definitions.push({ name, node, kind, properties, fingerprint: fingerprint(type, project.checker) });
+        definitions.push({ name: identifier.text, node, kind, properties, fingerprint: fingerprint(type, project.checker) });
       }
       ts.forEachChild(node, visit);
     };
@@ -154,7 +165,7 @@ function fieldSimilarity(a: Definition, b: Definition, semantic: boolean): numbe
     let bestIndex = -1;
     let best = 0;
     for (const index of unmatched) {
-      const right = b.properties[index];
+      const right = b.properties[index] ?? null;
       if (!right || left.fingerprint !== right.fingerprint) continue;
       const score = semantic ? tokenSimilarity(left.name, right.name) : Number(left.name === right.name);
       if (score > best) {
@@ -216,13 +227,14 @@ function reuseAdvice(a: Definition, b: Definition, exact: boolean): string {
   const relative = path.relative(path.dirname(destination), source).replace(/\\/g, "/").replace(/\.[cm]?tsx?$/, ".js");
   const module = relative.startsWith(".") ? relative : `./${relative}`;
   const declaration = a.node;
-  const exported = ts.canHaveModifiers(declaration) && ts.getModifiers(declaration)?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword);
+  const modifiers = ts.canHaveModifiers(declaration) ? ts.getModifiers(declaration) ?? [] : [];
+  const exported = modifiers.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword);
   const prefix = exported ? "" : `Export ${a.name} from ${path.basename(source)} first. `;
   return `${prefix}Prefer importing the existing definition: import type { ${a.name} } from "${module}"; If callers require the ${b.name} name, expose an alias: export type ${b.name} = ${a.name}; Confirm both concepts should evolve together.`;
 }
 
-async function compareDefinitions(project: Project, a: Definition, b: Definition, score: SemanticScorer): Promise<Finding | undefined> {
-  if (a.node.getSourceFile() === b.node.getSourceFile()) return undefined;
+async function compareDefinitions(project: Project, a: Definition, b: Definition, score: SemanticScorer): Promise<Finding | null> {
+  if (a.node.getSourceFile() === b.node.getSourceFile()) return null;
   const isClass = a.kind === "class" || b.kind === "class";
   const exactMatch = a.fingerprint === b.fingerprint && !isClass;
   const commonFields = fieldSimilarity(a, b, false);
@@ -230,7 +242,7 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
   const nearMatch = commonFields >= 0.7 && !exactMatch && !isClass;
   // A similar name alone is not evidence that two types share a reusable contract.
   // Require matching field names and compatible types before asking the model.
-  if (!exactMatch && !nearMatch && semanticFields < 0.65) return undefined;
+  if (!exactMatch && !nearMatch && semanticFields < 0.65) return null;
 
   // Deterministic matches need no model inference; other candidates must pass
   // actual zero-shot entailment and contradiction checks before reporting.
@@ -244,7 +256,7 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
     });
     confidence = supportsReuse(verdict) ? verdict.sameConcept : 0;
   }
-  if (confidence === 0) return undefined;
+  if (confidence === 0) return null;
 
   const code = exactMatch ? "CG101" : nearMatch ? "CG102" : "CG103";
   const shared = b.properties.filter(property => a.properties.some(other => other.name === property.name && other.fingerprint === property.fingerprint));
@@ -271,9 +283,9 @@ export async function typeReuse(project: Project, includeTests = false, score: S
   const definitions = getDefinitions(project, includeTests);
   const findings: Finding[] = [];
   for (const pair of [...candidatesWithExactMatches(definitions)].sort()) {
-    const [first, second] = pair.split(":").map(Number);
-    const a = definitions[first ?? -1];
-    const b = definitions[second ?? -1];
+    const [first = -1, second = -1] = pair.split(":").map(Number);
+    const a = definitions[first] ?? null;
+    const b = definitions[second] ?? null;
     if (!a || !b) continue;
     const finding = await compareDefinitions(project, a, b, score);
     if (finding) findings.push(finding);

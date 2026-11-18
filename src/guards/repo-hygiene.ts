@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { Finding } from "../model.ts";
+import { readScripts } from "../scripts.ts";
 
 export function repoHygiene(root: string): Finding[] {
   const findings: Finding[] = [];
@@ -11,10 +12,9 @@ export function repoHygiene(root: string): Finding[] {
   const file = path.join(root, "package.json");
   if (!existsSync(file)) return findings;
   const text = readFileSync(file, "utf8");
-  let pkg: {scripts?: Record<string, string>};
-  try { pkg = JSON.parse(text) as typeof pkg; }
+  let scripts: Record<string, string>;
+  try { scripts = readScripts(text, file); }
   catch { return findings; }
-  const scripts = pkg.scripts ?? {};
   const entries = Object.entries(scripts);
   for (const [i, [name, value]] of entries.entries()) {
     if (!/(?:test|ci|check)/i.test(name)) continue;
@@ -44,10 +44,10 @@ export function repoHygiene(root: string): Finding[] {
   const signatures = new Map<string, string>();
   for (const workflow of workflows) {
     const content = readFileSync(path.join(workflowDir, workflow), "utf8");
-    const commands = [...content.matchAll(/^\s*-\s*run:\s*(.+)$/gm)].map(match => match[1]?.trim() ?? "");
+    const commands = [...content.matchAll(/^\s*-\s*run:\s*(.+)$/gm)].map(match => (match[1] ?? "").trim());
     for (const command of commands) {
       if (!/(?:test|ci|check|lint)/i.test(command) || command.length < 10) continue;
-      const prior = signatures.get(command);
+      const prior = signatures.get(command) ?? null;
       if (!prior) { signatures.set(command, workflow); continue; }
       const pos = content.indexOf(command);
       add({code: "CG504", file: `.github/workflows/${workflow}`, line: content.slice(0, pos).split("\n").length, message: "Same CI command runs in multiple workflows", subject: command, reason: `${workflow} and ${prior} both execute ${command}, potentially duplicating hosted work.`, suggestion: "Decide whether both triggers are necessary; reuse one job or run the check locally where appropriate."});

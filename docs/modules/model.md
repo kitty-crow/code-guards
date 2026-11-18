@@ -6,4 +6,4 @@ Source: [`src/model.ts`](../../src/model.ts)
 
 ## Behaviour and boundaries
 
-A finding can include an offending `subject`, highlighted `span`, `reason`, `suggestion` and a related source location. All warning paths should use this contract.
+A finding includes a `subject`, `reason` and `suggestion`. The guard can attach an excerpt span, a related location or a similarity score. Use a property-presence check before reading these fields.

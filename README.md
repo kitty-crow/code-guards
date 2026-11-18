@@ -8,7 +8,7 @@ Code Guards checks local TypeScript projects for code quality and documentation 
 | `--strict` | Exit 1 if any warning is reported |
 | Invalid options or target | Exit 2 |
 
-The scan does not modify the target project or change TypeScript's compiler behaviour.
+The scan does not modify the target project or change TypeScript's compiler behaviour. CG305 reports non-deterministic types in advisory mode and rejects them in strict mode when the type-assertions guard is enabled.
 
 ## Get started
 
@@ -35,7 +35,7 @@ bun run guards:bun --path /home/javier/projects/my-app --format json
 bun run guards:bun no-nested-if --path ../tracker-viewer/src/main.ts
 ```
 
-`--path` accepts a directory, an individual `.ts`/`.tsx`/`.mts`/`.cts` file, or a `tsconfig*.json` file. A directory with `tsconfig.json` uses its compiler configuration; without one, Code Guards recursively discovers TypeScript source files while excluding `node_modules`, `.git`, `dist`, `build`, `coverage`, `.next`, `.cache` and `out`. No files are copied or written to the target repository.
+`--path` accepts a directory, an individual `.ts`/`.tsx`/`.mts`/`.cts` file, or a `tsconfig*.json` file. A directory with `tsconfig.json` uses its compiler configuration; without one, Code Guards recursively discovers TypeScript source files while excluding `node_modules`, `.git`, `dist`, `build`, `coverage`, `.next`, `.cache` and `out`. Scans are read-only.
 
 The existing `--project ../tracker-viewer/tsconfig.json` flag remains available for explicit TypeScript configurations. `--project` and `--path` cannot be used together. From any working directory you can instead call `bun /absolute/path/to/code-guards/dist/src/cli.js --path /absolute/path/to/project` after building the CLI. The model weights, if needed, are cached where Code Guards runs, not installed into the target project.
 
@@ -102,7 +102,7 @@ Release history belongs in `CHANGELOG.md` or a migration guide.
 | `CG302` | Redundant boolean conditional returning its own test |
 | `CG303` | Ignored promises or empty catch clauses |
 | `CG304` | Duplicated configuration strings across modules |
-| `CG305` | Non-null assertions or `any` casts that bypass type safety |
+| `CG305` | Non-null or definite-assignment assertions, explicit or inferred `any`, `unknown` or `undefined`, and optional contracts |
 | `CG306` | Missing string-union cases in a switch statement |
 | `CG307` | Class method that may not use or belong to instance state |
 | `CG308` | Stateless forwarding method that may be unnecessary |

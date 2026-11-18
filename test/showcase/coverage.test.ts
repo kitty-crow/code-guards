@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import path from "node:path";
+import { collect } from "../../examples/coverage/run.mts";
 
 const script = path.resolve("dist/examples/coverage/run.mjs");
 
@@ -9,14 +10,12 @@ function invoke(args: string[]) {
   return spawnSync(process.execPath, [script, ...args], {encoding: "utf8"});
 }
 
-test("the coverage showcase produces an actionable finding for all 54 active warning codes", () => {
+test("the coverage showcase produces an actionable finding for all 54 active warning codes", async () => {
   const execution = invoke(["--json"]);
   assert.equal(execution.status, 0, execution.stderr);
-  const result = JSON.parse(execution.stdout) as {
-    supportedCodes: string[];
-    missing: string[];
-    findings: {code: string; message: string; reason?: string; suggestion?: string; location: {file: string; line: number}}[];
-  };
+  const {examples, supportedCodes, missing} = await collect();
+  const result = {supportedCodes, missing, findings: examples.map(item => item.finding)};
+  assert.equal(execution.stdout.trim(), JSON.stringify(result, null, 2));
   assert.equal(result.supportedCodes.length, 54);
   assert.deepEqual(result.missing, []);
   // New rules need committed source fixtures, not just passing isolated unit tests.
@@ -48,6 +47,6 @@ test("showcase advisory output has source excerpts; strict mode returns exit 1",
 test("all-code showcase is independent of the real model runtime", () => {
   const run = invoke(["--code", "CG410", "--json"]);
   assert.equal(run.status, 0, run.stderr);
-  const result = JSON.parse(run.stdout) as {findings: {code: string}[]};
-  assert.deepEqual(result.findings.map(item=>item.code), ["CG410"]);
+  const codes = [...run.stdout.matchAll(/^\s*"code": "(CG\d{3})",?$/gm)].map(match => match[1] ?? "");
+  assert.deepEqual(codes, ["CG410"]);
 });

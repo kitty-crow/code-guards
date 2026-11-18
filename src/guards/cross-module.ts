@@ -18,14 +18,21 @@ function alike(left: string, right: string): boolean {
   return left === right || common >= 1 && common / Math.max(a.size, b.size) >= 0.5;
 }
 
+function stringConstant(node: ts.Node): Constant | null {
+  if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name)) return null;
+  if (!ts.isVariableDeclarationList(node.parent) || !(node.parent.flags & ts.NodeFlags.Const)) return null;
+  const initializer = node.initializer ?? null;
+  if (!initializer || !ts.isStringLiteral(initializer) || initializer.text.length < 12) return null;
+  return {name: node.name.text, literal: initializer.text, node};
+}
+
 function inspectConstants(project: Project, add: Add): void {
   const constants: Constant[] = [];
   for (const file of project.files) {
     if (/(?:^|\/)(?:test|tests|examples)\//.test(path.relative(project.root, file.fileName).replace(/\\/g, "/"))) continue;
     const visit = (node: ts.Node): void => {
-      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const) && node.initializer && ts.isStringLiteral(node.initializer) && node.initializer.text.length >= 12) {
-        constants.push({name: node.name.text, literal: node.initializer.text, node});
-      }
+      const constant = stringConstant(node);
+      if (constant) constants.push(constant);
       ts.forEachChild(node, visit);
     };
     visit(file);
@@ -34,7 +41,7 @@ function inspectConstants(project: Project, add: Add): void {
   for (const constant of constants) groups.set(constant.literal, [...(groups.get(constant.literal) ?? []), constant]);
   for (const group of groups.values()) {
     for (let i = 0; i < group.length; i += 1) {
-      const one = group[i];
+      const one = group[i] ?? null;
       if (!one) continue;
       for (const two of group.slice(i + 1)) {
         if (two.node.getSourceFile() === one.node.getSourceFile() || !alike(one.name, two.name)) continue;
@@ -50,14 +57,15 @@ function inspectConventions(project: Project, add: Add): void {
   for (const file of project.files) {
     if (/(?:^|\/)(?:test|tests|examples)\//.test(path.relative(project.root, file.fileName).replace(/\\/g, "/"))) continue;
     const visit = (node: ts.Node): void => {
-      if (ts.isFunctionDeclaration(node) && node.name && /^(?:apiClient|requestJson|httpClient|fetchWithAuth)$/i.test(node.name.text)) clients.push(node);
+      const name = ts.isFunctionDeclaration(node) ? node.name ?? null : null;
+      if (name && /^(?:apiClient|requestJson|httpClient|fetchWithAuth)$/i.test(name.text)) clients.push(node);
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && /^(?:apiClient|httpClient)$/i.test(node.name.text)) clients.push(node);
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "fetch") direct.push(node);
       ts.forEachChild(node, visit);
     };
     visit(file);
   }
-  const canonical = clients[0];
+  const canonical = clients[0] ?? null;
   if (!canonical) return;
   for (const call of direct) {
     if (call.getSourceFile() === canonical.getSourceFile()) continue;
@@ -67,8 +75,10 @@ function inspectConventions(project: Project, add: Add): void {
 
 export function crossModule(project: Project): Finding[] {
   const findings: Finding[] = [];
-  const add: Add = ({guard, code, node, message, reason, suggestion, related}) => {
-    findings.push({guard, code, severity: "warning", message, location: location(project.root, node), span: Math.min(85, node.getWidth()), subject: node.getText().split("\n")[0]?.slice(0, 115) ?? "", reason, suggestion, ...(related ? {related: location(project.root, related)} : {})});
+  const add: Add = item => {
+    const {guard, code, node, message, reason, suggestion} = item;
+    const line = node.getText().split("\n", 1)[0] ?? "";
+    findings.push({guard, code, severity: "warning", message, location: location(project.root, node), span: Math.min(85, node.getWidth()), subject: line.slice(0, 115), reason, suggestion, ...("related" in item ? {related: location(project.root, item.related)} : {})});
   };
   inspectConstants(project, add);
   inspectConventions(project, add);

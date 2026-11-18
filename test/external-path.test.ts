@@ -1,30 +1,23 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
 import { loadProject } from "../src/project.ts";
 import { options } from "../src/cli.ts";
 import { noNestedIf } from "../src/guards/no-nested-if.ts";
+import { writeFixture } from "./fixture.ts";
 
 const temporary: string[] = [];
 afterEach(() => { for (const folder of temporary.splice(0)) rmSync(folder, { recursive: true, force: true }); });
 
 function external(files: Record<string, string>): string {
-  const root = mkdtempSync(path.join(os.tmpdir(), "code-guards external path "));
-  temporary.push(root);
-  for (const [relative, content] of Object.entries(files)) {
-    const destination = path.join(root, relative);
-    mkdirSync(path.dirname(destination), { recursive: true });
-    writeFileSync(destination, content);
-  }
-  return root;
+  return writeFixture(files, temporary, "code-guards external path ");
 }
 
-function execute(target: string, args: string[] = [], cwd?: string) {
+function execute(target: string, args: string[] = [], cwd = process.cwd()) {
   return spawnSync(process.execPath, [path.resolve("dist/src/cli.js"), "no-nested-if", "--path", target, ...args], {
-    encoding: "utf8", ...(cwd ? { cwd } : {})
+    encoding: "utf8", cwd
   });
 }
 
@@ -46,9 +39,9 @@ test("external directory respects its tsconfig and never scans this library inst
   assert.deepEqual(project.files.map(file => path.relative(root, file.fileName)), ["src/validate.ts"]);
   const result = execute(root, ["--format", "json"]);
   assert.equal(result.status, 0, result.stderr);
-  const findings = JSON.parse(result.stdout) as { code: string; location: { file: string } }[];
-  assert.deepEqual(findings.map(finding => finding.code), ["CG001"]);
-  assert.equal(findings[0]?.location.file, "src/validate.ts");
+  const findings = noNestedIf(project);
+  assert.deepEqual(findings.map(finding => [finding.code, finding.location.file]), [["CG001", "src/validate.ts"]]);
+  assert.equal(result.stdout.trim(), JSON.stringify(findings, null, 2));
 });
 
 test("external directories without tsconfig exclude build outputs and dependency directories", () => {
@@ -96,8 +89,9 @@ test("external scan works from an unrelated working directory", () => {
   const elsewhere = external({});
   const report = execute(root, ["--format", "json"], elsewhere);
   assert.equal(report.status, 0, report.stderr);
-  const findings = JSON.parse(report.stdout) as { location: { file: string } }[];
-  assert.equal(findings[0]?.location.file, "src/nested.ts");
+  const findings = noNestedIf(loadProject(root));
+  assert.deepEqual(findings.map(finding => finding.location.file), ["src/nested.ts"]);
+  assert.equal(report.stdout.trim(), JSON.stringify(findings, null, 2));
 });
 
 test("invalid or empty external targets fail clearly instead of scanning the current repository", () => {

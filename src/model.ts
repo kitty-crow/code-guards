@@ -19,14 +19,16 @@ export type Finding = {
   code: string;
   message: string;
   location: Location;
-  related?: Location;
-  relatedSpan?: number;
-  similarity?: number;
-  subject?: string;
-  span?: number;
-  reason?: string;
-  suggestion?: string;
-};
+  subject: string;
+  reason: string;
+  suggestion: string;
+} & (
+  | { span: number }
+  | { related: Location }
+  | { span: number; related: Location }
+  | { span: number; similarity: number }
+  | { span: number; similarity: number; related: Location; relatedSpan: number }
+);
 
 export function location(root: string, node: ts.Node): Location {
   const file = node.getSourceFile();

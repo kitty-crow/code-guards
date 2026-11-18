@@ -1,8 +1,9 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import type { Project } from "../project.ts";
 import type { Finding, Location } from "../model.ts";
+import { readScripts } from "../scripts.ts";
 import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
 
 type Paragraph = { line: number; text: string };
@@ -14,8 +15,8 @@ type DocIssue = {
   subject: string;
   reason: string;
   suggestion: string;
-  related?: Location;
 };
+type RelatedDocIssue = DocIssue & { related: Location };
 
 const ignored = new Set([".git", "node_modules", "dist", "coverage", "examples", ".cache"]);
 const marketing = /\b(?:seamlessly|cutting.edge|state.of.the.art|robust and scalable|powerful solution|revolutionary|effortlessly|leverage the power|unlock the potential|comprehensive suite|future.proof|game.changing)\b/i;
@@ -39,21 +40,21 @@ const narrative = [
 // Exclude those sections so this rule targets misleading current-usage docs.
 function checkNarrative(file: string, lines: string[], findings: Finding[]): void {
   if (releaseFile.test(file)) return;
-  let releaseDepth: number | undefined;
+  let releaseDepth: number | null = null;
   let inFence = false;
   for (const [i, line] of lines.entries()) {
     if (/^\s*```/.test(line)) { inFence = !inFence; continue; }
     if (inFence) continue;
     const heading = line.match(/^\s*(#{1,6})\s+(.+?)\s*$/);
     if (heading) {
-      const level = heading[1]?.length ?? 1;
+      const level = (heading[1] ?? "#").length;
       releaseDepth = releaseHeading.test(heading[2] ?? "") ? level :
-        releaseDepth !== undefined && level <= releaseDepth ? undefined : releaseDepth;
+        releaseDepth !== null && level <= releaseDepth ? null : releaseDepth;
       continue;
     }
-    if (releaseDepth !== undefined || /^\s*(?:>|[-*]\s+`|\d+\.\s+`)/.test(line)) continue;
+    if (releaseDepth !== null || /^\s*(?:>|[-*]\s+`|\d+\.\s+`)/.test(line)) continue;
     const prose = line.replace(/`[^`]*`/g, "");
-    const match = narrative.map(rule => rule.exec(prose)).find(Boolean);
+    const match = narrative.map(rule => rule.exec(prose)).find(Boolean) ?? null;
     if (!match) continue;
     const subject = line.trim();
     issue(findings, {code: "CG404", file, line: i + 1,
@@ -65,14 +66,14 @@ function checkNarrative(file: string, lines: string[], findings: Finding[]): voi
 }
 
 
-function read(root: string, file: string): string | undefined {
+function read(root: string, file: string): string | null {
   try { return readFileSync(path.join(root, file), "utf8"); }
-  catch { return undefined; }
+  catch { return null; }
 }
 
 function markdownFiles(root: string, relative = "", depth = 0): string[] {
   if (depth > 9) return [];
-  let items;
+  let items: Dirent[];
   try { items = readdirSync(path.join(root, relative), { withFileTypes: true }); }
   catch { return []; }
   const files: string[] = [];
@@ -111,13 +112,13 @@ function similarity(a: string, b: string): number {
   return [...left].filter(word => right.has(word)).length / Math.max(left.size, right.size, 1);
 }
 
-function moduleDocs(source: string): string[] {
+function moduleDocs(source: string): [string, string] {
   const module = source.replace(/^src\//, "").replace(/\.[cm]?tsx?$/, "");
   return [`docs/modules/${module}.md`, `src/${module}.md`];
 }
 
 function exportedNames(project: Project, file: ts.SourceFile): string[] {
-  const symbol = project.checker.getSymbolAtLocation(file);
+  const symbol = project.checker.getSymbolAtLocation(file) ?? null;
   if (!symbol) return [];
   return project.checker.getExportsOfModule(symbol).map(exported => exported.name).filter(name => name !== "default");
 }
@@ -127,13 +128,13 @@ function lineFor(text: string, search: string): number {
   return position < 0 ? 1 : text.slice(0, position).split("\n").length;
 }
 
-function issue(findings: Finding[], item: DocIssue): void {
+function issue(findings: Finding[], item: DocIssue | RelatedDocIssue): void {
   findings.push({
     guard: "documentation", severity: "warning", code: item.code, message: item.title,
     location: {file: item.file, line: item.line, column: 1},
     subject: item.subject, span: Math.min(110, item.subject.length),
     reason: item.reason, suggestion: item.suggestion,
-    ...(item.related ? {related: item.related} : {})
+    ...("related" in item ? {related: item.related} : {})
   });
 }
 
@@ -151,7 +152,7 @@ function checkModuleCoverage(project: Project, files: Set<string>, findings: Fin
   for (const source of moduleFiles) {
     const sourcePath = path.relative(project.root, source.fileName).replace(/\\/g, "/");
     const candidates = moduleDocs(sourcePath);
-    const doc = candidates.find(candidate => files.has(candidate));
+    const doc = candidates.find(candidate => files.has(candidate)) ?? null;
     const exports = exportedNames(project, source);
     if (!doc) {
       issue(findings, {
@@ -188,15 +189,10 @@ function packageScripts(root: string, file: string): Record<string, string> {
   for (;;) {
     const manifest = path.join(directory, "package.json");
     const content = read(root, manifest);
-    if (content !== undefined) return parseScripts(content, manifest);
+    if (content !== null) return readScripts(content, manifest);
     if (directory === ".") return {};
     directory = path.dirname(directory);
   }
-}
-
-function parseScripts(content: string, manifest: string): Record<string, string> {
-  try { return (JSON.parse(content) as {scripts?: Record<string, string>}).scripts ?? {}; }
-  catch { throw new Error(`${manifest} is invalid JSON; cannot verify documented commands`); }
 }
 
 function checkCommands(file: string, content: string, scripts: Record<string, string>, findings: Finding[]): void {
@@ -204,7 +200,7 @@ function checkCommands(file: string, content: string, scripts: Record<string, st
     for (const match of line.matchAll(/\b(?:bun|npm|pnpm|yarn)\s+run\s+([\w:.-]+)/g)) {
       const command = match[0];
       const name = match[1] ?? "";
-      if (scripts[name]) continue;
+      if (scripts[name] ?? "") continue;
       issue(findings, {code: "CG406", file, line: i + 1, title: "Documentation references a missing package script", subject: command,
         reason: `package.json does not define '${name}', so this documented command cannot run as written.`,
         suggestion: `Correct the command to an existing script or implement '${name}' in package.json.`});
@@ -215,9 +211,10 @@ function checkCommands(file: string, content: string, scripts: Record<string, st
 function checkImplementationClaim(root: string, source: ts.SourceFile, doc: string, findings: Finding[]): void {
   const content = read(root, doc) ?? "";
   if (!/\b(?:fully implemented|ready for use|implemented and tested|production.ready)\b/i.test(content)) return;
-  const unfinished = source.text.match(/(?:TODO:?[ \t]*(?:implement|finish)|throw new Error\([\"'](?:not implemented|todo))/i);
+  const unfinished = /(?:TODO:?[ \t]*(?:implement|finish)|throw new Error\([\"'](?:not implemented|todo))/i.exec(source.text);
   if (!unfinished) return;
-  issue(findings, {code: "CG413", file: doc, line: lineFor(content, content.match(/fully implemented|ready for use|implemented and tested|production.ready/i)?.[0] ?? ""),
+  const claim = /fully implemented|ready for use|implemented and tested|production.ready/i.exec(content);
+  issue(findings, {code: "CG413", file: doc, line: lineFor(content, claim ? claim[0] : ""),
     title: "Documentation claims a feature is complete but source has a placeholder", subject: unfinished[0],
     reason: `A completion claim in ${doc} conflicts with an unfinished marker in ${source.fileName}. This requires manual verification rather than model certainty.`,
     suggestion: "Implement and test the missing behaviour, or rewrite the documentation to state what is currently unsupported."});
@@ -226,7 +223,7 @@ function checkImplementationClaim(root: string, source: ts.SourceFile, doc: stri
 function checkLinks(root: string, file: string, content: string, findings: Finding[]): void {
   const withoutFences = content.replace(/```[\s\S]*?```/g, "");
   for (const match of withoutFences.matchAll(/(?<!!)\[[^\]]+\]\(([^)]+)\)/g)) {
-    const target = match[1]?.split("#")[0] ?? "";
+    const target = (match[1] ?? "").split("#", 1)[0] ?? "";
     if (!target || /^(?:https?:|mailto:|#)/.test(target)) continue;
     const absolute = path.resolve(root, path.dirname(file), target);
     if (existsSync(absolute)) continue;
@@ -280,7 +277,7 @@ function sentencesIn(paragraph: Paragraph): string[] {
 }
 
 function traceStyle(file: string, line: number, excerpt: string, score: {sameConcept: number; differentConcept: number}): void {
-  if (process.env.CODE_GUARDS_SEMANTIC_TRACE !== "1") return;
+  if ((process.env.CODE_GUARDS_SEMANTIC_TRACE ?? "") !== "1") return;
   console.error(JSON.stringify({guard: "CG411", file, line, support: score.sameConcept, opposition: score.differentConcept, excerpt}));
 }
 
@@ -327,7 +324,7 @@ async function checkReadmeIntroduction(file: string, prose: Paragraph[], finding
   }
 
   if (history.length < 2) return;
-  const first = history[0];
+  const first = history[0] ?? null;
   if (!first) return;
   const lines = history.map(item => item.line).join(", ");
   issue(findings, {

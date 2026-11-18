@@ -1,7 +1,6 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
 import { documentation } from "../src/guards/documentation.ts";
@@ -9,21 +8,18 @@ import { enterpriseLookingNaming } from "../src/guards/enterprise-looking-naming
 import { renderFindings } from "../src/diagnostics.ts";
 import { loadProject } from "../src/project.ts";
 import type { SemanticScorer } from "../src/semantic.ts";
+import { writeFixture } from "./fixture.ts";
 
 const temporary: string[] = [];
 afterEach(() => { for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const reject: SemanticScorer = async () => ({ sameConcept: 0.01, differentConcept: 0.99 });
 
 function fixture(files: Record<string, string>) {
-  const root = mkdtempSync(path.join(os.tmpdir(), "code-guards-naming-"));
-  temporary.push(root);
-  const contents = { "tsconfig.json": JSON.stringify({compilerOptions: {strict: true, noEmit: true, target: "ES2022"}, include: ["src/**/*.ts", "test/**/*.ts"]}), "src/__fixture.ts": "export {};", ...files };
-  for (const [relative, text] of Object.entries(contents)) {
-    const filename = path.join(root, relative);
-    mkdirSync(path.dirname(filename), {recursive: true});
-    writeFileSync(filename, text);
-  }
-  return loadProject(root);
+  return loadProject(writeFixture({
+    "tsconfig.json": JSON.stringify({compilerOptions: {strict: true, noEmit: true, target: "ES2022"}, include: ["src/**/*.ts", "test/**/*.ts"]}),
+    "src/__fixture.ts": "export {};",
+    ...files
+  }, temporary, "code-guards-naming-"));
 }
 
 const codes = (findings: { code: string }[]) => new Set(findings.map(finding => finding.code));
@@ -33,7 +29,7 @@ test("overdescriptive function names suggest a concise abbreviation", () => {
   const findings = enterpriseLookingNaming(project);
   assert.ok(codes(findings).has("CG316"));
   assert.ok(codes(findings).has("CG317"));
-  assert.ok(findings.some(finding => finding.suggestion?.includes("`lngNms`")));
+  assert.ok(findings.some(finding => finding.suggestion.includes("`lngNms`")));
   assert.ok(findings.every(finding => finding.location.file === "src/index.ts"));
 });
 
@@ -69,14 +65,16 @@ test("naming guard covers classes, methods, variables, parameters, properties, t
 });
 
 test("naming guard reports path segments once, not once per file within the directory", () => {
+  const directory = "src/customer-profile-service-manager-controller-implementation";
+  const filename = "src/very-long-enterprise-naming-generated-service-name.ts";
   const project = fixture({
-    "src/customer-profile-service-manager-controller-implementation/short.ts": "export const ok = true;",
-    "src/customer-profile-service-manager-controller-implementation/other.ts": "export const fine = 2;",
-    "src/very-long-enterprise-naming-generated-service-name.ts": "export const ready = 1;"
+    [`${directory}/short.ts`]: "export const ok = true;",
+    [`${directory}/other.ts`]: "export const fine = 2;",
+    [filename]: "export const ready = 1;"
   });
   const paths = enterpriseLookingNaming(project).filter(item => item.code === "CG318");
   assert.equal(paths.length, 2);
-  assert.ok(paths.every(item => item.suggestion?.includes("Update imports")));
+  assert.ok(paths.every(item => item.suggestion.includes("Update imports")));
   const output = renderFindings(paths, {root: project.root, format: "text", colour: "never"});
   assert.match(output, /Path/);
   assert.doesNotMatch(output, /Clause/);
@@ -99,7 +97,8 @@ test("test declarations are excluded by default and included on request", () => 
 });
 
 test("generated code is excluded from the naming audit", () => {
-  const project = fixture({"src/generated/SomeVeryLongEnterpriseLookingClassManagerServiceImplementation.ts": "export class SomeVeryLongEnterpriseLookingClassManagerServiceImplementation {}"});
+  const name = "SomeVeryLongEnterpriseLookingClassManagerServiceImplementation";
+  const project = fixture({[`src/generated/${name}.ts`]: `export class ${name} {}`});
   assert.deepEqual(enterpriseLookingNaming(project), []);
 });
 
@@ -133,7 +132,7 @@ You are an expert developer and your task is to produce better code.
   const issues = await documentation(project, reject);
   assert.equal(issues.filter(item => item.code === "CG404").length, 4);
   assert.equal(issues.filter(item => item.code === "CG405").length, 1);
-  assert.ok(issues.filter(item => item.code === "CG404").every(item => item.reason?.includes("development summary")));
+  assert.ok(issues.filter(item => item.code === "CG404").every(item => item.reason.includes("development summary")));
 });
 
 test("CG404 ignores release history, fenced examples and useful current-behaviour descriptions", async () => {
@@ -168,7 +167,8 @@ The command reports errors and exits 1 in strict mode.
 test("CG404 flags a disguised feature claim in module docs with a concrete rewrite", async () => {
   const project = fixture({"docs/modules/utils.md": "# Utilities\n\nThe module now provides an enhanced interface instead of older functionality.\n"});
   const issues = await documentation(project, reject);
-  const warning = issues.find(item => item.code === "CG404");
-  assert.equal(warning?.location.file, "docs/modules/utils.md");
-  assert.match(warning?.suggestion ?? "", /working command, API, inputs\/outputs/);
+  const warning = issues.find(item => item.code === "CG404") ?? null;
+  assert.ok(warning);
+  assert.equal(warning.location.file, "docs/modules/utils.md");
+  assert.match(warning.suggestion, /working command, API, inputs\/outputs/);
 });

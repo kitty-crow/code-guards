@@ -2,14 +2,15 @@
 export type SimilarityVerdict = {
   sameConcept: number;
   differentConcept: number;
-  evidence?: { windows: number; supportWindow: number; oppositionWindow: number };
+};
+type WindowVerdict = SimilarityVerdict & {
+  evidence: { windows: number; supportWindow: number; oppositionWindow: number };
 };
 export type SemanticQuestion = { premise: string; same: string; different: string };
 export type SemanticScorer = (question: SemanticQuestion) => Promise<SimilarityVerdict>;
 
 export const MODEL = "Xenova/mobilebert-uncased-mnli";
 export const MAX_MODEL_TOKENS = 512;
-const MODEL_PACKAGE = "@huggingface/transformers";
 const TEMPLATE = "The evidence indicates that {}.";
 const OVERLAP = 48;
 const SAFETY_TOKENS = 8;
@@ -24,16 +25,14 @@ type Classifier = ((premise: string, labels: string[], options: ClassifierOption
   tokenizer: Tokenizer;
 };
 
-let classifierPromise: Promise<Classifier> | undefined;
+let classifierPromise: Promise<Classifier> | null = null;
 
 async function loadClassifier(): Promise<Classifier> {
-  const transformers = await import(MODEL_PACKAGE) as {
-    pipeline: (task: string, model: string, options: { device: "cpu"; dtype: "q8" }) => Promise<Classifier>;
-    env: { allowRemoteModels: boolean; cacheDir: string };
-  };
-  if (process.env.CODE_GUARDS_OFFLINE === "1") transformers.env.allowRemoteModels = false;
-  if (process.env.CODE_GUARDS_MODEL_CACHE) transformers.env.cacheDir = process.env.CODE_GUARDS_MODEL_CACHE;
-  return transformers.pipeline("zero-shot-classification", MODEL, { device: "cpu", dtype: "q8" });
+  const { env, pipeline } = await import("@huggingface/transformers");
+  if ((process.env.CODE_GUARDS_OFFLINE ?? "") === "1") env.allowRemoteModels = false;
+  const cache = process.env.CODE_GUARDS_MODEL_CACHE ?? "";
+  if (cache) env.cacheDir = cache;
+  return pipeline("zero-shot-classification", MODEL, { device: "cpu", dtype: "q8" });
 }
 
 /** Budget the premise after allowing for BOTH hypothesis labels and pair separators. */
@@ -66,7 +65,7 @@ function scores(result: Classification, question: SemanticQuestion): SimilarityV
 }
 
 /** Combine evidence without ignoring contradicting windows or averaging away strong evidence. */
-export async function assessWindows(question: SemanticQuestion, classifier: Classifier): Promise<SimilarityVerdict> {
+export async function assessWindows(question: SemanticQuestion, classifier: Classifier): Promise<WindowVerdict> {
   const windows = premiseWindows(question, classifier.tokenizer);
   let sameConcept = 0;
   let differentConcept = 0;
@@ -93,7 +92,7 @@ export async function assessWindows(question: SemanticQuestion, classifier: Clas
   };
 }
 
-export async function zeroShot(question: SemanticQuestion): Promise<SimilarityVerdict> {
+export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdict> {
   classifierPromise ??= loadClassifier();
   return assessWindows(question, await classifierPromise);
 }

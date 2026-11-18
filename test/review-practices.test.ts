@@ -1,27 +1,19 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
 import { reviewPractices } from "../src/guards/review-practices.ts";
 import { loadProject } from "../src/project.ts";
+import { writeFixture } from "./fixture.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, {recursive: true, force: true}); });
 function project(files: Record<string, string>) {
-  const root = mkdtempSync(path.join(os.tmpdir(), "guards-review-"));
-  roots.push(root);
-  const all = {
+  return loadProject(writeFixture({
     "tsconfig.json": JSON.stringify({compilerOptions: {strict: true, target: "ES2022", module: "ESNext", moduleResolution: "Bundler", noEmit: true}, include: ["src/**/*.ts", "test/**/*.ts"]}),
     ...files
-  };
-  for (const [file, content] of Object.entries(all)) {
-    const target = path.join(root, file);
-    mkdirSync(path.dirname(target), {recursive: true});
-    writeFileSync(target, content);
-  }
-  return loadProject(root);
+  }, roots, "guards-review-"));
 }
 const codes = (items: {code: string}[]): Set<string> => new Set(items.map(item => item.code));
 
@@ -38,7 +30,9 @@ test("narrated comments are identified, but reasons and invariants are not", () 
   `});
   const results = reviewPractices(sample).filter(item => item.code === "CG319");
   assert.equal(results.length, 1);
-  assert.match(results[0]?.reason ?? "", /Loop through the users/);
+  const finding = results[0] ?? null;
+  assert.ok(finding);
+  assert.match(finding.reason, /Loop through the users/);
 });
 
 test("unavailable API members are tied to TypeScript diagnostics rather than guessed", () => {
@@ -49,8 +43,10 @@ test("unavailable API members are tied to TypeScript diagnostics rather than gue
   `});
   const results = reviewPractices(sample).filter(item => item.code === "CG320");
   assert.equal(results.length, 1);
-  assert.match(results[0]?.reason ?? "", /TS2339/);
-  assert.match(results[0]?.suggestion ?? "", /installed dependency version/);
+  const finding = results[0] ?? null;
+  assert.ok(finding);
+  assert.match(finding.reason, /TS2339/);
+  assert.match(finding.suggestion, /installed dependency version/);
 });
 
 test("convention warnings require a prevailing style", () => {
@@ -62,7 +58,9 @@ test("convention warnings require a prevailing style", () => {
   `});
   const results = reviewPractices(sample).filter(item => item.code === "CG321");
   assert.equal(results.length, 1);
-  assert.match(results[0]?.subject ?? "", /write_date/);
+  const finding = results[0] ?? null;
+  assert.ok(finding);
+  assert.match(finding.subject, /write_date/);
   const mixed = project({"src/mixed.ts": "export function parseDate() { return 1; } export function write_date() { return 2; }"});
   assert.ok(!codes(reviewPractices(mixed)).has("CG321"));
 });
@@ -79,7 +77,8 @@ test("long copied statement runs are reported across different implementations",
   });
   const results = reviewPractices(sample).filter(item => item.code === "CG322");
   assert.equal(results.length, 1);
-  assert.ok(results[0]?.related);
+  const finding = results[0] ?? null;
+  assert.ok(finding && "related" in finding);
 });
 
 test("bare rethrows are flagged but recovery handlers are retained", () => {

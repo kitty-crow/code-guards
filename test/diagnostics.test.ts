@@ -41,9 +41,8 @@ test("terminal colouring is yellow in interactive mode, disable-able, and never 
   const plain = renderFindings(values, { root: project.root, format: "text", colour: "never" });
   assert.doesNotMatch(plain, /\u001b\[/);
   const json = renderFindings(values, { root: project.root, format: "json", colour: "always" });
-  const parsed: unknown = JSON.parse(json);
-  assert.ok(Array.isArray(parsed));
-  assert.equal(parsed.length, 4);
+  assert.equal(values.length, 4);
+  assert.equal(json, JSON.stringify(values, null, 2));
   assert.doesNotMatch(json, /\u001b\[/);
 });
 
@@ -57,7 +56,7 @@ test("GitHub annotations carry actionable suggestions without terminal colouring
 
 test("automatic colour only activates for terminals; NO_COLOR disables forced colours", async () => {
   const values = await findings();
-  const previous = process.env.NO_COLOR;
+  const previous = process.env.NO_COLOR ?? null;
   delete process.env.NO_COLOR;
   try {
     const interactive = renderFindings(values, { root: project.root, format: "text", colour: "auto", isTTY: true });
@@ -68,7 +67,7 @@ test("automatic colour only activates for terminals; NO_COLOR disables forced co
     const noColour = renderFindings(values, { root: project.root, format: "text", colour: "always" });
     assert.doesNotMatch(noColour, /\u001b\[/);
   } finally {
-    if (previous === undefined) delete process.env.NO_COLOR;
+    if (previous === null) delete process.env.NO_COLOR;
     else process.env.NO_COLOR = previous;
   }
 });
