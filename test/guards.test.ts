@@ -2,15 +2,11 @@ import { strict as assert } from "node:assert";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
-import { documentation } from "../src/guards/documentation.ts";
-import { noNestedIf } from "../src/guards/no-nested-if.ts";
-import { typeReuse } from "../src/guards/type-reuse.ts";
-import { functionQuality } from "../src/guards/function-quality.ts";
 import { options } from "../src/cli.ts";
+import { documentation, noNestedIf, typeReuse, functionQuality, codeHealth } from "../src/guards/index.ts";
 import { loadProject } from "../src/project.ts";
 import { supportsReuse, type SemanticScorer } from "../src/semantic.ts";
 import { guards } from "../src/model.ts";
-import { codeHealth } from "../src/guards/code-health.ts";
 import { writeFixture } from "./fixture.ts";
 
 const temporary: string[] = [];

@@ -85,6 +85,7 @@ function warning(code: string, name: string, target: Location, reason: string, s
     subject: name, span, reason, suggestion };
 }
 
+// Review names only in eligible files; path and identifier findings describe separate naming decisions.
 export function enterpriseLookingNaming(project: Project, includeTests = false): Finding[] {
   const findings: Finding[] = [];
   const seenDirectories = new Set<string>();

@@ -55,7 +55,7 @@ bun run guards:bun --path ../tracker-viewer --disable documentation
 
 ## Line-level exceptions
 
-Place `//@cg-ignore` on a line by itself immediately before a line that requires an exception. It suppresses all Code Guards findings whose primary reported location is the next physical line, including in strict mode and for direct guard API calls. It does not suppress later lines of a function, related locations, or TypeScript compiler errors. A blank line between the comment and the target consumes the exception.
+`//@cg-ignore` skips warnings on the next physical line. Strict mode counts the remaining warnings. Blank lines count; TypeScript compiler errors are unaffected.
 
 ```ts
 // Fixed external ABI: six scalar inputs and a memory handle.
