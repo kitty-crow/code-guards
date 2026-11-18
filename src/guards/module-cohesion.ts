@@ -30,11 +30,20 @@ function inspect(file: ts.SourceFile, name: string, node: ts.Node, body: ts.Node
   return {name, node, operations: [...operations], localCalls, detail: preview};
 }
 
+function implemented(member: ts.ClassElement): boolean {
+  if (ts.isMethodDeclaration(member) || ts.isConstructorDeclaration(member) ||
+      ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
+    return Boolean(member.body ?? null);
+  }
+  return false;
+}
+
 function classUnit(file: ts.SourceFile, statement: ts.ClassDeclaration): Unit[] {
-  if (!statement.name) return [];
-  const implementations = statement.members.filter(member => "body" in member && member.body);
+  const name = statement.name ?? null;
+  if (!name) return [];
+  const implementations = statement.members.filter(implemented);
   if (!implementations.length) return [];
-  const unit = inspect(file, statement.name.text, statement.name, statement);
+  const unit = inspect(file, name.text, name, statement);
   const methods = implementations.flatMap(member => {
     if (ts.isMethodDeclaration(member) || ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
       return [member.name.getText(file)];
@@ -48,7 +57,7 @@ function classUnit(file: ts.SourceFile, statement: ts.ClassDeclaration): Unit[] 
 function variableUnits(file: ts.SourceFile, statement: ts.VariableStatement): Unit[] {
   const result: Unit[] = [];
   for (const declaration of statement.declarationList.declarations) {
-    const initializer = declaration.initializer;
+    const initializer = declaration.initializer ?? null;
     if (!initializer || !ts.isIdentifier(declaration.name)) continue;
     if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
       result.push(inspect(file, declaration.name.text, declaration.name, initializer.body));
@@ -61,10 +70,14 @@ function variableUnits(file: ts.SourceFile, statement: ts.VariableStatement): Un
   return result;
 }
 
+function functionUnit(file: ts.SourceFile, statement: ts.FunctionDeclaration): Unit[] {
+  const name = statement.name ?? null;
+  const body = statement.body ?? null;
+  return name && body ? [inspect(file, name.text, name, body)] : [];
+}
+
 function statementUnits(file: ts.SourceFile, statement: ts.Statement): Unit[] {
-  if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) {
-    return [inspect(file, statement.name.text, statement.name, statement.body)];
-  }
+  if (ts.isFunctionDeclaration(statement)) return functionUnit(file, statement);
   if (ts.isClassDeclaration(statement)) return classUnit(file, statement);
   if (ts.isVariableStatement(statement)) return variableUnits(file, statement);
   if (!ts.isExpressionStatement(statement)) return [];
@@ -96,7 +109,7 @@ function overview(units: Unit[]): string {
     selected.add(count === 1 ? 0 : Math.round(i * (units.length - 1) / (count - 1)));
   }
   return [...selected].map(index => {
-    const unit = units[index];
+    const unit = units[index] ?? null;
     if (!unit) return "";
     return `${unit.name}: ${unit.operations.slice(0, 3).join(", ") || "local computation"}; ${unit.detail.slice(0, 85)}`;
   }).join(" | ");

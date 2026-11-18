@@ -28,10 +28,8 @@ function createProject(root: string, names: string[], options: ts.CompilerOption
 }
 
 function configuredProject(filename: string): Project {
-  const config = ts.readConfigFile(filename, ts.sys.readFile);
-  const error = config.error ?? null;
-  if (error) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, "\n"));
-  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, path.dirname(filename), {
+  const config = ts.readJsonConfigFile(filename, ts.sys.readFile);
+  const parsed = ts.parseJsonSourceFileConfigFileContent(config, ts.sys, path.dirname(filename), {
     noEmit: true
   }, filename);
   if (parsed.errors.length) {

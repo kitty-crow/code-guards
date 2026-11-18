@@ -3,6 +3,7 @@ import path from "node:path";
 import ts from "typescript";
 import type { Project } from "../project.ts";
 import type { Finding, Location } from "../model.ts";
+import { readScripts } from "../scripts.ts";
 import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
 
 type Paragraph = { line: number; text: string };
@@ -188,15 +189,10 @@ function packageScripts(root: string, file: string): Record<string, string> {
   for (;;) {
     const manifest = path.join(directory, "package.json");
     const content = read(root, manifest);
-    if (content !== undefined) return parseScripts(content, manifest);
+    if (content !== undefined) return readScripts(content, manifest);
     if (directory === ".") return {};
     directory = path.dirname(directory);
   }
-}
-
-function parseScripts(content: string, manifest: string): Record<string, string> {
-  try { return (JSON.parse(content) as {scripts?: Record<string, string>}).scripts ?? {}; }
-  catch { throw new Error(`${manifest} is invalid JSON; cannot verify documented commands`); }
 }
 
 function checkCommands(file: string, content: string, scripts: Record<string, string>, findings: Finding[]): void {

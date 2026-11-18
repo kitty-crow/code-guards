@@ -23,7 +23,7 @@ function words(name: string): string[] {
     .split(/[^\p{L}\p{N}]+/u).map(word => word.toLowerCase()).filter(Boolean);
 }
 
-function declarationName(node: ts.Node): ts.Identifier | ts.PrivateIdentifier | ts.StringLiteral | undefined {
+function declarationName(node: ts.Node): ts.Identifier | ts.PrivateIdentifier | ts.StringLiteral | null {
   const named = ts.isVariableDeclaration(node) || ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) ||
     ts.isClassDeclaration(node) || ts.isClassExpression(node) || ts.isInterfaceDeclaration(node) ||
     ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node) || ts.isEnumMember(node) ||
@@ -33,11 +33,11 @@ function declarationName(node: ts.Node): ts.Identifier | ts.PrivateIdentifier | 
     ts.isBindingElement(node) || ts.isImportSpecifier(node) || ts.isExportSpecifier(node) ||
     ts.isImportClause(node) || ts.isNamespaceImport(node) || ts.isNamespaceExport(node) ||
     ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node);
-  if (!named) return undefined;
+  if (!named) return null;
   // An unaliased import/export is a reference to a declaration in another file.
-  if ((ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) && !node.propertyName) return undefined;
-  const name = node.name;
-  return name && (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteral(name)) ? name : undefined;
+  if ((ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) && !(node.propertyName ?? null)) return null;
+  const name = node.name ?? null;
+  return name && (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteral(name)) ? name : null;
 }
 
 function category(node: ts.Node): string {
@@ -61,12 +61,12 @@ function compact(parts: string[], style: "identifier" | "path"): string {
   return `\`${camel}\``;
 }
 
-function inflated(parts: string[]): string | undefined {
+function inflated(parts: string[]): string | null {
   const architectural = parts.filter(part => suffixes.has(part));
   if (architectural.length >= 3) return `${architectural.length} stacked generic architecture suffixes (${architectural.join(", ")})`;
   const fillers = [...new Set(parts.filter(part => filler.has(part)))];
   if (parts.length >= 5 && fillers.length >= 2) return `filler words (${fillers.join(", ")})`;
-  return undefined;
+  return null;
 }
 
 function overlong(name: string, parts: string[]): boolean {
