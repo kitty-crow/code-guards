@@ -2,6 +2,7 @@ import ts from "typescript";
 import { location, type Finding } from "../model.ts";
 import type { EmitIssue } from "./issue.ts";
 import type { Project } from "../project.ts";
+import { deterministicTypes } from "./types.ts";
 
 // High-confidence compiler-backed candidates. They are warnings, never automatic edits.
 type Report = EmitIssue;
@@ -138,9 +139,6 @@ function checkAssertions(node: ts.Node, report: Report): void {
   if (ts.isNonNullExpression(node)) {
     report({guard: "type-assertions", code: "CG305", node: node, message: "Non-null assertion bypasses a type check", reason: `The expression ${node.getText().slice(0, 70)} asserts away possible null or undefined.`, suggestion: "Check the value with a guard clause or use a type-safe API that guarantees its presence."});
   }
-  if (ts.isAsExpression(node) && node.type.kind === ts.SyntaxKind.AnyKeyword) {
-    report({guard: "type-assertions", code: "CG305", node: node, message: "Cast to any suppresses TypeScript checking", reason: "The cast hides potentially incompatible operations from the compiler.", suggestion: "Use a narrow interface, a type guard or unknown with explicit validation instead of any."});
-  }
 }
 
 function checkSwitch(node: ts.Node, project: Project, report: Report): void {
@@ -232,6 +230,7 @@ export function codeHealth(project: Project, includeTests = false): Finding[] {
       if (isTest) checkTest(node, report);
     });
   }
+  deterministicTypes(project, includeTests, report);
   // Test quality remains enabled for tests even if general code-quality excludes tests.
   if (!includeTests) for (const file of testFiles(project)) visitAll(file, node => checkTest(node, report));
   return findings;

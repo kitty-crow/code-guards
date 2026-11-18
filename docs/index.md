@@ -15,6 +15,7 @@ Code Guards runs locally; the source entry point is `src/cli.ts`. These pages de
 
 - [Shared guard emitter](modules/guards/issue.md)
 - [Compiler-backed local code health](modules/guards/code-health.md)
+- [Deterministic type contracts](modules/guards/types.md)
 - [Cross-module conventions and configuration](modules/guards/cross-module.md)
 - [Documentation coverage and accuracy checks](modules/guards/documentation.md)
 - [Excessively long or enterprise-style names](modules/guards/enterprise-looking-naming.md)

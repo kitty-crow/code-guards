@@ -1,0 +1,93 @@
+import ts from "typescript";
+import type { Project } from "../project.ts";
+import type { EmitIssue } from "./issue.ts";
+
+const forbidden = ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Undefined;
+const tests = /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/;
+
+function argumentsOf(type: ts.Type, checker: ts.TypeChecker): readonly ts.Type[] {
+  if (type.isUnionOrIntersection()) return type.types;
+  if (type.flags & ts.TypeFlags.Object && (type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) {
+    return checker.getTypeArguments(type as ts.TypeReference);
+  }
+  return type.aliasTypeArguments ?? [];
+}
+
+function containsLoose(type: ts.Type, checker: ts.TypeChecker, seen = new Set<ts.Type>()): boolean {
+  if (type.flags & forbidden) return true;
+  if (seen.has(type)) return false;
+  seen.add(type);
+  return argumentsOf(type, checker).some(item => containsLoose(item, checker, seen));
+}
+
+function optional(node: ts.Node): boolean {
+  if (ts.isParameter(node) || ts.isPropertyDeclaration(node) || ts.isPropertySignature(node) ||
+      ts.isMethodDeclaration(node) || ts.isMethodSignature(node) || ts.isNamedTupleMember(node)) {
+    return Boolean(node.questionToken);
+  }
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isCallExpression(node)) {
+    return Boolean(node.questionDotToken);
+  }
+  return ts.isOptionalTypeNode(node);
+}
+
+function asserted(node: ts.Node): boolean {
+  return (ts.isPropertyDeclaration(node) || ts.isVariableDeclaration(node)) && Boolean(node.exclamationToken);
+}
+
+function valueSite(node: ts.Node): boolean {
+  return ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isParameter(node) ||
+    ts.isPropertyDeclaration(node) || ts.isPropertySignature(node) || ts.isPropertyAssignment(node) ||
+    ts.isShorthandPropertyAssignment(node) || ts.isCallExpression(node) || ts.isNewExpression(node) ||
+    ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isAwaitExpression(node) ||
+    ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isConditionalExpression(node) ||
+    ts.isBinaryExpression(node) || ts.isArrayLiteralExpression(node) || ts.isTypeReferenceNode(node) ||
+    ts.isIndexedAccessTypeNode(node) || ts.isTypeQueryNode(node) ||
+    (ts.isIdentifier(node) && node.text === "undefined");
+}
+
+function describe(node: ts.Node, checker: ts.TypeChecker): string {
+  switch (node.kind) {
+    case ts.SyntaxKind.AnyKeyword: return "Explicit any type";
+    case ts.SyntaxKind.UnknownKeyword: return "Explicit unknown type";
+    case ts.SyntaxKind.UndefinedKeyword: return "Explicit undefined type";
+    case ts.SyntaxKind.VoidExpression: return "Expression produces undefined";
+  }
+  if (optional(node)) return "Optional declaration or chain permits undefined";
+  if (asserted(node)) return "Definite-assignment assertion bypasses initialisation checking";
+  if (ts.isFunctionLike(node)) {
+    const signature = checker.getSignatureFromDeclaration(node);
+    if (!signature) return "";
+    const result = checker.getReturnTypeOfSignature(signature);
+    return containsLoose(result, checker) ? "Return type is not deterministic: " + checker.typeToString(result) : "";
+  }
+  if (!valueSite(node)) return "";
+  if (ts.isTypeReferenceNode(node) && node.typeName.getText() === "const") return "";
+  const type = checker.getTypeAtLocation(node);
+  return containsLoose(type, checker) ? "Value or type is not deterministic: " + checker.typeToString(type) : "";
+}
+
+function checkTree(node: ts.Node, checker: ts.TypeChecker, report: EmitIssue): void {
+  const message = describe(node, checker);
+  if (message) report({
+    guard: "type-assertions", code: "CG305", node, message,
+    reason: "Any, unknown and undefined leave the value without a fully specified type or presence contract.",
+    suggestion: "Use a concrete type, checked access, an explicit null alternative or a discriminated union. Validate external data at its boundary without asserting away its type."
+  });
+  ts.forEachChild(node, child => checkTree(child, checker, report));
+}
+
+/** Check type contracts with strict null and indexed-access analysis, without changing the target configuration. */
+export function deterministicTypes(project: Project, includeTests: boolean, report: EmitIssue): void {
+  const options = project.program.getCompilerOptions();
+  const program = ts.createProgram({
+    rootNames: project.program.getRootFileNames(),
+    options: { ...options, strictNullChecks: true, noUncheckedIndexedAccess: true, noImplicitAny: true, useUnknownInCatchVariables: true }
+  });
+  const checker = program.getTypeChecker();
+  for (const file of project.files) {
+    if (!includeTests && tests.test(file.fileName)) continue;
+    const source = program.getSourceFile(file.fileName);
+    if (source) checkTree(source, checker, report);
+  }
+}
