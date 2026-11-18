@@ -7,7 +7,7 @@ import { renderFindings, type Format, type ColourMode } from "./diagnostics.ts";
 
 type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean };
 
-function checkGuard(value: string | undefined): GuardName {
+function checkGuard(value: string | null): GuardName {
   if (!guards.some(name => name === value)) usage();
   return value as GuardName;
 }
@@ -36,7 +36,7 @@ export function options(argv: string[]): Options {
   let offline = false;
   let selected = false;
   for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
+    const arg = argv[i] ?? usage();
     if (arg === "--project" || arg === "--path") {
       project = readTarget(argv, i, targetSelected);
       i += 1;
@@ -44,18 +44,18 @@ export function options(argv: string[]): Options {
       continue;
     }
     if (arg === "--format") {
-      const next = argv[++i];
+      const next = argv[++i] ?? usage();
       format = next === "text" || next === "json" || next === "github" ? next : usage();
       continue;
     }
     if (arg === "--colour" || arg === "--color") {
-      const next = argv[++i];
+      const next = argv[++i] ?? usage();
       colour = next === "auto" || next === "always" || next === "never" ? next : usage();
       continue;
     }
     if (arg === "--no-colour" || arg === "--no-color") { colour = "never"; continue; }
     if (arg === "--disable") {
-      const next = argv[++i];
+      const next = argv[++i] ?? usage();
       enabled.delete(checkGuard(next));
       continue;
     }
@@ -88,7 +88,8 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 // Test imports must not invoke the CLI; symlinks created by npm are executable.
-const entryPoint = process.argv[1] ? realpathSync(process.argv[1]) : "";
+const entry = process.argv[1] ?? "";
+const entryPoint = entry ? realpathSync(entry) : "";
 if (entryPoint === fileURLToPath(import.meta.url)) {
   process.exitCode = await run(process.argv.slice(2));
 }

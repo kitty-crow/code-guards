@@ -7,6 +7,10 @@ and an issue emitter. It reports CG305 for explicit or inferred `any`,
 `unknown` and `undefined`, including union constituents, generic type
 arguments, optional declarations, optional chains and assignment assertions.
 It checks declaration and expression types and function return signatures.
+A direct nullish fallback must eliminate the unresolved type before the
+value is stored or returned. Explicit undefined values, loose type arguments
+and optional declarations remain findings. Assignment targets and discarded
+void-compatible results do not constitute reads of unresolved values.
 
 The analysis enables strict null checks, unchecked-index reporting,
 implicit-any detection and unknown catch-variable semantics in a separate

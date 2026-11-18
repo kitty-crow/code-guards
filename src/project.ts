@@ -29,7 +29,8 @@ function createProject(root: string, names: string[], options: ts.CompilerOption
 
 function configuredProject(filename: string): Project {
   const config = ts.readConfigFile(filename, ts.sys.readFile);
-  if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
+  const error = config.error ?? null;
+  if (error) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, "\n"));
   const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, path.dirname(filename), {
     noEmit: true
   }, filename);
@@ -43,7 +44,7 @@ function configuredProject(filename: string): Project {
   return createProject(path.dirname(filename), parsed.fileNames, parsed.options);
 }
 
-function inferredProject(root: string, explicit?: string): Project {
+function inferredProject(root: string, explicit: string | null = null): Project {
   const names = explicit ? [explicit] : ts.sys.readDirectory(
     root, [".ts", ".tsx", ".mts", ".cts"], excludedDirectories, ["**/*"]
   ).filter(name => !/\.d\.[cm]?ts$/.test(name));

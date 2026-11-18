@@ -13,26 +13,25 @@ function argumentsOf(type: ts.Type, checker: ts.TypeChecker): readonly ts.Type[]
   return type.aliasTypeArguments ?? [];
 }
 
-function containsLoose(type: ts.Type, checker: ts.TypeChecker, seen = new Set<ts.Type>()): boolean {
-  if (type.flags & forbidden) return true;
-  if (seen.has(type)) return false;
+function looseFlags(type: ts.Type, checker: ts.TypeChecker, seen = new Set<ts.Type>()): number {
+  if (seen.has(type)) return 0;
   seen.add(type);
-  return argumentsOf(type, checker).some(item => containsLoose(item, checker, seen));
+  return argumentsOf(type, checker).reduce((flags, item) => flags | looseFlags(item, checker, seen), type.flags & forbidden);
 }
 
 function optional(node: ts.Node): boolean {
   if (ts.isParameter(node) || ts.isPropertyDeclaration(node) || ts.isPropertySignature(node) ||
       ts.isMethodDeclaration(node) || ts.isMethodSignature(node) || ts.isNamedTupleMember(node)) {
-    return Boolean(node.questionToken);
+    return Boolean(node.questionToken ?? null);
   }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isCallExpression(node)) {
-    return Boolean(node.questionDotToken);
+    return Boolean(node.questionDotToken ?? null);
   }
   return ts.isOptionalTypeNode(node);
 }
 
 function asserted(node: ts.Node): boolean {
-  return (ts.isPropertyDeclaration(node) || ts.isVariableDeclaration(node)) && Boolean(node.exclamationToken);
+  return (ts.isPropertyDeclaration(node) || ts.isVariableDeclaration(node)) && Boolean(node.exclamationToken ?? null);
 }
 
 function valueSite(node: ts.Node): boolean {
@@ -46,6 +45,31 @@ function valueSite(node: ts.Node): boolean {
     (ts.isIdentifier(node) && node.text === "undefined");
 }
 
+function resultType(node: ts.SignatureDeclaration, checker: ts.TypeChecker): string {
+  const signature = checker.getSignatureFromDeclaration(node) ?? null;
+  if (!signature) return "";
+  const result = checker.getReturnTypeOfSignature(signature);
+  return looseFlags(result, checker) ? "Return type is not deterministic: " + checker.typeToString(result) : "";
+}
+
+// An unchecked API result may be normalised directly, without letting an
+// undefined value enter a declaration, argument or return contract.
+function normalised(node: ts.Node, type: ts.Type, checker: ts.TypeChecker, flags: number): boolean {
+  if (flags !== ts.TypeFlags.Undefined) return false;
+  const parent = node.parent;
+  if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && parent.left === node) {
+    return looseFlags(checker.getTypeAtLocation(parent), checker) === 0;
+  }
+  if (!ts.isExpressionStatement(parent)) return false;
+  const members = type.isUnion() ? type.types : [type];
+  return members.every(member => Boolean(member.flags & (ts.TypeFlags.Void | ts.TypeFlags.Undefined)));
+}
+
+function writeTarget(node: ts.Node): boolean {
+  const parent = node.parent;
+  return ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && parent.left === node;
+}
+
 function describe(node: ts.Node, checker: ts.TypeChecker): string {
   switch (node.kind) {
     case ts.SyntaxKind.AnyKeyword: return "Explicit any type";
@@ -55,16 +79,16 @@ function describe(node: ts.Node, checker: ts.TypeChecker): string {
   }
   if (optional(node)) return "Optional declaration or chain permits undefined";
   if (asserted(node)) return "Definite-assignment assertion bypasses initialisation checking";
-  if (ts.isFunctionLike(node)) {
-    const signature = checker.getSignatureFromDeclaration(node);
-    if (!signature) return "";
-    const result = checker.getReturnTypeOfSignature(signature);
-    return containsLoose(result, checker) ? "Return type is not deterministic: " + checker.typeToString(result) : "";
-  }
+  if (ts.isFunctionLike(node)) return resultType(node, checker);
   if (!valueSite(node)) return "";
   if (ts.isTypeReferenceNode(node) && node.typeName.getText() === "const") return "";
+  if (writeTarget(node)) return "";
+  if (ts.isVariableDeclaration(node) && !ts.isIdentifier(node.name) && !(node.type ?? null)) return "";
   const type = checker.getTypeAtLocation(node);
-  return containsLoose(type, checker) ? "Value or type is not deterministic: " + checker.typeToString(type) : "";
+  const flags = looseFlags(type, checker);
+  if (ts.isIdentifier(node) && node.text === "undefined" && flags) return "Explicit undefined value";
+  if (!flags || normalised(node, type, checker, flags)) return "";
+  return "Value or type is not deterministic: " + checker.typeToString(type);
 }
 
 function checkTree(node: ts.Node, checker: ts.TypeChecker, report: EmitIssue): void {
@@ -87,7 +111,7 @@ export function deterministicTypes(project: Project, includeTests: boolean, repo
   const checker = program.getTypeChecker();
   for (const file of project.files) {
     if (!includeTests && tests.test(file.fileName)) continue;
-    const source = program.getSourceFile(file.fileName);
+    const source = program.getSourceFile(file.fileName) ?? null;
     if (source) checkTree(source, checker, report);
   }
 }

@@ -33,6 +33,8 @@ test("CG305 catches forbidden explicit and inferred types", () => {
     "function pick(value?: string): string { return value ?? ''; }",
     "const value = undefined;",
     "const value = void 0;",
+    "const value = undefined ?? 1;",
+    "const value = JSON.parse('{}') ?? 1;",
     "const value = JSON.parse('{}');",
     "function parse() { return JSON.parse('{}'); }",
     "async function parse() { return JSON.parse('{}'); }",
@@ -64,6 +66,8 @@ test("CG305 accepts concrete and explicitly nullable contracts", () => {
     const present = tuple[0];
     function identity<T>(value: T): T { return value; }
     const number = identity(3);
+    const missing = new Map<string, number>().get('x') ?? null;
+    const indexed = [1, 2][5] ?? 0;
   `;
   assert.deepEqual(findings(source), []);
 });
