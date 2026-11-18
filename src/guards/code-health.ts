@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
 import type { EmitIssue } from "./issue.ts";
@@ -243,5 +244,5 @@ export function codeHealth(project: Project, includeTests = false): Finding[] {
   deterministicTypes(project, includeTests, report);
   // Test quality remains enabled for tests even if general code-quality excludes tests.
   if (!includeTests) for (const file of testFiles(project)) visitAll(file, node => checkTest(node, report));
-  return findings;
+  return withoutIgnored(project.root, findings);
 }

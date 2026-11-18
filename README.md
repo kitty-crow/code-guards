@@ -53,6 +53,18 @@ bun run guards:bun --path ../tracker-viewer --disable documentation
 | `--include-tests` | Include test files in type/function analysis |
 | `--offline` | Use cached model weights only |
 
+## Line-level exceptions
+
+Place `//@cg-ignore` on a line by itself immediately before a line that requires an exception. It suppresses all Code Guards findings whose primary reported location is the next physical line, including in strict mode and for direct guard API calls. It does not suppress later lines of a function, related locations, or TypeScript compiler errors. A blank line between the comment and the target consumes the exception.
+
+```ts
+// Fixed external ABI: six scalar inputs and a memory handle.
+//@cg-ignore
+export function externalAbi(memory: number, a: number, b: number, c: number, d: number, e: number, f: number): number {
+  return memory + a + b + c + d + e + f;
+}
+```
+
 ## Reproducible coverage demonstrations
 
 `bun run demo:coverage:bun` prints **one formatted warning for each active code** using deliberate faults in `examples/coverage/codebase` and `examples/coverage/documentation`. `bun run demo:coverage:bun --code CG413` focuses on a single rule. `bun run demo:coverage:bun --strict` prints the same warnings and exits 1; `--json` returns machine-readable diagnostics. Node users can run `npm run demo:coverage` or `node dist/examples/coverage/run.mjs` after building the project. The test suite verifies that every code listed in the table below appears in the demonstration.

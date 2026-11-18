@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
@@ -290,7 +291,7 @@ export async function typeReuse(project: Project, includeTests = false, score: S
     const finding = await compareDefinitions(project, a, b, score);
     if (finding) findings.push(finding);
   }
-  return findings.sort((a, b) =>
+  return withoutIgnored(project.root, findings).sort((a, b) =>
     a.location.file.localeCompare(b.location.file) || a.location.line - b.location.line || a.code.localeCompare(b.code)
   );
 }

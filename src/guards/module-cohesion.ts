@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import path from "node:path";
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
@@ -176,5 +177,5 @@ export async function moduleCohesion(
       break;
     }
   }
-  return findings;
+  return withoutIgnored(project.root, findings);
 }

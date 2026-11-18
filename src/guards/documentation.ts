@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -406,5 +407,5 @@ export async function documentation(project: Project, score: SemanticScorer = ze
       reason: "There is no clear invocation showing how to install, run, build or test the project.",
       suggestion: "Include an actual command from package.json and explain what it does and what output to expect."});
   }
-  return findings;
+  return withoutIgnored(project.root, findings);
 }

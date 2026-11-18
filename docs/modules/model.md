@@ -7,3 +7,5 @@ Source: [`src/model.ts`](../../src/model.ts)
 ## Behaviour and boundaries
 
 A finding includes a `subject`, `reason` and `suggestion`. The guard can attach an excerpt span, a related location or a similarity score. Use a property-presence check before reading these fields.
+
+`withoutIgnored(root, findings)` filters primary locations by the exact next-line `//@cg-ignore` directive. Each guard applies this filter before returning results. The helper reads each affected file once per invocation, handles LF and CRLF, and retains findings when the reported file cannot be read. Related locations and compiler diagnostics are unchanged.

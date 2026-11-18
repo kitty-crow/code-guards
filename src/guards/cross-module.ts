@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
@@ -82,5 +83,5 @@ export function crossModule(project: Project): Finding[] {
   };
   inspectConstants(project, add);
   inspectConventions(project, add);
-  return findings;
+  return withoutIgnored(project.root, findings);
 }

@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
 import type { Project } from "../project.ts";
@@ -91,5 +92,5 @@ export function noNestedIf(project: Project): Finding[] {
     };
     visit(file, 0);
   }
-  return findings;
+  return withoutIgnored(project.root, findings);
 }

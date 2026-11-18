@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
 import type { Project } from "../project.ts";
@@ -211,5 +212,5 @@ export function reviewPractices(project: Project, includeTests = false): Finding
       if (testPath.test(file.fileName)) weakTest(node, add);
     });
   }
-  return results;
+  return withoutIgnored(project.root, results);
 }

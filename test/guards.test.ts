@@ -10,6 +10,7 @@ import { options } from "../src/cli.ts";
 import { loadProject } from "../src/project.ts";
 import { supportsReuse, type SemanticScorer } from "../src/semantic.ts";
 import { guards } from "../src/model.ts";
+import { codeHealth } from "../src/guards/code-health.ts";
 import { writeFixture } from "./fixture.ts";
 
 const temporary: string[] = [];
@@ -189,4 +190,29 @@ test("documentation commands use the nearest package manifest", async () => {
     ["vendor/tool/docs/use.md", "npm run build"],
     ["vendor/tool/docs/use.md", "npm run missing"]
   ]);
+});
+
+test("line exceptions apply to direct guard calls without suppressing the body", () => {
+  const marker = "//" + "@cg-ignore";
+  const signature = "export function abi(a: number, b: number, c: number, d: number, e: number, f: number, g: number): number {";
+  const sample = project({ "abi.ts": [
+    marker, signature, "  if (a) {", "    if (b) return a;", "  }",
+    "  return a + b + c + d + e + f + g;", "}",
+    "", signature.replace("abi(", "ordinary("), "  return a + b + c + d + e + f + g;", "}"
+  ].join("\r\n") });
+  const contracts = codeHealth(sample, true).filter(item => item.code === "CG312");
+  assert.deepEqual(contracts.map(item => item.location.line), [9]);
+  assert.deepEqual(noNestedIf(sample).map(item => item.location.line), [4]);
+});
+
+test("line exceptions do not cross a blank line or match inline comments", () => {
+  const marker = "//" + "@cg-ignore";
+  const sample = project({ "one.ts": [
+    "export function nested(a: boolean, b: boolean): number {",
+    "  if (a) {", "    " + marker, "    if (b) return 1;",
+    "    " + marker, "", "    if (b) return 2;",
+    "    const n = 3; " + marker, "    if (b) return n;",
+    "  }", "  return 0;", "}"
+  ].join("\n") });
+  assert.deepEqual(noNestedIf(sample).map(item => item.location.line), [7, 9]);
 });

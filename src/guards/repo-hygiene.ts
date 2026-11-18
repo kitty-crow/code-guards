@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { Finding } from "../model.ts";
@@ -10,11 +11,11 @@ export function repoHygiene(root: string): Finding[] {
     findings.push({guard: "repo-hygiene", severity: "warning", code, message, location: {file, line, column: 1}, subject, span: Math.min(subject.length, 100), reason, suggestion});
   };
   const file = path.join(root, "package.json");
-  if (!existsSync(file)) return findings;
+  if (!existsSync(file)) return withoutIgnored(root, findings);
   const text = readFileSync(file, "utf8");
   let scripts: Record<string, string>;
   try { scripts = readScripts(text, file); }
-  catch { return findings; }
+  catch { return withoutIgnored(root, findings); }
   const entries = Object.entries(scripts);
   for (const [i, [name, value]] of entries.entries()) {
     if (!/(?:test|ci|check)/i.test(name)) continue;
@@ -39,7 +40,7 @@ export function repoHygiene(root: string): Finding[] {
     add({code: "CG503", file: "package.json", line: 1, message: "Bun may execute compiled tests twice", subject: "bun test", reason: "The project emits compiled tests under dist/ and does not restrict Bun test discovery. Both source and compiled tests may execute.", suggestion: 'Set [test] root = "test" in bunfig.toml or exclude dist/ from test discovery.'});
   }
   const workflowDir = path.join(root, ".github", "workflows");
-  if (!existsSync(workflowDir)) return findings;
+  if (!existsSync(workflowDir)) return withoutIgnored(root, findings);
   const workflows = readdirSync(workflowDir).filter(x => /\.ya?ml$/i.test(x));
   const signatures = new Map<string, string>();
   for (const workflow of workflows) {
@@ -53,5 +54,5 @@ export function repoHygiene(root: string): Finding[] {
       add({code: "CG504", file: `.github/workflows/${workflow}`, line: content.slice(0, pos).split("\n").length, message: "Same CI command runs in multiple workflows", subject: command, reason: `${workflow} and ${prior} both execute ${command}, potentially duplicating hosted work.`, suggestion: "Decide whether both triggers are necessary; reuse one job or run the check locally where appropriate."});
     }
   }
-  return findings;
+  return withoutIgnored(root, findings);
 }

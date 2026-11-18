@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import path from "node:path";
 import ts from "typescript";
 import { location, type Finding, type Location } from "../model.ts";
@@ -124,5 +125,5 @@ export function enterpriseLookingNaming(project: Project, includeTests = false):
     };
     visit(file);
   }
-  return findings;
+  return withoutIgnored(project.root, findings);
 }

@@ -1,3 +1,4 @@
+import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
@@ -205,5 +206,5 @@ export async function functionQuality(project: Project, includeTests = false, sc
   };
   for (const info of functions) await reviewFunction(info, score, emit);
   await reviewSimilarFunctions(functions, score, emit);
-  return findings;
+  return withoutIgnored(project.root, findings);
 }

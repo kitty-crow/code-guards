@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 
@@ -38,4 +39,26 @@ export function location(root: string, node: ts.Node): Location {
     line: position.line + 1,
     column: position.character + 1
   };
+}
+
+function ignoredLines(root: string, file: string): Set<number> {
+  const lines = new Set<number>();
+  let source: string;
+  try { source = readFileSync(path.resolve(root, file), "utf8"); }
+  catch { return lines; }
+  for (const [index, line] of source.split(/\r\n|\n|\r/).entries()) {
+    if (/^\s*\/\/@cg-ignore\s*$/.test(line)) lines.add(index + 2);
+  }
+  return lines;
+}
+
+/** Suppress diagnostics whose primary location is exactly one line after a directive. */
+export function withoutIgnored(root: string, findings: Finding[]): Finding[] {
+  const cache = new Map<string, Set<number>>();
+  return findings.filter(finding => {
+    const { file, line } = finding.location;
+    const ignored = cache.get(file) ?? ignoredLines(root, file);
+    cache.set(file, ignored);
+    return !ignored.has(line);
+  });
 }
