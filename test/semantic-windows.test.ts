@@ -8,28 +8,24 @@ function fakeRuntime(assess: (window: string) => { same: number; different: numb
   const dictionary = new Map<string, number>();
   const reverse = new Map<number, string>();
   const tokenize = (text: string): string[] => text.trim().split(/\s+/).filter(Boolean);
-  const tokenizer = {
-    encode(text: string, _options: { add_special_tokens: false }): number[] {
-      return tokenize(text).map(word => {
-        let id = dictionary.get(word);
-        if (id !== undefined) return id;
-        id = dictionary.size + 1;
-        dictionary.set(word, id);
-        reverse.set(id, word);
-        return id;
-      });
-    },
-    decode(ids: number[], _options: { skip_special_tokens: true }): string {
-      return ids.map(id => reverse.get(id)).join(" ");
-    }
+  const tokenizer: Runtime["tokenizer"] = {
+    encode: text => tokenize(text).map(word => {
+      const known = dictionary.get(word) ?? null;
+      if (known !== null) return known;
+      const id = dictionary.size + 1;
+      dictionary.set(word, id);
+      reverse.set(id, word);
+      return id;
+    }),
+    decode: ids => ids.map(id => reverse.get(id) ?? "").join(" ")
   };
   const calls: string[] = [];
-  const classify = Object.assign(async (premise: string, labels: string[]) => {
+  const classify: Runtime = Object.assign(async (premise: string, labels: string[]) => {
     calls.push(premise);
     const verdict = assess(premise);
     return { labels, scores: [verdict.same, verdict.different] };
   }, { tokenizer });
-  return { classify: classify as Runtime, tokenizer, calls };
+  return { classify, tokenizer, calls };
 }
 
 const question = (premise: string): SemanticQuestion => ({
@@ -40,11 +36,11 @@ const question = (premise: string): SemanticQuestion => ({
 
 test("695-token premise is split into overlapping windows within the full model token budget", async () => {
   const runtime = fakeRuntime(() => ({ same: 0.88, different: 0.02 }));
-  const premise = Array.from({ length: 695 }, (_, index) => `word${index}`).join(" ");
+  const premise = Array.from(Array<number>(695).keys(), index => `word${index}`).join(" ");
   const windows = premiseWindows(question(premise), runtime.tokenizer);
   assert.ok(windows.length >= 2);
-  assert.equal(windows[0]?.includes("word0"), true);
-  assert.equal(windows.at(-1)?.includes("word694"), true);
+  assert.match(windows[0] ?? "", /word0/);
+  assert.match(windows.at(-1) ?? "", /word694/);
   const covered = new Set(windows.join(" ").split(/\s+/));
   assert.equal(covered.size, 695, "no premise tokens may disappear");
   for (const window of windows) {
@@ -52,7 +48,7 @@ test("695-token premise is split into overlapping windows within the full model 
     assert.ok(runtime.tokenizer.encode(window, { add_special_tokens: false }).length + labelTokens + 3 <= MAX_MODEL_TOKENS);
   }
   const verdict = await assessWindows(question(premise), runtime.classify);
-  assert.equal(verdict.evidence?.windows, windows.length);
+  assert.equal(verdict.evidence.windows, windows.length);
   assert.equal(runtime.calls.length, windows.length);
 });
 
@@ -60,16 +56,16 @@ test("short premises are evaluated once without modifying their content", async 
   const runtime = fakeRuntime(() => ({ same: 0.91, different: 0.01 }));
   const verdict = await assessWindows(question("Two interfaces describe a client record."), runtime.classify);
   assert.deepEqual(runtime.calls, ["Two interfaces describe a client record."]);
-  assert.equal(verdict.evidence?.windows, 1);
+  assert.equal(verdict.evidence.windows, 1);
   assert.ok(supportsReuse(verdict));
 });
 
 test("contradictory evidence in another window prevents an unsupported reuse warning", async () => {
   const runtime = fakeRuntime(text => text.includes("counterexample") ?
     { same: 0.03, different: 0.96 } : { same: 0.93, different: 0.04 });
-  const premise = [...Array.from({ length: 620 }, (_, i) => `evidence${i}`), "counterexample"].join(" ");
+  const premise = [...Array.from(Array<number>(620).keys(), i => `evidence${i}`), "counterexample"].join(" ");
   const verdict = await assessWindows(question(premise), runtime.classify);
-  assert.ok(verdict.evidence && verdict.evidence.windows > 1);
+  assert.ok(verdict.evidence.windows > 1);
   assert.ok(verdict.sameConcept > 0.9);
   assert.ok(verdict.differentConcept > 0.9);
   assert.equal(supportsReuse(verdict), false);

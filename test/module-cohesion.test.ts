@@ -1,11 +1,10 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { rmSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { loadProject } from "../src/project.ts";
 import { moduleCohesion } from "../src/guards/module-cohesion.ts";
 import type { SemanticScorer } from "../src/semantic.ts";
+import { writeFixture } from "./fixture.ts";
 
 const folders: string[] = [];
 afterEach(() => {
@@ -13,20 +12,12 @@ afterEach(() => {
 });
 
 function fixture(sources: Record<string, string>) {
-  const root = mkdtempSync(path.join(os.tmpdir(), "module-cohesion-"));
-  folders.push(root);
-  const files = {
+  return loadProject(writeFixture({
     "tsconfig.json": JSON.stringify({
       compilerOptions: {strict: true, noEmit: true}, include: ["src/**/*.ts", "test/**/*.ts"]
     }),
     ...sources
-  };
-  for (const [filename, content] of Object.entries(files)) {
-    const dest = path.join(root, filename);
-    mkdirSync(path.dirname(dest), {recursive: true});
-    writeFileSync(dest, content);
-  }
-  return loadProject(root);
+  }, folders, "module-cohesion-"));
 }
 
 const endorse: SemanticScorer = async () => ({sameConcept: 0.96, differentConcept: 0.05});
@@ -53,20 +44,21 @@ test("CG206 uses semantic evidence to identify unrelated module responsibilities
   };
   const found = await moduleCohesion(project, false, scorer);
   assert.equal(found.length, 1);
-  assert.equal(found[0]?.code, "CG206");
-  assert.equal(found[0]?.location.file, "src/utility.ts");
-  assert.ok(found[0]?.related);
-  assert.match(found[0]?.reason ?? "", /parseRecords/);
-  assert.match(found[0]?.reason ?? "", /dispatchAlerts/);
-  assert.match(found[0]?.suggestion ?? "", /Proposed responsibility breakout/);
-  assert.match(found[0]?.suggestion ?? "", /module focused on parse records/);
-  assert.match(found[0]?.suggestion ?? "", /module focused on dispatch alerts/);
+  const finding = found[0] ?? null;
+  assert.ok(finding && "related" in finding);
+  assert.equal(finding.code, "CG206");
+  assert.equal(finding.location.file, "src/utility.ts");
+  assert.match(finding.reason, /parseRecords/);
+  assert.match(finding.reason, /dispatchAlerts/);
+  assert.match(finding.suggestion, /Proposed responsibility breakout/);
+  assert.match(finding.suggestion, /module focused on parse records/);
+  assert.match(finding.suggestion, /module focused on dispatch alerts/);
   assert.ok(questions.some(question => question.startsWith("TypeScript module")));
   assert.ok(questions.some(question => question.startsWith("Two implementations")));
 });
 
 test("CG206 does not treat a long cohesive implementation as a monolith", async () => {
-  const helpers = Array.from({length: 80}, (_, i) =>
+  const helpers = Array.from(Array<number>(80).keys(), i =>
     `export function transformPart${i}(input: string): string {\n  return input.trim().replace(/\\s+/g, " ");\n}`
   );
   const project = fixture({"src/converter.ts": helpers.join("\n")});
@@ -117,8 +109,10 @@ test("CG206 excludes tests unless requested and supports class-based responsibil
   assert.deepEqual(await moduleCohesion(project, false, noScoring), []);
   const found = await moduleCohesion(project, true, endorse);
   assert.equal(found.length, 1);
-  assert.match(found[0]?.suggestion ?? "", /InputProcessor/);
-  assert.match(found[0]?.suggestion ?? "", /EmailSender/);
+  const finding = found[0] ?? null;
+  assert.ok(finding);
+  assert.match(finding.suggestion, /InputProcessor/);
+  assert.match(finding.suggestion, /EmailSender/);
 });
 
 
@@ -140,15 +134,17 @@ test("CG206 inspects top-level script operations without requiring exported func
   };
   const found = await moduleCohesion(project, false, scorer);
   assert.equal(found.length, 1);
-  assert.match(found[0]?.suggestion ?? "", /initialisation of records/);
-  assert.match(found[0]?.suggestion ?? "", /initialisation of digest/);
+  const finding = found[0] ?? null;
+  assert.ok(finding);
+  assert.match(finding.suggestion, /initialisation of records/);
+  assert.match(finding.suggestion, /initialisation of digest/);
   assert.ok(seen.some(item => item.startsWith("TypeScript module")));
   assert.ok(seen.some(item => item.startsWith("Two implementations") && item.includes("initialisation of records") && item.includes("initialisation of digest")));
 });
 
 
 test("CG206 represents operations across the entire file rather than only the opening", async () => {
-  const helpers = Array.from({length: 26}, (_, i) =>
+  const helpers = Array.from(Array<number>(26).keys(), i =>
     `export function dataStep${i}(value: string): string { return value.trim(); }`
   );
   const project = fixture({"src/pipeline.ts": [

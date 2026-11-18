@@ -9,6 +9,7 @@ import { typeReuse } from "../../src/guards/type-reuse.ts";
 import { functionQuality } from "../../src/guards/function-quality.ts";
 import { loadProject } from "../../src/project.ts";
 import type { SemanticScorer } from "../../src/semantic.ts";
+import { readScripts } from "../../src/scripts.ts";
 
 const violations = path.resolve("examples/violations/tsconfig.json");
 const semantic = path.resolve("examples/semantic/tsconfig.json");
@@ -63,8 +64,9 @@ test("real CLI process prints diagnostic codes and returns distinct exit codes",
 });
 
 test("all demo and guard scripts rebuild the CLI before executing dist", () => {
-  const packageFile = JSON.parse(readFileSync(path.resolve("package.json"), "utf8")) as { scripts: Record<string, string> };
-  for (const [name, command] of Object.entries(packageFile.scripts)) {
+  const manifest = path.resolve("package.json");
+  const scripts = readScripts(readFileSync(manifest, "utf8"), manifest);
+  for (const [name, command] of Object.entries(scripts)) {
     if (!name.startsWith("demo") && !name.startsWith("guards")) continue;
     assert.ok(command.startsWith("tsc -p tsconfig.build.json && "), `${name} must compile the current CLI`);
     assert.match(command, /dist\/src\/cli\.js|(?:dist\/)?examples\/coverage\/(?:run|check-model)\.(?:mts|mjs)/, `${name} should invoke the compiled CLI or compiled showcase runner`);

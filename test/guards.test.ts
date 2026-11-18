@@ -1,6 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import os from "node:os";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
 import { documentation } from "../src/guards/documentation.ts";
@@ -11,20 +10,16 @@ import { options } from "../src/cli.ts";
 import { loadProject } from "../src/project.ts";
 import { supportsReuse, type SemanticScorer } from "../src/semantic.ts";
 import { guards } from "../src/model.ts";
+import { writeFixture } from "./fixture.ts";
 
 const temporary: string[] = [];
 afterEach(() => { for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 function project(files: Record<string, string>) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "code-guards-"));
-  temporary.push(dir);
-  for (const [filename, content] of Object.entries(files)) {
-    const destination = path.join(dir, filename);
-    mkdirSync(path.dirname(destination), { recursive: true });
-    writeFileSync(destination, content);
-  }
-  writeFileSync(path.join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["**/*.ts"] }));
-  return loadProject(path.join(dir, "tsconfig.json"));
+  return loadProject(writeFixture({
+    ...files,
+    "tsconfig.json": JSON.stringify({compilerOptions: {strict: true, noEmit: true}, include: ["**/*.ts"]})
+  }, temporary, "code-guards-"));
 }
 
 const endorse: SemanticScorer = async () => ({ sameConcept: 0.96, differentConcept: 0.05 });
@@ -41,8 +36,10 @@ test("nested if and else-if produce advisory warnings with actionable guidance",
   const result = noNestedIf(sample);
   assert.equal(result.length, 2);
   assert.ok(result.every(finding => finding.code === "CG001" && finding.severity === "warning"));
-  assert.match(result[0]?.suggestion ?? "", /else branch remains reachable/i);
-  assert.match(result[1]?.reason ?? "", /mutually exclusive/i);
+  const [nested = null, chained = null] = result;
+  assert.ok(nested && chained);
+  assert.match(nested.suggestion, /else branch remains reachable/i);
+  assert.match(chained.reason, /mutually exclusive/i);
 });
 
 test("a nested function resets control-flow nesting", () => {
@@ -59,8 +56,7 @@ test("matching types across files are reported without running NLP", async () =>
   });
   const forbidden: SemanticScorer = async () => { throw new Error("NLP should not run for identical shapes"); };
   const result = await typeReuse(sample, false, forbidden);
-  assert.equal(result.length, 1);
-  assert.equal(result[0]?.code, "CG101");
+  assert.deepEqual(result.map(item => item.code), ["CG101"]);
 });
 
 test("conceptual type reuse invokes zero-shot scorer", async () => {
@@ -78,8 +74,10 @@ test("conceptual type reuse invokes zero-shot scorer", async () => {
   const result = await typeReuse(sample, false, scorer);
   assert.equal(called, true);
   assert.equal(result.length, 1);
-  assert.equal(result[0]?.code, "CG103");
-  assert.equal(result[0]?.severity, "warning");
+  const finding = result[0] ?? null;
+  assert.ok(finding);
+  assert.equal(finding.code, "CG103");
+  assert.equal(finding.severity, "warning");
   assert.deepEqual(await typeReuse(sample, false, reject), []);
 });
 
@@ -125,7 +123,7 @@ test("different discriminant literal values are not structurally identical", asy
 });
 
 test("function quality flags a complex uncommented function when MNLI agrees", async () => {
-  const steps = Array.from({ length: 28 }, (_, i) => `if (i === ${i}) { i += 1; }`).join("\n");
+  const steps = Array.from(Array<number>(28).keys(), i => `if (i === ${i}) { i += 1; }`).join("\n");
   const sample = project({ "functions.ts": `export function confusing(i: number) {\n${steps}\nreturn i;\n}` });
   const result = await functionQuality(sample, false, endorse);
   assert.ok(result.some(f => f.code === "CG202"));

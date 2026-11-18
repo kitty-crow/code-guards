@@ -17,7 +17,7 @@ const root = process.cwd();
 const folder = path.join(root, "examples/coverage");
 const supportedCodes = [...new Set([...readFileSync(path.join(root, "README.md"), "utf8")
   .matchAll(/^\|\s*`(CG\d{3})`\s*\|/gm)]
-  .map(match => match[1]).filter((code): code is string => Boolean(code)))].sort();
+  .map(match => match[1] ?? "").filter(Boolean))].sort();
 const simulatedScore: SemanticScorer = async () => ({sameConcept: 0.96, differentConcept: 0.03});
 
 export async function collect(): Promise<{examples: Example[]; supportedCodes: string[]; missing: string[]}> {
@@ -54,7 +54,7 @@ async function showCoverage(): Promise<void> {
   const json = process.argv.includes("--json");
   const strict = process.argv.includes("--strict");
   const onlyAt = process.argv.indexOf("--code");
-  const only = onlyAt < 0 ? undefined : process.argv[onlyAt + 1];
+  const only = onlyAt < 0 ? "" : process.argv[onlyAt + 1] ?? "";
   const shown = only ? result.examples.filter(item => item.finding.code === only) : result.examples;
 
   if (json) {
@@ -75,5 +75,6 @@ async function showCoverage(): Promise<void> {
   process.exitCode = result.missing.length ? 2 : strict && shown.length ? 1 : 0;
 }
 
-const entrypoint = process.argv[1] ? path.resolve(process.argv[1]) : "";
+const entry = process.argv[1] ?? "";
+const entrypoint = entry ? path.resolve(entry) : "";
 if (entrypoint === fileURLToPath(import.meta.url)) await showCoverage();

@@ -3,7 +3,7 @@
 import { strict as assert } from "node:assert";
 import { zeroShot } from "../../src/semantic.ts";
 
-const premise = Array.from({length: 115}, (_, index) =>
+const premise = Array.from(Array<number>(115).keys(), index =>
   `Module ${index} handles project records and shares a reusable client type.`
 ).join(" ");
 const result = await zeroShot({
@@ -11,7 +11,7 @@ const result = await zeroShot({
   same: "these modules could share one representation of project clients",
   different: "the modules describe distinct concepts with different contracts"
 });
-const windows = result.evidence?.windows ?? 0;
+const windows = result.evidence.windows;
 assert.ok(windows > 1, "expected multiple token-bounded inference windows");
 assert.ok(Number.isFinite(result.sameConcept) && result.sameConcept >= 0 && result.sameConcept <= 1);
 assert.ok(Number.isFinite(result.differentConcept) && result.differentConcept >= 0 && result.differentConcept <= 1);

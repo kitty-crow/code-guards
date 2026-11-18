@@ -82,6 +82,10 @@ export async function run(argv: string[]): Promise<number> {
     console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
     return config.strict && findings.some(f => f.severity === "warning") ? 1 : 0;
   } catch (error) {
+    if (error == null) {
+      console.error(error === null ? "null" : "undefined");
+      return 2;
+    }
     console.error(error instanceof Error ? error.message : String(error));
     return 2;
   }

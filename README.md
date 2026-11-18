@@ -35,7 +35,7 @@ bun run guards:bun --path /home/javier/projects/my-app --format json
 bun run guards:bun no-nested-if --path ../tracker-viewer/src/main.ts
 ```
 
-`--path` accepts a directory, an individual `.ts`/`.tsx`/`.mts`/`.cts` file, or a `tsconfig*.json` file. A directory with `tsconfig.json` uses its compiler configuration; without one, Code Guards recursively discovers TypeScript source files while excluding `node_modules`, `.git`, `dist`, `build`, `coverage`, `.next`, `.cache` and `out`. No files are copied or written to the target repository.
+`--path` accepts a directory, an individual `.ts`/`.tsx`/`.mts`/`.cts` file, or a `tsconfig*.json` file. A directory with `tsconfig.json` uses its compiler configuration; without one, Code Guards recursively discovers TypeScript source files while excluding `node_modules`, `.git`, `dist`, `build`, `coverage`, `.next`, `.cache` and `out`. Scans are read-only.
 
 The existing `--project ../tracker-viewer/tsconfig.json` flag remains available for explicit TypeScript configurations. `--project` and `--path` cannot be used together. From any working directory you can instead call `bun /absolute/path/to/code-guards/dist/src/cli.js --path /absolute/path/to/project` after building the CLI. The model weights, if needed, are cached where Code Guards runs, not installed into the target project.
 

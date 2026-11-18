@@ -8,8 +8,11 @@ import { deterministicTypes } from "./types.ts";
 type Report = EmitIssue;
 const testPath = /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/;
 const isBooleanLiteral = (node: ts.Expression, value: boolean): boolean => node.kind === (value ? ts.SyntaxKind.TrueKeyword : ts.SyntaxKind.FalseKeyword);
-const bodyOf = (node: ts.Node): ts.ConciseBody | undefined => ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node) || ts.isConstructorDeclaration(node) ? node.body : undefined;
-const isFunction = (node: ts.Node): boolean => Boolean(bodyOf(node));
+function bodyOf(node: ts.Node): ts.ConciseBody | null {
+  if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isArrowFunction(node) ||
+      ts.isFunctionExpression(node) || ts.isConstructorDeclaration(node)) return node.body ?? null;
+  return null;
+}
 
 function visitAll(node: ts.Node, visit: (node: ts.Node) => void): void {
   visit(node);
@@ -38,14 +41,15 @@ function inspectFunction(node: ts.Node, project: Project, report: Report): void 
   const body = bodyOf(node);
   if (!body) return;
   const fn = node as ts.FunctionLikeDeclaration;
-  const name = ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) ? node.name?.getText() ?? "anonymous" : "function";
+  const named = ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node);
+  const fnName = named ? node.name ?? null : null;
+  const name = fnName ? fnName.getText() : named ? "anonymous" : "function";
   const parameters = fn.parameters;
   const booleans = parameters.filter(parameter => project.checker.getTypeAtLocation(parameter).flags & ts.TypeFlags.BooleanLike);
-  const optional = parameters.filter(parameter => Boolean(parameter.questionToken || parameter.initializer));
+  const optional = parameters.filter(parameter => Boolean((parameter.questionToken ?? null) || (parameter.initializer ?? null)));
   if (parameters.length >= 7 || booleans.length >= 3 || (parameters.length >= 5 && optional.length >= 3)) {
     report({guard: "function-contracts", code: "CG312", node: node, message: "Function contract has too many switches or arguments", reason: `${name} accepts ${parameters.length} parameters, including ${booleans.length} booleans and ${optional.length} optional/defaulted values. Positional calls may be difficult to interpret.`, suggestion: "Consider a named options object, distinct intent-specific entry points, or a smaller function. Preserve existing call contracts while migrating."});
   }
-  const fnName = ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) ? node.name : undefined;
   if (fnName && ts.isIdentifier(fnName) && /^(?:doStuff|handleThing|processData|foo|bar|util|helper|manager|temp|fn)$/i.test(fnName.text)) {
     report({guard: "naming", code: "CG310", node: fnName, message: "Uninformative function name", reason: `The name ${fnName.text} does not state the operation or the entity it affects.`, suggestion: `Rename ${fnName.text} to a verb and domain noun reflecting its observable behaviour, then update call sites.`});
   }
@@ -57,22 +61,24 @@ function inspectFunction(node: ts.Node, project: Project, report: Report): void 
   if (ts.isMethodDeclaration(node) && !/\b(?:this|super)\b/.test(body.getText()) && body.getText().split("\n").length >= 14 && calls.size >= 2) {
     report({guard: "responsibility", code: "CG307", node, message: "Method may not belong to this class", reason: `${name} spans ${body.getText().split("\n").length} lines, calls ${[...calls].slice(0, 5).join(", ")}, and never accesses this or super.`, suggestion: "Review whether a focused collaborator/module should own this operation. Keep it as a method if the class boundary is intentional."});
   }
-  const only = ts.isBlock(body) && body.statements.length === 1 ? body.statements[0] : undefined;
-  if (only && ts.isReturnStatement(only) && only.expression && ts.isCallExpression(only.expression) && ts.isMethodDeclaration(node) && !/\bthis\b/.test(body.getText())) {
+  const only = ts.isBlock(body) && body.statements.length === 1 ? body.statements[0] ?? null : null;
+  const returned = only && ts.isReturnStatement(only) ? only.expression ?? null : null;
+  if (returned && ts.isCallExpression(returned) && ts.isMethodDeclaration(node) && !/\bthis\b/.test(body.getText())) {
     report({guard: "overengineering", code: "CG308", node: node, message: "Method is only a forwarding wrapper", reason: `${name} immediately returns another function's result and does not access instance state.`, suggestion: "Consider using the called function directly or exporting a small helper. Keep the wrapper if it enforces a useful public API boundary."});
   }
 }
 
 function checkIf(stmt: ts.IfStatement, report: Report): void {
   const yes = stmt.thenStatement;
-  const no = stmt.elseStatement;
+  const no = stmt.elseStatement ?? null;
   if (!no || !ts.isBlock(yes) || !ts.isBlock(no)) return;
   if (yes.statements.length !== 1 || no.statements.length !== 1) return;
-  const first = yes.statements[0];
-  const second = no.statements[0];
+  const first = yes.statements[0] ?? null;
+  const second = no.statements[0] ?? null;
   if (!first || !second || !ts.isReturnStatement(first) || !ts.isReturnStatement(second)) return;
-  if (!first.expression || !second.expression) return;
-  if (!isBooleanLiteral(first.expression, true) || !isBooleanLiteral(second.expression, false)) return;
+  const positive = first.expression ?? null;
+  const negative = second.expression ?? null;
+  if (!positive || !negative || !isBooleanLiteral(positive, true) || !isBooleanLiteral(negative, false)) return;
   const conditionType = stmt.expression.getText();
   report({guard: "simplify-code", code: "CG302", node: stmt, message: "Conditional returns its own boolean test", reason: `The true branch returns true and the false branch returns false, duplicating the test ${conditionType}.`, suggestion: `If ${conditionType} has a boolean type, replace this whole conditional with return ${conditionType};. Check narrowing and side effects first.`});
 }
@@ -80,24 +86,24 @@ function checkIf(stmt: ts.IfStatement, report: Report): void {
 const registrationNames = new Set(["test", "it", "describe", "suite"]);
 const registrationModifiers = new Set(["only", "skip", "todo", "concurrent"]);
 
-function registrationImport(declaration: ts.Declaration, members: readonly string[]): ts.ImportDeclaration | undefined {
+function registrationImport(declaration: ts.Declaration, members: readonly string[]): ts.ImportDeclaration | null {
   if (ts.isImportSpecifier(declaration) &&
-      registrationNames.has(declaration.propertyName?.text ?? declaration.name.text) &&
+      registrationNames.has((declaration.propertyName ?? declaration.name).text) &&
       members.every(member => registrationModifiers.has(member))) {
     const source = declaration.parent.parent.parent;
-    return ts.isImportDeclaration(source) ? source : undefined;
+    return ts.isImportDeclaration(source) ? source : null;
   }
   if (ts.isImportClause(declaration) && members.every(member => registrationModifiers.has(member))) {
     const source = declaration.parent;
-    return ts.isImportDeclaration(source) ? source : undefined;
+    return ts.isImportDeclaration(source) ? source : null;
   }
   if (ts.isNamespaceImport(declaration) &&
       registrationNames.has(members[0] ?? "") &&
       members.slice(1).every(member => registrationModifiers.has(member))) {
     const source = declaration.parent.parent;
-    return ts.isImportDeclaration(source) ? source : undefined;
+    return ts.isImportDeclaration(source) ? source : null;
   }
-  return undefined;
+  return null;
 }
 
 /**
@@ -113,8 +119,9 @@ function isRunnerRegistration(call: ts.CallExpression, project: Project): boolea
     callee = callee.expression;
   }
   if (!ts.isIdentifier(callee)) return false;
-  const symbol = project.checker.getSymbolAtLocation(callee);
-  for (const declaration of symbol?.declarations ?? []) {
+  const symbol = project.checker.getSymbolAtLocation(callee) ?? null;
+  const declarations = symbol ? symbol.declarations ?? [] : [];
+  for (const declaration of declarations) {
     const source = registrationImport(declaration, members);
     if (!source || !ts.isStringLiteral(source.moduleSpecifier)) continue;
     if (source.moduleSpecifier.text === "node:test" || source.moduleSpecifier.text === "bun:test") return true;
@@ -131,7 +138,8 @@ function checkAsync(node: ts.Node, project: Project, report: Report): void {
   if (ts.isPropertyAccessExpression(callee) && ["catch", "then"].includes(callee.name.text)) return;
   if (isRunnerRegistration(node.expression, project)) return;
   const type = project.checker.getTypeAtLocation(node.expression);
-  if (!/^Promise(?:Like)?</.test(project.checker.typeToString(type)) && type.symbol?.getName() !== "Promise") return;
+  const symbol = type.symbol ?? null;
+  if (!/^Promise(?:Like)?</.test(project.checker.typeToString(type)) && !(symbol && symbol.getName() === "Promise")) return;
   report({guard: "async-safety", code: "CG303", node: node.expression, message: "Promise result is ignored", reason: `The expression ${node.expression.getText().slice(0, 65)} returns a Promise but is neither awaited nor explicitly handled.`, suggestion: "Await the call, return its Promise, or attach an error handler. For intentionally detached work, use an explicit void expression with a documented failure policy."});
 }
 
@@ -157,8 +165,8 @@ function checkSwitch(node: ts.Node, project: Project, report: Report): void {
 function checkVariable(node: ts.Node, project: Project, report: Report, writes: Map<ts.Symbol, number>): void {
   if (!ts.isVariableDeclarationList(node) || !(node.flags & ts.NodeFlags.Let)) return;
   for (const item of node.declarations) {
-    if (!item.initializer || !ts.isIdentifier(item.name)) continue;
-    const symbol = project.checker.getSymbolAtLocation(item.name);
+    if (!(item.initializer ?? null) || !ts.isIdentifier(item.name)) continue;
+    const symbol = project.checker.getSymbolAtLocation(item.name) ?? null;
     if (!symbol || (writes.get(symbol) ?? 0) > 0) continue;
     report({guard: "derived-state", code: "CG313", node: item.name, message: "Mutable binding is never reassigned", reason: `${item.name.text} is declared with let but the project contains no assignments or updates to this binding.`, suggestion: `Use const ${item.name.text} instead. If it represents derived data, calculate it from the source value rather than maintaining redundant state.`});
   }
@@ -168,7 +176,7 @@ function checkTest(node: ts.Node, report: Report): void {
   if (!ts.isCallExpression(node)) return;
   const name = node.expression.getText();
   if (!/^(?:test|it|describe)(?:\.|$)/.test(name)) return;
-  const callback = node.arguments.find(arg => ts.isArrowFunction(arg) || ts.isFunctionExpression(arg));
+  const callback = node.arguments.find(arg => ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) ?? null;
   if (!callback) return;
   const text = callback.getText();
   const hasAssert = /\b(?:assert|expect|should|throws|rejects|spyOn|verify)\s*(?:\.|\()/.test(text);
@@ -181,8 +189,8 @@ function inspectDeadCode(node: ts.Node, report: Report): void {
   if (!ts.isBlock(node)) return;
   const statements = node.statements;
   for (let i = 1; i < statements.length; i += 1) {
-    const prior = statements[i - 1];
-    const current = statements[i];
+    const prior = statements[i - 1] ?? null;
+    const current = statements[i] ?? null;
     if (!prior || !current || !(ts.isReturnStatement(prior) || ts.isThrowStatement(prior) || ts.isBreakStatement(prior) || ts.isContinueStatement(prior))) continue;
     report({guard: "dead-code", code: "CG301", node: current, message: "Unreachable statement after unconditional exit", reason: `The preceding ${ts.SyntaxKind[prior.kind]} exits this block before this statement can execute.`, suggestion: "Remove the unreachable code or move it before the exit if it is required."});
   }
@@ -192,7 +200,7 @@ function inspectImports(file: ts.SourceFile, report: Report): void {
   const imported = file.statements.filter(ts.isImportDeclaration).filter(item => ts.isStringLiteral(item.moduleSpecifier) && item.moduleSpecifier.text.startsWith("."));
   const modules = new Set(imported.map(item => (item.moduleSpecifier as ts.StringLiteral).text));
   if (modules.size < 10) return;
-  const current = imported[0];
+  const current = imported[0] ?? null;
   if (!current) return;
   report({guard: "coupling", code: "CG311", node: current, message: "Module has excessive direct dependencies", reason: `This module imports from ${modules.size} distinct local modules, increasing change coupling.`, suggestion: "Consider extracting cohesive responsibilities behind smaller module interfaces or a shared facade."});
 }
@@ -201,7 +209,7 @@ function collectWrites(project: Project): Map<ts.Symbol, number> {
   const writes = new Map<ts.Symbol, number>();
   for (const file of project.files) visitAll(file, node => {
     if (!ts.isIdentifier(node) || !isWritten(node)) return;
-    const symbol = project.checker.getSymbolAtLocation(node);
+    const symbol = project.checker.getSymbolAtLocation(node) ?? null;
     if (!symbol) return;
     writes.set(symbol, (writes.get(symbol) ?? 0) + 1);
   });
@@ -211,9 +219,11 @@ function collectWrites(project: Project): Map<ts.Symbol, number> {
 export function codeHealth(project: Project, includeTests = false): Finding[] {
   const findings: Finding[] = [];
   const writes = collectWrites(project);
-  const report: Report = ({guard, code, node, message, reason, suggestion, related}) => {
+  const report: Report = item => {
+    const {guard, code, node, message, reason, suggestion} = item;
     const source = node.getSourceFile();
-    findings.push({ guard, code, severity: "warning", message, location: location(project.root, node), subject: node.getText(source).split("\n")[0]?.slice(0, 120) ?? "", span: Math.min(100, node.getWidth(source)), reason, suggestion, ...(related ? {related: location(project.root, related)} : {}) });
+    const line = node.getText(source).split("\n", 1)[0] ?? "";
+    findings.push({ guard, code, severity: "warning", message, location: location(project.root, node), subject: line.slice(0, 120), span: Math.min(100, node.getWidth(source)), reason, suggestion, ...("related" in item ? {related: location(project.root, item.related)} : {}) });
   };
   for (const file of project.files) {
     const isTest = testPath.test(file.fileName);
@@ -226,7 +236,7 @@ export function codeHealth(project: Project, includeTests = false): Finding[] {
       checkAssertions(node, report);
       checkSwitch(node, project, report);
       checkVariable(node, project, report, writes);
-      if (isFunction(node)) inspectFunction(node, project, report);
+      inspectFunction(node, project, report);
       if (isTest) checkTest(node, report);
     });
   }

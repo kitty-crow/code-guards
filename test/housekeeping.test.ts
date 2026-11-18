@@ -1,7 +1,6 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
-import os from "node:os";
+import { rmSync, readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { afterEach, test } from "node:test";
@@ -11,19 +10,18 @@ import { crossModule } from "../src/guards/cross-module.ts";
 import { documentation } from "../src/guards/documentation.ts";
 import { repoHygiene } from "../src/guards/repo-hygiene.ts";
 import type { SemanticScorer } from "../src/semantic.ts";
+import { readScripts } from "../src/scripts.ts";
+import { writeFixture } from "./fixture.ts";
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, {recursive: true, force: true}); });
 
 function fixture(files: Record<string, string>) {
-  const root = mkdtempSync(path.join(os.tmpdir(), "guards-housekeeping-"));
-  directories.push(root);
-  const all = {"tsconfig.json": JSON.stringify({compilerOptions: {strict: true, noEmit: true}, include: ["src/**/*.ts", "test/**/*.ts"]}), "src/__fixture.ts": "export {};", ...files};
-  for (const [file, content] of Object.entries(all)) {
-    mkdirSync(path.dirname(path.join(root, file)), {recursive: true});
-    writeFileSync(path.join(root, file), content);
-  }
-  return loadProject(path.join(root, "tsconfig.json"));
+  return loadProject(writeFixture({
+    "tsconfig.json": JSON.stringify({compilerOptions: {strict: true, noEmit: true}, include: ["src/**/*.ts", "test/**/*.ts"]}),
+    "src/__fixture.ts": "export {};",
+    ...files
+  }, directories, "guards-housekeeping-"));
 }
 
 const reject: SemanticScorer = async () => ({sameConcept: 0.03, differentConcept: 0.96});
@@ -77,16 +75,18 @@ test("CG303 leaves test-runner registration to the runner but catches unrelated 
     bunCase("Bun registration", () => {});
     dispatch();
   `});
-  const source = project.files.find(file => file.fileName.endsWith("registration.test.ts"));
+  const source = project.files.find(file => file.fileName.endsWith("registration.test.ts")) ?? null;
   assert.ok(source);
   const directRegistration = source.statements.find(statement =>
     ts.isExpressionStatement(statement) && statement.expression.getText(source).startsWith('test("default import"')
-  );
+  ) ?? null;
   assert.ok(directRegistration && ts.isExpressionStatement(directRegistration));
   assert.equal(project.checker.typeToString(project.checker.getTypeAtLocation(directRegistration.expression)), "Promise<void>");
   const findings = codeHealth(project, true).filter(item => item.code === "CG303");
   assert.equal(findings.length, 1, JSON.stringify(findings));
-  assert.match(findings[0]?.reason ?? "", /dispatch/);
+  const finding = findings[0] ?? null;
+  assert.ok(finding);
+  assert.match(finding.reason, /dispatch/);
 });
 
 test("CG303 does not exempt local functions just because they are named test", () => {
@@ -96,12 +96,15 @@ test("CG303 does not exempt local functions just because they are named test", (
   `});
   const findings = codeHealth(project, true).filter(item => item.code === "CG303");
   assert.equal(findings.length, 1);
-  assert.match(findings[0]?.reason ?? "", /test\(/);
+  const finding = findings[0] ?? null;
+  assert.ok(finding);
+  assert.match(finding.reason, /test\(/);
 });
 
 test("design checks: responsibility, wrapper, names, contracts, placeholders, tests and coupling", () => {
-  const dependencies = Array.from({length: 10}, (_, i) => `import { value${i} } from './dep${i}.ts';`).join("\n");
-  const modules = Object.fromEntries(Array.from({length: 10}, (_, i) => [`src/dep${i}.ts`, `export const value${i} = ${i};`]));
+  const indices = [...Array<number>(10).keys()];
+  const dependencies = indices.map(i => `import { value${i} } from './dep${i}.ts';`).join("\n");
+  const modules = Object.fromEntries(indices.map((i): [string, string] => [`src/dep${i}.ts`, `export const value${i} = ${i};`]));
   const project = fixture({
     ...modules,
     "src/core.ts": `
@@ -148,7 +151,9 @@ test("documentation guard points to missing README, index and per-module pages",
   const project = fixture({"src/service.ts": "export function serve(value: string): string { return value; }"});
   const findings = await documentation(project, reject);
   for (const code of ["CG400", "CG407", "CG408"]) assert.ok(codes(findings).has(code));
-  assert.ok(findings.find(item => item.code === "CG408" && item.location.file === "src/service.ts")?.suggestion?.includes("docs/modules/service.md"));
+  const finding = findings.find(item => item.code === "CG408" && item.location.file === "src/service.ts") ?? null;
+  assert.ok(finding);
+  assert.match(finding.suggestion, /docs\/modules\/service\.md/);
 });
 
 test("documentation checks missing exports, stale commands, broken links and incomplete claims", async () => {
@@ -213,8 +218,11 @@ test("CG411 uses semantic evidence, not README keywords or repository names", as
   const findings = await documentation(project, scorer);
   assert.ok(premises.some(text => text.includes("prepared for delivery")));
   assert.ok(premises.some(text => text.includes("Run npm test")));
-  assert.equal(findings.filter(item => item.code === "CG411").length, 1);
-  assert.match(findings.find(item => item.code === "CG411")?.suggestion ?? "", /current behaviour/);
+  const style = findings.filter(item => item.code === "CG411");
+  assert.equal(style.length, 1);
+  const finding = style[0] ?? null;
+  assert.ok(finding);
+  assert.match(finding.suggestion, /current behaviour/);
 });
 
 test("CG411 excludes fenced examples and evaluates module prose without false positives", async () => {
@@ -233,8 +241,7 @@ test("CG411 excludes fenced examples and evaluates module prose without false po
   assert.ok(premises.some(text => text.includes("Run npm test")));
   assert.ok(premises.every(text => !text.includes("coding session")));
   assert.ok(premises.some(text => text.includes("The module scans TypeScript")));
-  assert.equal(findings.filter(item => item.code === "CG411").length, 1);
-  assert.equal(findings.find(item => item.code === "CG411")?.location.file, "README.md");
+  assert.deepEqual(findings.filter(item => item.code === "CG411").map(item => item.location.file), ["README.md"]);
 });
 
 test("CG411 respects contradictory semantic evidence despite strong support", async () => {
@@ -268,13 +275,16 @@ test("CG411 detects an implementation-history-heavy README introduction through 
   };
   const findings = await documentation(project, scorer);
   assert.equal(introductionPremises.length, 3, "each introduction paragraph must be scored independently");
-  assert.ok(introductionPremises[0]?.includes("rewritten from an earlier implementation"));
-  assert.ok(introductionPremises[1]?.includes("new version was assembled"));
-  assert.ok(introductionPremises[2]?.includes("utility compares repository revisions"));
+  const [first = "", second = "", third = ""] = introductionPremises;
+  assert.match(first, /rewritten from an earlier implementation/);
+  assert.match(second, /new version was assembled/);
+  assert.match(third, /utility compares repository revisions/);
   const introductionFindings = findings.filter(item => item.code === "CG411");
   assert.equal(introductionFindings.length, 1);
-  assert.equal(introductionFindings[0]?.location.line, 3);
-  assert.match(introductionFindings[0]?.reason ?? "", /lines 3, 5/);
+  const finding = introductionFindings[0] ?? null;
+  assert.ok(finding);
+  assert.equal(finding.location.line, 3);
+  assert.match(finding.reason, /lines 3, 5/);
 });
 
 test("CG411 does not flag a functional README introduction when NLP opposes the quality concern", async () => {
@@ -306,8 +316,8 @@ test("CG411 rejects contradictory NLP evidence for a multi-paragraph introductio
 });
 
 test("routine CI excludes warning-showcase tests but full CI preserves them", () => {
-  const packageFile = JSON.parse(readFileSync(path.resolve("package.json"), "utf8")) as {scripts: Record<string, string>};
-  const scripts = packageFile.scripts;
+  const manifest = path.resolve("package.json");
+  const scripts = readScripts(readFileSync(manifest, "utf8"), manifest);
   assert.match(scripts["ci:bun"] ?? "", /bun test \.\/test\/\*\.test\.ts/);
   assert.match(scripts["ci:bun"] ?? "", /bun dist\/src\/cli\.js --strict/);
   assert.match(scripts["test:showcase:bun"] ?? "", /bun test \.\/test\/showcase\/\*\.test\.ts/);
@@ -357,9 +367,11 @@ test("CG411 reviews individual sentences for formulaic cadence even within a pra
   const findings = await documentation(project, scorer);
   const issues = findings.filter(item => item.code === "CG411");
   assert.equal(issues.length, 1);
-  assert.equal(issues[0]?.message, "Formulaic or unnecessary wording in documentation");
-  assert.match(issues[0]?.subject ?? "", /distinct arrangement/);
-  assert.ok(!issues[0]?.subject?.includes("converter accepts"));
+  const finding = issues[0] ?? null;
+  assert.ok(finding);
+  assert.equal(finding.message, "Formulaic or unnecessary wording in documentation");
+  assert.match(finding.subject, /distinct arrangement/);
+  assert.doesNotMatch(finding.subject, /converter accepts/);
   assert.ok(seen.some(premise => premise.includes("Sentence to review:")));
 });
 

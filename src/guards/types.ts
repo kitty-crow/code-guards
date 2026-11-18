@@ -62,12 +62,33 @@ function normalised(node: ts.Node, type: ts.Type, checker: ts.TypeChecker, flags
   }
   if (!ts.isExpressionStatement(parent)) return false;
   const members = type.isUnion() ? type.types : [type];
+  if (ts.isCallExpression(node) || ts.isAwaitExpression(node)) {
+    return members.some(member => Boolean(member.flags & ts.TypeFlags.Undefined));
+  }
   return members.every(member => Boolean(member.flags & (ts.TypeFlags.Void | ts.TypeFlags.Undefined)));
 }
 
 function writeTarget(node: ts.Node): boolean {
   const parent = node.parent;
+  if (ts.isDeleteExpression(parent)) return parent.expression === node;
   return ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && parent.left === node;
+}
+
+function readsCaughtValue(node: ts.Node, checker: ts.TypeChecker): boolean {
+  if (!ts.isIdentifier(node)) return false;
+  const symbol = checker.getSymbolAtLocation(node) ?? null;
+  const declaration = symbol ? symbol.valueDeclaration ?? null : null;
+  if (!declaration || !ts.isVariableDeclaration(declaration) ||
+      !ts.isCatchClause(declaration.parent) || declaration.name === node) return false;
+  const parent = node.parent;
+  if (ts.isTypeOfExpression(parent)) return false;
+  if (!ts.isBinaryExpression(parent)) return true;
+  const operator = parent.operatorToken.kind;
+  if (operator === ts.SyntaxKind.InstanceOfKeyword && parent.left === node) return false;
+  const other = parent.left === node ? parent.right : parent.left;
+  const equality = operator === ts.SyntaxKind.EqualsEqualsToken || operator === ts.SyntaxKind.ExclamationEqualsToken ||
+    operator === ts.SyntaxKind.EqualsEqualsEqualsToken || operator === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+  return !equality || other.kind !== ts.SyntaxKind.NullKeyword;
 }
 
 function describe(node: ts.Node, checker: ts.TypeChecker): string {
@@ -80,7 +101,10 @@ function describe(node: ts.Node, checker: ts.TypeChecker): string {
   if (optional(node)) return "Optional declaration or chain permits undefined";
   if (asserted(node)) return "Definite-assignment assertion bypasses initialisation checking";
   if (ts.isFunctionLike(node)) return resultType(node, checker);
-  if (!valueSite(node)) return "";
+  // JavaScript supplies the catch binding. Check reads of it after control-flow
+  // narrowing, while explicit type annotations still go through the syntax rules.
+  if (ts.isVariableDeclaration(node) && ts.isCatchClause(node.parent)) return "";
+  if (!valueSite(node) && !readsCaughtValue(node, checker)) return "";
   if (ts.isTypeReferenceNode(node) && node.typeName.getText() === "const") return "";
   if (writeTarget(node)) return "";
   if (ts.isVariableDeclaration(node) && !ts.isIdentifier(node.name) && !(node.type ?? null)) return "";

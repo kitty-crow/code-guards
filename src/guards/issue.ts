@@ -9,7 +9,8 @@ export type Issue = {
   message: string;
   reason: string;
   suggestion: string;
-  related?: ts.Node;
 };
 
-export type EmitIssue = (issue: Issue) => void;
+type RelatedIssue = Issue & { related: ts.Node };
+
+export type EmitIssue = (issue: Issue | RelatedIssue) => void;
