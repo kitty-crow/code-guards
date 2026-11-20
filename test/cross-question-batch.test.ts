@@ -10,7 +10,7 @@ type Runtime = Parameters<typeof createQuestionBatcher>[0];
 function runtime(): { classifier: Runtime; calls: string[][] } {
   const ids = new Map<string, number>();
   const words = new Map<number, string>();
-  const tokens = (text: string): number[] => text.trim().split(/\\s+/).filter(Boolean).map(word => {
+  const tokens = (text: string): number[] => text.trim().split(/\s+/).filter(Boolean).map(word => {
     const previous = ids.get(word);
     if (previous !== undefined) return previous;
     const number = ids.size + 1;
