@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { assessWindows, MAX_MODEL_TOKENS, premiseWindows, supportsReuse, type SemanticQuestion } from "../src/semantic.ts";
+import { assessWindows, MAX_MODEL_TOKENS, observeSemanticTimings, premiseWindows, supportsReuse, type SemanticQuestion, type SemanticTimingEvent } from "../src/semantic.ts";
 
 type Runtime = Parameters<typeof assessWindows>[1];
 
@@ -74,4 +74,22 @@ test("contradictory evidence in another window prevents an unsupported reuse war
 test("overlength hypotheses fail explicitly instead of silently truncating labels", () => {
   const runtime = fakeRuntime(() => ({ same: 1, different: 0 }));
   assert.throws(() => premiseWindows({ premise: "text", same: "phrase ".repeat(510), different: "short" }, runtime.tokenizer), /hypothesis is too long/);
+});
+
+
+test("timing observations measure preparation and each inference without changing verdicts", async () => {
+  const runtime = fakeRuntime(() => ({ same: 0.88, different: 0.04 }));
+  const observed: SemanticTimingEvent[] = [];
+  const restore = observeSemanticTimings(event => { observed.push(event); });
+  try {
+    const verdict = await assessWindows(question("Both interfaces contain equivalent fields."), runtime.classify);
+    assert.equal(verdict.sameConcept, 0.88);
+    assert.equal(verdict.differentConcept, 0.04);
+    assert.deepEqual(observed.map(event => event.phase), ["windowing", "inference"]);
+    assert.ok(observed.every(event => Number.isFinite(event.milliseconds) && event.milliseconds >= 0));
+    assert.equal(observed[0]?.phase === "windowing" ? observed[0].windows : -1, 1);
+    assert.equal(observed[1]?.phase === "inference" ? observed[1].window : -1, 1);
+  } finally {
+    restore();
+  }
 });

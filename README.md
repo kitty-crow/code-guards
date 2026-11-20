@@ -77,6 +77,23 @@ export function externalAbi(memory: number, a: number, b: number, c: number, d: 
 
 **Inference disclosure:** This coverage showcase injects fixed, labelled zero-shot verdicts for reproducibility. It validates guard integration and reporting, but is not evidence of real MobileBERT quality. `bun run demo:semantic:bun` uses the actual model. To smoke-test the ONNX model itself with a deliberately overlong premise, run `bun run demo:model:bun` (or `npm run demo:model` under native Node). It downloads and executes real MobileBERT inference; it is deliberately **not** run as part of the routine unit tests. Long NLI inputs are tokenised and split into overlapping passages respecting MobileBERT's 512-token limit; evidence from all passages is combined conservatively.
 
+### Local inference performance baseline
+
+`bun run benchmark:inference` runs the real CPU/q8 MobileBERT pipeline twice
+with identical evidence, separating model startup, tokenisation/window preparation,
+inference and remaining overhead. It reports JSON timings and memory use.
+A warm sample makes model-loading overhead distinguishable from inference speed.
+
+```sh
+bun run benchmark:inference
+CODE_GUARDS_BENCHMARK_LONG=1 CODE_GUARDS_BENCHMARK_ITERATIONS=3 bun run benchmark:inference
+CODE_GUARDS_OFFLINE=1 bun run benchmark:inference
+```
+
+The long run measures overlapping inference windows. It is optional, downloads
+weights if absent, and may take substantially longer than ordinary unit tests.
+The benchmark is not part of CI and does not change semantic decisions.
+
 The `enterprise-looking-naming` guard checks functions, classes, methods, types, variables, parameters, members, aliases, filenames and directories. It identifies very long descriptive names and stacked generic suffixes. For instance, a function called `veryLongNamesThatAreVerySpecificAndMightNeedShortening` can be shortened to an abbreviation such as `lngNms` if that is clear in context. It never applies renames automatically.
 
 The `review-practices` guard checks code and test maintainability:

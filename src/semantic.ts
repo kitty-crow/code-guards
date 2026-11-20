@@ -9,6 +9,12 @@ type WindowVerdict = SimilarityVerdict & {
 export type SemanticQuestion = { premise: string; same: string; different: string };
 export type SemanticScorer = (question: SemanticQuestion) => Promise<SimilarityVerdict>;
 
+/** Completed inference phases, measured using a monotonic clock. */
+export type SemanticTimingEvent =
+  | { phase: "model-load"; milliseconds: number }
+  | { phase: "windowing"; milliseconds: number; windows: number }
+  | { phase: "inference"; milliseconds: number; window: number; windows: number };
+
 export const MODEL = "Xenova/mobilebert-uncased-mnli";
 export const MAX_MODEL_TOKENS = 512;
 const TEMPLATE = "The evidence indicates that {}.";
@@ -27,7 +33,15 @@ type Classifier = ((premise: string, labels: string[], options: ClassifierOption
 
 export type SemanticProgressEvent = "loading" | "ready" | "inference";
 let progressObserver: (event: SemanticProgressEvent) => void = () => {};
+let timingObserver: ((event: SemanticTimingEvent) => void) | null = null;
 let classifierPromise: Promise<Classifier> | null = null;
+
+/** Temporarily observe timing data without modifying semantic scores or inference order. */
+export function observeSemanticTimings(observer: (event: SemanticTimingEvent) => void): () => void {
+  const previous = timingObserver;
+  timingObserver = observer;
+  return () => { timingObserver = previous; };
+}
 
 /** Observe model activity without changing model scoring or its inference order. */
 export function observeSemanticProgress(observer: (event: SemanticProgressEvent) => void): () => void {
@@ -37,12 +51,14 @@ export function observeSemanticProgress(observer: (event: SemanticProgressEvent)
 }
 
 async function loadClassifier(): Promise<Classifier> {
+  const started = performance.now();
   progressObserver("loading");
   const { env, pipeline } = await import("@huggingface/transformers");
   if ((process.env.CODE_GUARDS_OFFLINE ?? "") === "1") env.allowRemoteModels = false;
   const cache = process.env.CODE_GUARDS_MODEL_CACHE ?? "";
   if (cache) env.cacheDir = cache;
   const classifier = await pipeline("zero-shot-classification", MODEL, { device: "cpu", dtype: "q8" });
+  timingObserver?.({ phase: "model-load", milliseconds: performance.now() - started });
   progressObserver("ready");
   return classifier;
 }
@@ -78,16 +94,20 @@ function scores(result: Classification, question: SemanticQuestion): SimilarityV
 
 /** Combine evidence without ignoring contradicting windows or averaging away strong evidence. */
 export async function assessWindows(question: SemanticQuestion, classifier: Classifier): Promise<WindowVerdict> {
+  const windowingStarted = performance.now();
   const windows = premiseWindows(question, classifier.tokenizer);
+  timingObserver?.({ phase: "windowing", milliseconds: performance.now() - windowingStarted, windows: windows.length });
   let sameConcept = 0;
   let differentConcept = 0;
   let supportWindow = 0;
   let oppositionWindow = 0;
   for (const [index, premise] of windows.entries()) {
+    const inferenceStarted = performance.now();
     const result = scores(await classifier(premise, [question.same, question.different], {
       multi_label: true,
       hypothesis_template: TEMPLATE
     }), question);
+    timingObserver?.({ phase: "inference", milliseconds: performance.now() - inferenceStarted, window: index + 1, windows: windows.length });
     progressObserver("inference");
     if (result.sameConcept > sameConcept) {
       sameConcept = result.sameConcept;

@@ -26,3 +26,24 @@ Model scores express semantic support; they do not prove that a refactor preserv
 ## Progress observation
 
 `observeSemanticProgress(observer)` registers a process-local callback for `SemanticProgressEvent` values `loading`, `ready` and `inference`. It returns a restoration function for the preceding observer. A loading event occurs when the MobileBERT runtime is initialised; every completed inference window emits an inference event, including windows generated from long premises. This interface reports activity without modifying classification scores, order or acceptance thresholds.
+
+
+## Optional inference profiling
+
+`observeSemanticTimings(observer)` registers a process-local callback that reports completed
+`model-load`, `windowing` and `inference` phases with elapsed milliseconds from a
+monotonic clock. Inference events contain the current, one-based window index and
+the number of windows. The restoration callback reinstates the prior observer.
+Timings do not change the classifier, evidence aggregation, thresholds or execution order.
+
+Run `bun run benchmark:inference` for two repeated, identical semantic questions,
+so the first sample includes model startup and the second captures warm inference.
+The optional `CODE_GUARDS_BENCHMARK_ITERATIONS` environment variable accepts 1 to 20.
+Set `CODE_GUARDS_BENCHMARK_LONG=1` to exercise overlapping evidence windows.
+Use `CODE_GUARDS_OFFLINE=1` only after model weights have been cached.
+The script reports JSON with model startup, window preparation, inference and
+remaining overhead times for every run, plus memory use and warm-run mean.
+
+This benchmark executes real MobileBERT inference and is deliberately excluded
+from routine unit tests and hosted CI. Timing data is platform-dependent and is
+not a claim that GPU execution or WASM would be faster.
