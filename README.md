@@ -293,3 +293,20 @@ replicate MobileBERT instead of using NVLink, so no cross-GPU transfer is
 necessary. Use `benchmark:throughput --mode parallel,cuda --gpu-ids 0,1`
 to verify actual per-GPU inference work. Do not assume two GPUs are active
 without reviewing per-device counters and NVIDIA utilisation.
+
+## Cross-question inference batching
+
+The `parallel,batch` combination now implements actual model-call
+batching across different semantic questions with identical candidate
+hypotheses. A single GPU inference dispatcher interleaves evidence windows
+and serialises the underlying model calls to avoid contention observed when
+multiple calls targeted the same WebGPU session concurrently.
+
+Compare it directly against the previous WebGPU baseline:
+
+```powershell
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode webgpu --mode batch,webgpu --mode batch,parallel,webgpu --concurrency 4
+```
+
+This optimisation is experimental and its throughput improvement needs to
+be measured. It neither activates the second graphics card nor uses NVLink.

@@ -39,6 +39,7 @@ export type SemanticProgressEvent = "loading" | "ready" | "inference";
 let progressObserver: (event: SemanticProgressEvent) => void = () => {};
 let timingObserver: ((event: SemanticTimingEvent) => void) | null = null;
 let classifierPromise: Promise<Classifier> | null = null;
+let questionBatcher: ReturnType<typeof createQuestionBatcher> | null = null;
 let acceleration: AccelerationConfig = NO_ACCELERATION;
 let activeDevice: "cpu" | "webgpu" | "cuda" = "cpu";
 const cache = new Map<string, Promise<WindowVerdict>>();
@@ -76,11 +77,13 @@ export function configureSemanticAcceleration(config: AccelerationConfig): () =>
   const previous = acceleration;
   acceleration = config;
   classifierPromise = null;
+  questionBatcher = null;
   activeDevice = "cpu";
   cache.clear();
   return () => {
     acceleration = previous;
     classifierPromise = null;
+    questionBatcher = null;
     activeDevice = "cpu";
     cache.clear();
   };
@@ -239,6 +242,163 @@ async function classifyGroup(
   return classifier.classifyBatch(premises, labels, options);
 }
 
+
+type QuestionWork = {
+  question: SemanticQuestion;
+  windows: readonly string[];
+  started: number;
+  next: number;
+  completed: number;
+  sameConcept: number;
+  differentConcept: number;
+  supportWindow: number;
+  oppositionWindow: number;
+  resolve: (value: WindowVerdict) => void;
+  reject: (error: unknown) => void;
+};
+type WindowWork = { request: QuestionWork; premise: string; index: number };
+
+/**
+ * Round-robin windows from independent questions with matching hypotheses.
+ * Model calls remain serial on one inference session to avoid GPU contention.
+ * Only enabled by the combination of parallel and batch acceleration flags.
+ */
+export function createQuestionBatcher(classifier: Classifier, batchSize: number): {
+  score: (question: SemanticQuestion) => Promise<WindowVerdict>;
+} {
+  if (!Number.isSafeInteger(batchSize) || batchSize < 2 || batchSize > 16) {
+    throw new Error("Cross-question batch size must be between 2 and 16.");
+  }
+  const queue: QuestionWork[] = [];
+  const pending = new Set<QuestionWork>();
+  let running = false;
+  let scheduled = false;
+  let failed = false;
+  let failure: unknown;
+
+  function take(request: QuestionWork): WindowWork {
+    const index = request.next++;
+    const premise = request.windows[index];
+    if (premise === undefined) throw new Error("Semantic window queue is inconsistent.");
+    if (request.next < request.windows.length) queue.push(request);
+    return { request, premise, index };
+  }
+
+  function schedule(): void {
+    if (running || scheduled || failed) return;
+    scheduled = true;
+    setImmediate(() => {
+      scheduled = false;
+      void drain();
+    });
+  }
+
+  async function drain(): Promise<void> {
+    if (running || failed) return;
+    running = true;
+    try {
+      while (queue.length) {
+        const first = queue.shift();
+        if (!first) throw new Error("Empty semantic work item.");
+        const batch: WindowWork[] = [take(first)];
+        // The pipeline requires one shared pair of candidate hypotheses per
+        // call. Round-robin equivalent questions and leave other groups queued.
+        while (batch.length < batchSize) {
+          const index = queue.findIndex(request =>
+            request.question.same === first.question.same &&
+            request.question.different === first.question.different
+          );
+          if (index < 0) break;
+          const request = queue.splice(index, 1)[0];
+          if (!request) throw new Error("Semantic work queue lost an item.");
+          batch.push(take(request));
+        }
+
+        const labels = [first.question.same, first.question.different];
+        const options: ClassifierOptions = { multi_label: true, hypothesis_template: TEMPLATE };
+        const started = performance.now();
+        const results = batch.length === 1
+          ? [await classifier(batch[0]?.premise ?? "", labels, options)]
+          : await classifyGroup(classifier, batch.map(item => item.premise), labels, options);
+        timingObserver?.({
+          phase: "inference", milliseconds: performance.now() - started,
+          window: batch[0]?.index === undefined ? 1 : batch[0].index + 1,
+          windows: first.windows.length, batchSize: batch.length
+        });
+        for (const [offset, work] of batch.entries()) {
+          const classification = results[offset];
+          if (!classification) throw new Error("MobileBERT returned fewer classifications than requested.");
+          const verdict = scores(classification, work.request.question);
+          progressObserver("inference");
+          if (verdict.sameConcept > work.request.sameConcept) {
+            work.request.sameConcept = verdict.sameConcept;
+            work.request.supportWindow = work.index + 1;
+          }
+          if (verdict.differentConcept > work.request.differentConcept) {
+            work.request.differentConcept = verdict.differentConcept;
+            work.request.oppositionWindow = work.index + 1;
+          }
+          work.request.completed += 1;
+          if (work.request.completed === work.request.windows.length) {
+            const request = work.request;
+            pending.delete(request);
+            timingObserver?.({
+              phase: "verdict", milliseconds: performance.now() - request.started,
+              windows: request.windows.length
+            });
+            request.resolve({
+              sameConcept: request.sameConcept,
+              differentConcept: request.differentConcept,
+              evidence: {
+                windows: request.windows.length,
+                supportWindow: request.supportWindow,
+                oppositionWindow: request.oppositionWindow
+              }
+            });
+          }
+        }
+      }
+    } catch (error) {
+      failed = true;
+      failure = error;
+      queue.length = 0;
+      for (const request of pending) request.reject(error);
+      pending.clear();
+    } finally {
+      running = false;
+      if (queue.length) schedule();
+    }
+  }
+
+  return {
+    score(question): Promise<WindowVerdict> {
+      if (failed) return Promise.reject(failure);
+      const started = performance.now();
+      const windowingStarted = performance.now();
+      let windows: string[];
+      try {
+        windows = premiseWindows(question, classifier.tokenizer);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      timingObserver?.({
+        phase: "windowing", milliseconds: performance.now() - windowingStarted,
+        windows: windows.length
+      });
+      return new Promise<WindowVerdict>((resolve, reject) => {
+        const request: QuestionWork = {
+          question, windows, started, next: 0, completed: 0,
+          sameConcept: 0, differentConcept: 0,
+          supportWindow: 0, oppositionWindow: 0, resolve, reject
+        };
+        pending.add(request);
+        queue.push(request);
+        schedule();
+      });
+    }
+  };
+}
+
 export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdict> {
   if (remoteScorer) return remoteScorer(question);
   const enabled = acceleration.features.has("cache");
@@ -250,7 +410,12 @@ export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdic
   }
   const compute = async (): Promise<WindowVerdict> => {
     classifierPromise ??= loadClassifier();
-    return assessWindows(question, await classifierPromise, acceleration.features.has("batch") ? acceleration.batchSize : 1);
+    const classifier = await classifierPromise;
+    if (acceleration.features.has("batch") && acceleration.features.has("parallel")) {
+      questionBatcher ??= createQuestionBatcher(classifier, acceleration.batchSize);
+      return questionBatcher.score(question);
+    }
+    return assessWindows(question, classifier, acceleration.features.has("batch") ? acceleration.batchSize : 1);
   };
   const promise = compute();
   if (!enabled) return promise;

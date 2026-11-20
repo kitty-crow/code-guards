@@ -77,3 +77,17 @@ The `verdict` event fires when all inference windows for one question
 have completed, retaining the original evidence aggregation. It allows
 the supervisor to count complete semantic questions separately from raw
 inference windows, including the effects of batch size and cache hits.
+
+## Cross-question batching
+
+When both `parallel` and `batch` are enabled, `createQuestionBatcher`
+interleaves windows from independent semantic questions. Windows are grouped
+only when both candidate hypotheses are identical, preserving the actual
+Transformers.js zero-shot classification contract. A single queue drains
+batches serially on the selected model session rather than issuing competing
+GPU calls in parallel. Each completed window and question is accounted for
+independently, with the original maximum-positive and maximum-negative
+evidence aggregation. Unlike per-question batching, this can fill batches
+even when individual questions contain few evidence windows.
+
+The ordinary `none`, `webgpu` and `batch,webgpu` paths are unchanged.

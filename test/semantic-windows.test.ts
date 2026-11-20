@@ -85,7 +85,7 @@ test("timing observations measure preparation and each inference without changin
     const verdict = await assessWindows(question("Both interfaces contain equivalent fields."), runtime.classify);
     assert.equal(verdict.sameConcept, 0.88);
     assert.equal(verdict.differentConcept, 0.04);
-    assert.deepEqual(observed.map(event => event.phase), ["windowing", "inference"]);
+    assert.deepEqual(observed.map(event => event.phase), ["windowing", "inference", "verdict"]);
     assert.ok(observed.every(event => Number.isFinite(event.milliseconds) && event.milliseconds >= 0));
     assert.equal(observed[0]?.phase === "windowing" ? observed[0].windows : -1, 1);
     assert.equal(observed[1]?.phase === "inference" ? observed[1].window : -1, 1);
