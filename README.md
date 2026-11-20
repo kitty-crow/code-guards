@@ -369,3 +369,7 @@ bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsco
 Question assignment across workers now favours the least-queued adapter and
 rotates equal-depth assignments. This is experimental scheduling and should
 be evaluated on real hardware before claiming a throughput improvement.
+
+## Read-only neural inference preflight
+
+`bun src/cli.ts all --project <tsconfig.json> --preflight --format json` counts candidate semantic questions, exact MobileBERT token windows and compatible batching calls before training or scanning. It loads only the tokenizer, not ONNX weights or GPU workers. README verdict-dependent work is reported as a bounded range rather than a false exact prediction. See [preflight module documentation](docs/modules/preflight.md).

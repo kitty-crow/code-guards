@@ -1,0 +1,27 @@
+name: Inference Preflight CI
+
+on:
+  push:
+    branches:
+      - optimisation/inference
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install with Bun
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Check TypeScript
+        run: bun run typecheck
+      - name: Build
+        run: bun run build
+      - name: Run inference-free unit tests
+        run: bun test --timeout 30000 ./test/preflight.test.ts ./test/semantic-windows.test.ts

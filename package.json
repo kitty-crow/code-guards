@@ -42,7 +42,8 @@
     "test:all": "tsc -p tsconfig.build.json && node --test dist/test/*.test.js dist/test/showcase/*.test.js",
     "test:all:bun": "tsc -p tsconfig.build.json && bun test --timeout 30000",
     "ci:full": "tsc --noEmit && tsc -p tsconfig.build.json && node --test dist/test/*.test.js dist/test/showcase/*.test.js && node dist/src/cli.js --strict",
-    "ci:full:bun": "tsc --noEmit && tsc -p tsconfig.build.json && bun test --timeout 30000 && bun dist/src/cli.js --strict"
+    "ci:full:bun": "tsc --noEmit && tsc -p tsconfig.build.json && bun test --timeout 30000 && bun dist/src/cli.js --strict",
+    "preflight": "bun src/cli.ts all --preflight"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.2",

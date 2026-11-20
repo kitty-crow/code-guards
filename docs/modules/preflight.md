@@ -1,0 +1,31 @@
+# Read-only inference preflight
+
+Source: [src/preflight.ts](../../src/preflight.ts)
+
+The `--preflight` CLI option estimates semantic questions and token-bounded evidence windows without running MobileBERT inference. It parses the genuine TypeScript project and calls the production type-reuse, function-quality and documentation guards with an accounting-only scorer. Guards without semantic inference have no neural workload to enumerate.
+
+## Usage
+
+```sh
+bun src/cli.ts all --project ../tensorflow-ts/tsconfig.code-guards.json --preflight --include-tests --accelerate batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4 --format json
+```
+
+No model weights, ONNX sessions or GPU workers are loaded. Only the Xenova/mobilebert-uncased-mnli tokenizer is initialised. On the first run it may download tokenizer assets, but never model weights. `--offline` requires an existing tokenizer cache. `CODE_GUARDS_MODEL_CACHE` selects the cache location.
+
+## Reusing deterministic candidate selection
+
+Both production and preflight run the same type-reuse candidate-pair index, fingerprint comparisons, exact-match exclusions, structural/semantic field thresholds and same-file exclusions. Exact matches do not submit semantic questions. Function quality reuses the existing complexity/design triggers and deterministic near-duplicate shortlist. Documentation reuses README introduction, handover and style checks and the threshold for potentially vague prose.
+
+## Token counts and model calls
+
+`premiseWindowCount` and `premiseWindows` share one MobileBERT token-budget function. It uses the production 512-token context, both hypothesis lengths, special pair tokens, the safety margin and 48-token overlap. Counting does not decode the windows. The result lists question counts, evidence windows and estimated model invocations by guard and in total.
+
+Without cross-question batching, calls equal the sum of the window batches for each question. The in-process `parallel,batch` scheduler can merge windows only when both hypotheses match, so the lower bound groups compatible windows and the upper bound batches questions separately. Explicit physical GPU workers process each question independently. The optional `cache` feature uses the same 512-entry, first-in-first-out question cache; real parallel completion timing may affect cache eviction.
+
+## What preflight cannot know without inference
+
+Documentation has adaptive selection: a strong README handover verdict can suppress the style questions for that paragraph. Preflight runs the unchanged documentation guard with two opposing synthetic verdicts to calculate possible minimum and maximum workloads. Those synthetic values are not predictions or guard violations. If the bounds differ, the actual semantic question count cannot be known without performing the inference.
+
+The only available reference duration estimates use measured native WebGPU throughput of 1,569 windows per 60 seconds on one RTX 2080 Ti and 3,372 windows per 60 seconds on two. They are warm inference-only calibration estimates, not forecasts of total wall-clock time, and exclude model preparation, tokenisation, downloads, GPU contention and scheduling. Other configurations report work counts without unsupported timing estimates.
+
+Preflight does not write to the target project and does not emit ordinary findings. `--format json` returns machine-readable bounds and limitations; otherwise it prints a short text report. `--strict` has no effect on preflight because it never produces inferred violations.
