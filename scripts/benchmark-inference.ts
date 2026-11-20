@@ -64,7 +64,8 @@ const restore = observeSemanticTimings(event => { events.push(event); });
 
 try {
   for (let iteration = 1; iteration <= repetitions; iteration += 1) {
-    console.error("[Code Guards] MobileBERT CPU/q8 benchmark run " + iteration + "/" + repetitions);
+    console.error("[Code Guards] MobileBERT (" + accelerationNames(parsed.acceleration).join(",") +
+      ") benchmark run " + iteration + "/" + repetitions);
     const eventOffset = events.length;
     const started = performance.now();
     const verdict = await zeroShot(question);

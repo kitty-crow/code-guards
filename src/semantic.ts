@@ -14,7 +14,7 @@ export type SemanticScorer = (question: SemanticQuestion) => Promise<SimilarityV
 export type SemanticTimingEvent =
   | { phase: "model-load"; milliseconds: number }
   | { phase: "windowing"; milliseconds: number; windows: number }
-  | { phase: "inference"; milliseconds: number; window: number; windows: number; batchSize: number; gpuId?: number }
+  | { phase: "inference"; milliseconds: number; window: number; windows: number; batchSize: number; gpuId?: number; distinctQuestions?: number }
   | { phase: "cache-hit"; milliseconds: number }
   | { phase: "verdict"; milliseconds: number; windows: number };
 
@@ -323,7 +323,8 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
         timingObserver?.({
           phase: "inference", milliseconds: performance.now() - started,
           window: batch[0]?.index === undefined ? 1 : batch[0].index + 1,
-          windows: first.windows.length, batchSize: batch.length
+          windows: first.windows.length, batchSize: batch.length,
+          distinctQuestions: new Set(batch.map(item => item.request)).size
         });
         for (const [offset, work] of batch.entries()) {
           const classification = results[offset];

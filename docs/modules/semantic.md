@@ -91,3 +91,8 @@ evidence aggregation. Unlike per-question batching, this can fill batches
 even when individual questions contain few evidence windows.
 
 The ordinary `none`, `webgpu` and `batch,webgpu` paths are unchanged.
+
+Cross-question timing includes the number of distinct semantic questions
+represented in each underlying model invocation. The throughput supervisor
+uses this to distinguish genuinely shared batches from batches containing
+only windows belonging to one question.

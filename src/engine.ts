@@ -19,7 +19,7 @@ export type ScanTelemetry =
   | { type: "stage-start"; stage: string; index: number; total: number }
   | { type: "stage-complete"; stage: string; index: number; findings: number }
   | { type: "model-ready"; device: string }
-  | { type: "inference"; windows: number; gpuId?: number }
+  | { type: "inference"; windows: number; gpuId?: number; questions?: number }
   | { type: "verdict"; windows: number }
   | { type: "cache-hit" };
 
@@ -92,7 +92,8 @@ export async function analyse(
   const restoreTimings = observeSemanticTimings(event => {
     if (event.phase === "inference") {
       telemetry({ type: "inference", windows: event.batchSize,
-        ...(event.gpuId === undefined ? {} : { gpuId: event.gpuId }) });
+        ...(event.gpuId === undefined ? {} : { gpuId: event.gpuId }),
+        ...(event.distinctQuestions === undefined ? {} : { questions: event.distinctQuestions }) });
     }
     if (event.phase === "verdict") telemetry({ type: "verdict", windows: event.windows });
     if (event.phase === "cache-hit") telemetry({ type: "cache-hit" });

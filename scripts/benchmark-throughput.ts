@@ -80,6 +80,9 @@ type ScanResult = {
   totalStages: number;
   stageFindings: number;
   completedInferenceWindows: number;
+  completedInferenceCalls: number;
+  crossQuestionBatches: number;
+  maximumBatchSize: number;
   completedSemanticQuestions: number;
   cacheHits: number;
   provider: string;
@@ -108,6 +111,9 @@ function consumeEvent(result: ScanResult, event: ScanTelemetry): void {
     result.provider = event.device;
   } else if (event.type === "inference") {
     result.completedInferenceWindows += event.windows;
+    result.completedInferenceCalls += 1;
+    result.maximumBatchSize = Math.max(result.maximumBatchSize, event.windows);
+    if ((event.questions ?? 1) > 1) result.crossQuestionBatches += 1;
     if (event.gpuId !== undefined) {
       const key = String(event.gpuId);
       result.gpuWindows[key] = (result.gpuWindows[key] ?? 0) + event.windows;
@@ -125,7 +131,8 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     mode, secondsLimit: settings.seconds, elapsedSeconds: 0, timedOut: false,
     completed: false, exitCode: null, loadedFiles: 0, enabledRules: 0,
     stage: "starting", completedStages: 0, totalStages: 0, stageFindings: 0,
-    completedInferenceWindows: 0, completedSemanticQuestions: 0,
+    completedInferenceWindows: 0, completedInferenceCalls: 0,
+    crossQuestionBatches: 0, maximumBatchSize: 0, completedSemanticQuestions: 0,
     cacheHits: 0, provider: "not initialised", gpuWindows: {}, error: null
   };
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -231,6 +238,9 @@ async function main(): Promise<void> {
       loadedFiles: "TypeScript project files parsed and loaded, not files fully checked",
       completedStages: "Entire guard stages finished before the deadline",
       completedInferenceWindows: "Actual completed MobileBERT model inference windows",
+      completedInferenceCalls: "Underlying MobileBERT pipeline invocations",
+      crossQuestionBatches: "Invocations containing windows from more than one semantic question",
+      maximumBatchSize: "Highest number of windows in a single inference invocation",
       completedSemanticQuestions: "Completed semantic verdicts, including cache hits"
     },
     results

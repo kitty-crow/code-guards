@@ -51,3 +51,9 @@ On Linux/WSL2 the supervisor launches each scanner in a dedicated process
 group and kills that entire group at the deadline, including any GPU workers
 created beneath it. On native Windows a scan does not support the external
 CUDA worker pool and the supervisor kills the scan process directly.
+
+The JSON summary now distinguishes actual ONNX/Transformers.js inference calls
+from completed model windows. `crossQuestionBatches` counts calls that
+include multiple independent questions, while `maximumBatchSize` records the
+largest model call. A nonzero `crossQuestionBatches` is direct evidence that
+`parallel,batch` grouped windows from different questions.
