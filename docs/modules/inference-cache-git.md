@@ -1,4 +1,12 @@
-# Persistent, parallel inference on local GPUs
+# Git-backed persistent inference cache
+
+Source: [src/inference-cache-git.ts](../../src/inference-cache-git.ts)
+
+The public `synchroniseInferenceCache(action, cacheDir, remote, log?)` export merges remote scores before scanning and publishes completed results afterwards. It creates a temporary isolated Git worktree and invokes the standalone SQLite snapshot tool; it never modifies source code, the target project, or source-branch history.
+
+## Usage and limitations
+
+
 
 Code Guards retains its project-wide candidate index, cross-file type comparisons,
 and ordered parallel semantic scheduler. The explicit \`--gpu-ids 0,1\` setting
