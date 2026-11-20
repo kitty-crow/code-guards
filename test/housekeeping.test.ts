@@ -202,7 +202,7 @@ test("clean internal module docs and established scripts produce no housekeeping
 // The example must compile independently of the caller's ambient Node type tree.
 test("housekeeping showcase compiles with portable module resolution", () => {
   const config = path.resolve("examples/housekeeping/tsconfig.json");
-  const result = spawnSync("tsc", ["-p", config, "--pretty", "false"], { encoding: "utf8" });
+  const result = spawnSync(process.execPath, [path.resolve("node_modules/typescript/bin/tsc"), "-p", config, "--pretty", "false"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr + result.stdout);
 });
 

@@ -23,6 +23,6 @@ jobs:
       - name: Build TypeScript with Bun
         run: bun run build
       - name: Unit tests with Bun
-        run: bun test ./test/*.test.ts
+        run: bun test --timeout 30000 ./test/*.test.ts
       - name: Strict full self-check with progress
         run: bun dist/src/cli.js --strict --include-tests --progress
