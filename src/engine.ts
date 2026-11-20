@@ -4,7 +4,7 @@ import {
   documentation, repoHygiene, enterpriseLookingNaming, reviewPractices
 } from "./guards/index.ts";
 import { guards, resolveExpectations, type Finding, type GuardName } from "./model.ts";
-import { observeSemanticProgress, semanticExecutionProvider } from "./semantic.ts";
+import { observeSemanticProgress, observeSemanticTimings, semanticExecutionProvider } from "./semantic.ts";
 
 export type AnalysisOptions = {
   enabled: Set<GuardName>;
@@ -12,6 +12,16 @@ export type AnalysisOptions = {
   includeTests: boolean;
 };
 export type Analysis = { findings: Finding[]; root: string };
+
+/** Structured, opt-in events consumed by the hard-stop throughput supervisor. */
+export type ScanTelemetry =
+  | { type: "project"; files: number; rules: number }
+  | { type: "stage-start"; stage: string; index: number; total: number }
+  | { type: "stage-complete"; stage: string; index: number; findings: number }
+  | { type: "model-ready"; device: string }
+  | { type: "inference"; windows: number }
+  | { type: "verdict"; windows: number }
+  | { type: "cache-hit" };
 
 type Stage = {
   name: string;
@@ -29,13 +39,15 @@ const crossModuleGuards: readonly GuardName[] = ["single-source", "project-conve
 /** Run every selected rule and report stage-level progress independently of the findings format. */
 export async function analyse(
   config: AnalysisOptions,
-  report: (message: string) => void = () => {}
+  report: (message: string) => void = () => {},
+  telemetry: (event: ScanTelemetry) => void = () => {}
 ): Promise<Analysis> {
   const started = Date.now();
   report("[Code Guards] Loading TypeScript project");
   const project = loadProject(config.project);
   const selected = guards.filter(name => config.enabled.has(name));
   report(`[Code Guards] Loaded ${project.files.length} source files; ${selected.length} rules enabled`);
+  telemetry({ type: "project", files: project.files.length, rules: selected.length });
 
   const stages: Stage[] = [
     {name: "no-nested-if", includes: ["no-nested-if"], run: () => noNestedIf(project)},
@@ -62,7 +74,12 @@ export async function analyse(
   let lastReportAt = Date.now();
   const restore = observeSemanticProgress(event => {
     if (event === "loading") { report(`[Code Guards] ${activeStage}: loading MobileBERT model`); return; }
-    if (event === "ready") { report(`[Code Guards] ${activeStage}: MobileBERT ready (${semanticExecutionProvider().device})`); return; }
+    if (event === "ready") {
+      const device = semanticExecutionProvider().device;
+      report(`[Code Guards] ${activeStage}: MobileBERT ready (${device})`);
+      telemetry({ type: "model-ready", device });
+      return;
+    }
     semanticWindows += 1;
     const now = Date.now();
     if (semanticWindows - lastWindowReport >= 25 || now - lastReportAt >= 10000) {
@@ -70,6 +87,12 @@ export async function analyse(
       lastWindowReport = semanticWindows;
       lastReportAt = now;
     }
+  });
+
+  const restoreTimings = observeSemanticTimings(event => {
+    if (event.phase === "inference") telemetry({ type: "inference", windows: event.batchSize });
+    if (event.phase === "verdict") telemetry({ type: "verdict", windows: event.windows });
+    if (event.phase === "cache-hit") telemetry({ type: "cache-hit" });
   });
 
   try {
@@ -80,11 +103,14 @@ export async function analyse(
       lastWindowReport = semanticWindows;
       lastReportAt = before;
       report(`[Code Guards] [${index + 1}/${enabledStages.length}] ${stage.name}: started`);
+      telemetry({ type: "stage-start", stage: stage.name, index: index + 1, total: enabledStages.length });
       const results = await stage.run();
       findings.push(...results);
+      telemetry({ type: "stage-complete", stage: stage.name, index: index + 1, findings: results.length });
       report(`[Code Guards] [${index + 1}/${enabledStages.length}] ${stage.name}: ${results.length} findings, ${semanticWindows - stageWindows} inference windows, ${((Date.now() - before) / 1000).toFixed(1)}s`);
     }
   } finally {
+    restoreTimings();
     restore();
   }
   const resolved = resolveExpectations(project.root, project.files, findings);

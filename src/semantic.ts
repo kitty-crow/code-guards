@@ -15,7 +15,8 @@ export type SemanticTimingEvent =
   | { phase: "model-load"; milliseconds: number }
   | { phase: "windowing"; milliseconds: number; windows: number }
   | { phase: "inference"; milliseconds: number; window: number; windows: number; batchSize: number }
-  | { phase: "cache-hit"; milliseconds: number };
+  | { phase: "cache-hit"; milliseconds: number }
+  | { phase: "verdict"; milliseconds: number; windows: number };
 
 export const MODEL = "Xenova/mobilebert-uncased-mnli";
 export const MAX_MODEL_TOKENS = 512;
@@ -157,6 +158,7 @@ export async function assessWindows(question: SemanticQuestion, classifier: Clas
   if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 16) {
     throw new Error("Inference batch size must be between 1 and 16.");
   }
+  const questionStarted = performance.now();
   const windowingStarted = performance.now();
   const windows = premiseWindows(question, classifier.tokenizer);
   timingObserver?.({ phase: "windowing", milliseconds: performance.now() - windowingStarted, windows: windows.length });
@@ -189,6 +191,7 @@ export async function assessWindows(question: SemanticQuestion, classifier: Clas
       }
     }
   }
+  timingObserver?.({ phase: "verdict", milliseconds: performance.now() - questionStarted, windows: windows.length });
   return {
     sameConcept,
     differentConcept,

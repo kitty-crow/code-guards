@@ -70,3 +70,10 @@ When caching is enabled, repeated questions have zero new inference windows.
 The benchmark separately reports the evidence-window count, actual inference
 windows and whether a cached verdict was returned, preventing misleading
 inference timing comparisons.
+
+## Completed-question timing
+
+The `verdict` event fires when all inference windows for one question
+have completed, retaining the original evidence aggregation. It allows
+the supervisor to count complete semantic questions separately from raw
+inference windows, including the effects of batch size and cache hits.

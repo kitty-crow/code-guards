@@ -17,3 +17,11 @@ The optional `analyse(config, onProgress)` callback receives status messages dur
 Accelerated inference changes only the semantic model execution path.
 It does not change the deterministic TypeScript rules. Stage progress
 counts completed windows, including multiple windows in a single batch.
+
+## Throughput telemetry
+
+The optional third `analyse` callback receives structured `ScanTelemetry`
+records for project loading, stage start/completion and completed semantic
+inference. Timing observers restore in a `finally` block and do not
+change guard selection or findings. This is separate from human-readable
+progress reporting and is consumed by the hard-stop benchmark supervisor.

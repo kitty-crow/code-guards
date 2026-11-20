@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { failed, guards, type GuardName } from "./model.ts";
 import { renderFindings, type Format, type ColourMode } from "./diagnostics.ts";
 
-type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean; progress: boolean; acceleration: AccelerationConfig };
+type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean; progress: boolean; benchmarkTelemetry: boolean; acceleration: AccelerationConfig };
 
 function checkGuard(value: string | null): GuardName {
   if (!guards.some(name => name === value)) usage();
@@ -38,6 +38,7 @@ export function options(argv: string[]): Options {
   let includeTests = false;
   let offline = false;
   let progress = false;
+  let benchmarkTelemetry = false;
   let selected = false;
   for (let i = 0; i < remaining.length; i += 1) {
     const arg = remaining[i] ?? usage();
@@ -67,6 +68,7 @@ export function options(argv: string[]): Options {
     if (arg === "--include-tests") { includeTests = true; continue; }
     if (arg === "--offline") { offline = true; continue; }
     if (arg === "--progress") { progress = true; continue; }
+    if (arg === "--benchmark-telemetry") { benchmarkTelemetry = true; continue; }
     if (!selected && arg === "all") { selected = true; continue; }
     if (!selected && guards.some(name => name === arg)) {
       enabled.clear();
@@ -76,7 +78,7 @@ export function options(argv: string[]): Options {
     }
     usage();
   }
-  return { enabled, project, format, colour, strict, includeTests, offline, progress, acceleration };
+  return { enabled, project, format, colour, strict, includeTests, offline, progress, benchmarkTelemetry, acceleration };
 }
 
 export async function run(argv: string[]): Promise<number> {
@@ -86,7 +88,11 @@ export async function run(argv: string[]): Promise<number> {
     const restore = configureSemanticAcceleration(config.acceleration);
     try {
       const { findings, root } = await analyse(
-        config, config.progress ? message => console.error(message) : () => {}
+        config,
+        config.progress ? message => console.error(message) : () => {},
+        config.benchmarkTelemetry
+          ? event => console.error("CG_BENCH_EVENT " + JSON.stringify(event))
+          : () => {}
       );
       console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
       return failed(findings, config.strict) ? 1 : 0;

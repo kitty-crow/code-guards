@@ -27,3 +27,10 @@ are `cache`, `batch`, `cuda` and `webgpu`. Repeat `--accelerate` or
 provide a comma-separated list. `--batch-size 2..16` requires batching.
 GPU backends are alternatives selected in the order supplied; they never
 silently fall back to CPU. The same flags are available to the Bun benchmark.
+
+## Benchmark telemetry
+
+`--benchmark-telemetry` is an internal scanner flag used by the
+separate, hard-stop throughput supervisor. It emits prefixed JSON
+on standard error for the scanner's project, stages and inference,
+without changing the normal findings on standard output.

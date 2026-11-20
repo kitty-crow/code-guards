@@ -252,3 +252,24 @@ providers, not simultaneous multi-GPU execution. CPU is **not** silently
 selected if both fail. GPU precision is FP32, and semantic scores may differ
 from CPU/q8. All work remains local. The TensorFlow fork is a real-world
 project-scan target, not an inference model.
+
+## Sixty-second TensorFlow source throughput comparison
+
+To compare actual Code Guards progress across CPU and GPU modes using
+the TensorFlow TypeScript fork, start from a checkout of Code Guards
+and an existing checkout of TensorFlow TypeScript:
+
+```sh
+bun run benchmark:throughput --project /absolute/path/to/tensorflow-ts/tsconfig.code-guards.json
+```
+
+The supervisor runs three independent real scans, each with a hard
+60-second deadline: CPU/q8, WebGPU/FP32 and WebGPU/FP32 with batch size 4.
+It measures completed semantic questions, real inference windows and fully
+completed guard stages, including time spent loading the TypeScript project.
+The loaded source-file count is *not* a processed-file count. Different
+model precisions can affect semantic findings. Use `--mode` to select a
+specific acceleration setting, `--guard type-reuse` to isolate the
+semantic type-reuse guard, or `--seconds` for a different diagnostic
+limit. A timed-out scan is forcibly stopped, not allowed to continue
+in the background. The benchmark is local and is excluded from CI.
