@@ -19,3 +19,11 @@ The `--path` selector accepts a directory, tsconfig file or individual TypeScrip
 ## Behaviour and boundaries
 
 The command-line executable is `dist/src/cli.js` after building. It reads the target project but does not write to it, install itself, modify `tsc` or run GitHub Actions. Optional local NLP inference can download model weights into the caller's cache on first use.
+
+## Inference acceleration
+
+`--accelerate none` preserves CPU/q8 model inference. Composable choices
+are `cache`, `batch`, `cuda` and `webgpu`. Repeat `--accelerate` or
+provide a comma-separated list. `--batch-size 2..16` requires batching.
+GPU backends are alternatives selected in the order supplied; they never
+silently fall back to CPU. The same flags are available to the Bun benchmark.

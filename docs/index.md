@@ -5,6 +5,7 @@ Code Guards runs locally; the source entry point is `src/cli.ts`. These pages de
 ## Core
 
 - [Command-line interface](modules/cli.md)
+- [Selectable inference acceleration](modules/acceleration.md)
 - [Terminal and machine-readable reporting](modules/diagnostics.md)
 - [Guard orchestration](modules/engine.md)
 - [Shared diagnostics contract](modules/model.md)

@@ -154,6 +154,9 @@ function scores(result: Classification, question: SemanticQuestion): SimilarityV
 
 /** Combine evidence without ignoring contradicting windows or averaging away strong evidence. */
 export async function assessWindows(question: SemanticQuestion, classifier: Classifier, batchSize = 1): Promise<WindowVerdict> {
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 16) {
+    throw new Error("Inference batch size must be between 1 and 16.");
+  }
   const windowingStarted = performance.now();
   const windows = premiseWindows(question, classifier.tokenizer);
   timingObserver?.({ phase: "windowing", milliseconds: performance.now() - windowingStarted, windows: windows.length });
