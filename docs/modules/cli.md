@@ -19,3 +19,5 @@ The `--path` selector accepts a directory, tsconfig file or individual TypeScrip
 ## Behaviour and boundaries
 
 The command-line executable is `dist/src/cli.js` after building. It reads the target project but does not write to it, install itself, modify `tsc` or run GitHub Actions. Optional local NLP inference can download model weights into the caller's cache on first use.
+
+Under `--strict`, any emitted warning is reported as an error in text, JSON and GitHub annotation output. The exit status still indicates failure whenever a checked warning or error exists. Advisory mode preserves warning diagnostics.

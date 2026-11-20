@@ -154,3 +154,14 @@ test("progress provides stage timing while keeping findings unchanged", async ()
   assert.ok(messages.some(message => message.includes("1 findings, 0 inference windows")));
   assert.ok(messages.some(message => message.includes("Completed: 1 findings")));
 });
+
+test("strict GitHub diagnostics report warnings as errors while advisory mode remains warnings", () => {
+  const root = external({ "src/nested.ts": nested });
+  const advisory = execute(root, ["--format", "github"]);
+  assert.equal(advisory.status, 0, advisory.stderr);
+  assert.match(advisory.stdout, /::warning /);
+  const strict = execute(root, ["--strict", "--format", "github"]);
+  assert.equal(strict.status, 1, strict.stderr);
+  assert.match(strict.stdout, /::error /);
+  assert.doesNotMatch(strict.stdout, /::warning /);
+});
