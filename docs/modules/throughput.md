@@ -30,3 +30,12 @@ WebGPU uses FP32, CPU uses q8, so result quality is not necessarily
 identical. GPU hardware, model loading, caches and machine activity
 may affect measurements. No results are claimed until the benchmark
 has actually run on the target machine.
+
+To compare independent-question parallelism on the same machine:
+
+```sh
+bun run benchmark:throughput --project /path/to/tsconfig.code-guards.json --mode webgpu --mode parallel,webgpu --mode batch,parallel,webgpu --concurrency 4
+```
+
+`--concurrency` controls the limit for modes that include `parallel`. This
+isolates queueing benefits from model precision and GPU selection.

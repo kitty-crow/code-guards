@@ -26,3 +26,18 @@ Invalid names, nonsensical combinations and unsupported batch sizes fail.
 GPU modes use FP32 model weights; CPU mode retains q8 weights.
 Different precision and execution providers may alter confidence scores.
 The code is not converted into WebAssembly as part of this feature.
+
+## Bounded parallel questions
+
+`parallel` enables a bounded, deterministic pool of independent semantic
+comparison tasks. Use `--accelerate parallel,webgpu --concurrency 4` or combine
+it with `cache` and `batch`. Without `parallel`, the analyser still
+processes candidate pairs serially. `--concurrency` accepts 2 to 16 and
+requires the flag. It limits outstanding tasks, not the GPU count.
+
+The type-reuse guard currently schedules candidate comparisons in this
+bounded pool and restores original candidate order before formatting findings.
+This is same-process concurrency on the selected execution provider. It does
+**not** bind work to a second physical GPU, create extra GPU sessions, or
+exchange tensors over NVLink. Hardware acceleration should be verified using
+per-device telemetry and a before/after throughput benchmark.

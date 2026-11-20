@@ -9,6 +9,7 @@ test("throughput benchmark defaults to three independent, minute-long scans", ()
   assert.equal(options.seconds, 60);
   assert.deepEqual(options.modes, ["none", "webgpu", "batch,webgpu"]);
   assert.equal(options.batchSize, 4);
+  assert.equal(options.concurrency, 4);
   assert.equal(options.guard, "all");
 });
 
@@ -16,11 +17,12 @@ test("throughput options support explicit acceleration, guard and diagnostic dea
   const options = throughputOptions([
     "--project", "tsconfig.json", "--guard", "type-reuse",
     "--mode", "cache,batch,webgpu", "--mode", "none",
-    "--batch-size", "8", "--seconds", "2"
+    "--batch-size", "8", "--concurrency", "6", "--seconds", "2"
   ]);
   assert.equal(options.seconds, 2);
   assert.equal(options.guard, "type-reuse");
   assert.equal(options.batchSize, 8);
+  assert.equal(options.concurrency, 6);
   assert.deepEqual(options.modes, ["cache,batch,webgpu", "none"]);
 });
 

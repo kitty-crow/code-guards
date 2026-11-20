@@ -3,7 +3,8 @@ import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
 import type { Project } from "../project.ts";
-import { zeroShot, supportsReuse, type SemanticScorer } from "../semantic.ts";
+import { zeroShot, supportsReuse, semanticConcurrency, type SemanticScorer } from "../semantic.ts";
+import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
 type Property = { name: string; fingerprint: string };
 type Definition = {
@@ -282,15 +283,16 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
 
 export async function typeReuse(project: Project, includeTests = false, score: SemanticScorer = zeroShot): Promise<Finding[]> {
   const definitions = getDefinitions(project, includeTests);
-  const findings: Finding[] = [];
-  for (const pair of [...candidatesWithExactMatches(definitions)].sort()) {
+  const candidatePairs = [...candidatesWithExactMatches(definitions)].sort();
+  // Preserve the previous candidate order while allowing independent NLI
+  // questions to execute concurrently. Each worker has one in-flight task.
+  const results = await orderedConcurrentMap(candidatePairs, semanticConcurrency(), async pair => {
     const [first = -1, second = -1] = pair.split(":").map(Number);
     const a = definitions[first] ?? null;
     const b = definitions[second] ?? null;
-    if (!a || !b) continue;
-    const finding = await compareDefinitions(project, a, b, score);
-    if (finding) findings.push(finding);
-  }
+    return a && b ? compareDefinitions(project, a, b, score) : null;
+  });
+  const findings = results.filter((finding): finding is Finding => finding !== null);
   return withoutIgnored(project.root, findings).sort((a, b) =>
     a.location.file.localeCompare(b.location.file) || a.location.line - b.location.line || a.code.localeCompare(b.code)
   );

@@ -58,6 +58,11 @@ export function configureSemanticAcceleration(config: AccelerationConfig): () =>
   };
 }
 
+/** Maximum number of independent semantic questions allowed in flight. */
+export function semanticConcurrency(): number {
+  return acceleration.features.has("parallel") ? acceleration.concurrency ?? 1 : 1;
+}
+
 export function semanticExecutionProvider(): { device: "cpu" | "cuda" | "webgpu"; precision: "q8" | "fp32" } {
   return { device: activeDevice, precision: activeDevice === "cpu" ? "q8" : "fp32" };
 }

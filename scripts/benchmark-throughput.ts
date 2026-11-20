@@ -14,6 +14,7 @@ export type ThroughputOptions = {
   seconds: number;
   modes: string[];
   batchSize: number;
+  concurrency: number;
   guard: string;
 };
 
@@ -21,12 +22,13 @@ export function throughputOptions(argv: readonly string[]): ThroughputOptions {
   let project = "";
   let seconds = 60;
   let batchSize = 4;
+  let concurrency = 4;
   let guard = "all";
   const modes: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i] ?? "";
     if (flag !== "--project" && flag !== "--seconds" && flag !== "--mode" &&
-        flag !== "--batch-size" && flag !== "--guard") {
+        flag !== "--batch-size" && flag !== "--concurrency" && flag !== "--guard") {
       throw new Error("Unknown argument: " + flag);
     }
     const value = argv[++i] ?? "";
@@ -36,21 +38,26 @@ export function throughputOptions(argv: readonly string[]): ThroughputOptions {
     if (flag === "--guard") guard = value;
     if (flag === "--seconds") seconds = Number(value);
     if (flag === "--batch-size") batchSize = Number(value);
+    if (flag === "--concurrency") concurrency = Number(value);
   }
   if (!project || !existsSync(project)) throw new Error("Supply --project with an existing TensorFlow tsconfig path.");
   if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 3600) throw new Error("--seconds must be 1..3600.");
   if (!Number.isSafeInteger(batchSize) || batchSize < 2 || batchSize > 16) throw new Error("--batch-size must be 2..16.");
+  if (!Number.isSafeInteger(concurrency) || concurrency < 2 || concurrency > 16) {
+    throw new Error("--concurrency must be 2..16.");
+  }
   if (guard !== "all" && !guards.some(name => name === guard)) throw new Error("Unknown guard: " + guard);
   const selected = modes.length ? modes : ["none", "webgpu", "batch,webgpu"];
   for (const mode of selected) {
     const args = ["--accelerate", mode];
     if (mode.split(",").includes("batch")) args.push("--batch-size", String(batchSize));
+    if (mode.split(",").includes("parallel")) args.push("--concurrency", String(concurrency));
     const parsed = parseAccelerationFlags(args);
     if (parsed.remaining.length || !accelerationNames(parsed.acceleration).length) {
       throw new Error("Invalid mode: " + mode);
     }
   }
-  return { project, seconds, modes: selected, batchSize, guard };
+  return { project, seconds, modes: selected, batchSize, concurrency, guard };
 }
 
 type ScanResult = {
@@ -115,7 +122,8 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     "src/cli.ts", ...(settings.guard === "all" ? [] : [settings.guard]),
     "--project", settings.project, "--benchmark-telemetry",
     "--accelerate", mode,
-    ...(mode.split(",").includes("batch") ? ["--batch-size", String(settings.batchSize)] : [])
+    ...(mode.split(",").includes("batch") ? ["--batch-size", String(settings.batchSize)] : []),
+    ...(mode.split(",").includes("parallel") ? ["--concurrency", String(settings.concurrency)] : [])
   ];
   const started = performance.now();
   const child = spawn(process.execPath, args, {

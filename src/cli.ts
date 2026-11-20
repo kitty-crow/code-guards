@@ -15,7 +15,7 @@ function checkGuard(value: string | null): GuardName {
 }
 
 function usage(): never {
-  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline] [--progress] [--accelerate none|cache|batch|cuda|webgpu] [--batch-size 2..16]");
+  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline] [--progress] [--accelerate none|cache|batch|parallel|cuda|webgpu] [--batch-size 2..16] [--concurrency 2..16]");
   process.exit(2);
 }
 

@@ -12,6 +12,8 @@ test("acceleration flags combine, repeat, disable and reject invalid combination
   assert.deepEqual(accelerationNames(parseAccelerationFlags(["--accelerate", "none"]).acceleration), ["none"]);
   assert.throws(() => parseAccelerationFlags(["--accelerate", "none,cuda"]), /cannot be combined/);
   assert.throws(() => parseAccelerationFlags(["--batch-size", "4"]), /requires/);
+  assert.throws(() => parseAccelerationFlags(["--concurrency", "4"]), /requires/);
+  assert.equal(parseAccelerationFlags(["--accelerate", "parallel,webgpu", "--concurrency", "4"]).acceleration.concurrency, 4);
   assert.throws(() => parseAccelerationFlags(["--accelerate", "incorrect"]), /Unsupported acceleration/);
 });
 

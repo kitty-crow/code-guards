@@ -273,3 +273,11 @@ specific acceleration setting, `--guard type-reuse` to isolate the
 semantic type-reuse guard, or `--seconds` for a different diagnostic
 limit. A timed-out scan is forcibly stopped, not allowed to continue
 in the background. The benchmark is local and is excluded from CI.
+
+## Experimental bounded inference parallelism
+
+Independent type-reuse comparisons can now execute concurrently without
+reordering results. Opt in with `--accelerate parallel,webgpu --concurrency 4`.
+Use the throughput benchmark with `--mode webgpu --mode parallel,webgpu`
+to establish whether it actually improves full-project throughput. This
+is one GPU backend per process, not verified dual-GPU or NVLink support.
