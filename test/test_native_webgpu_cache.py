@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -36,6 +37,37 @@ class FakeTokenizer:
 
     def decode(self, ids, skip_special_tokens: bool = True):
         return " ".join(self.reverse[index] for index in ids)
+
+
+class ProfilingIsolationTest(unittest.TestCase):
+    def test_unique_native_profile_prefix_per_gpu_and_session(self):
+        first = worker.profile_prefix(0)
+        second = worker.profile_prefix(1)
+        repeated = worker.profile_prefix(0)
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first, repeated)
+        self.assertIn("gpu0", first)
+        self.assertIn("gpu1", second)
+        self.assertTrue(Path(first).is_absolute())
+        self.assertEqual(Path(first).parent, Path(tempfile.gettempdir()))
+
+    def test_windows_profile_lock_cannot_abort_verified_gpu_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "independent-profile.json"
+            profile.write_text(json.dumps([{
+                "cat": "Node", "dur": 1000,
+                "args": {"provider": "WebGPUExecutionProvider", "op_name": "MatMul"}
+            }]), encoding="utf-8")
+            events = []
+            session = types.SimpleNamespace(end_profiling=lambda: str(profile))
+            with patch.object(worker, "emit", events.append), patch.object(
+                Path, "unlink", side_effect=PermissionError(32, "profile is locked")
+            ):
+                proof = worker.verify_webgpu_execution(session, 1)
+            self.assertEqual(proof["gpuNodes"], 1)
+            self.assertEqual(events[0]["type"], "timing")
+            self.assertEqual(events[0]["timing"]["phase"], "provider-proof")
+            self.assertEqual(events[0]["gpuId"], 1)
 
 
 class NativeWorkerCacheTest(unittest.TestCase):

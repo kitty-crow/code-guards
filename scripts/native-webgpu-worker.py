@@ -10,7 +10,9 @@ import json
 import math
 import os
 import sys
+import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 from inference_cache_store import WindowCache, model_namespace
@@ -37,6 +39,16 @@ def model_files() -> tuple[str, str, dict[str, Any]]:
     return model, tokenizer, config
 
 
+def profile_prefix(adapter_index: int) -> str:
+    """Avoid same-second ONNX Runtime profile collisions across GPU processes.
+
+    ORT's default filename is timestamp-based. Two native workers starting
+    together can collide on Windows, where the open file cannot be replaced.
+    """
+    return str(Path(tempfile.gettempdir()) /
+               f"code-guards-ort-gpu{adapter_index}-{os.getpid()}-{uuid.uuid4().hex}")
+
+
 def initialise(adapter_index: int) -> tuple[Any, Any, int, int, str]:
     import onnxruntime as ort
     import onnxruntime_ep_webgpu as webgpu_ep
@@ -54,6 +66,7 @@ def initialise(adapter_index: int) -> tuple[Any, Any, int, int, str]:
     # CPU kernels are allowed only for unsupported graph operations. We
     # independently verify WebGPU execution using ONNX's node profiler.
     options.enable_profiling = True
+    options.profile_file_prefix = profile_prefix(adapter_index)
     options.add_provider_for_devices(
         [matching[0]], {"adapterIndex": str(adapter_index), "powerPreference": "high-performance"}
     )
@@ -149,7 +162,13 @@ def verify_webgpu_execution(session: Any, gpu_id: int) -> dict[str, Any]:
             raise RuntimeError("ONNX Runtime emitted a malformed execution profile.")
         proof = summarise_provider_profile(events)
     finally:
-        target.unlink(missing_ok=True)
+        # Windows may still hold an ONNX profiler handle briefly after
+        # end_profiling(). Cleanup is best-effort and must never abort the
+        # scan after GPU execution and its WebGPU proof have succeeded.
+        try:
+            target.unlink(missing_ok=True)
+        except PermissionError:
+            pass
     emit({"type": "timing", "gpuId": gpu_id, "timing": {
         "phase": "provider-proof", "milliseconds": 0, **proof
     }})
