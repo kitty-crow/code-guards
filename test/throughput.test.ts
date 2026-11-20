@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { resolve } from "node:path";
-import { throughputOptions } from "../scripts/benchmark-throughput.ts";
+import { throughputOptions, usefulBenchmarkError } from "../scripts/benchmark-throughput.ts";
 
 test("throughput benchmark defaults to three independent, minute-long scans", () => {
   const options = throughputOptions(["--project", "tsconfig.json"]);
@@ -50,4 +50,14 @@ test("throughput rejects invalid modes, bounds and non-existent projects", () =>
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--batch-size", "17"]), /--batch-size/);
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--guard", "not-a-guard"]), /Unknown guard/);
   assert.throws(() => throughputOptions(["--project", "tsconfig-nonexistent-123.json"]), /existing TensorFlow tsconfig/);
+});
+
+test("benchmark keeps the worker exception rather than Bun version footer", () => {
+  const lines = [
+    "[Code Guards] stage started",
+    "error: GPU 0 worker failed: RuntimeError: native WebGPU adapter unavailable",
+    "at source",
+    "Bun v1.4.3 (Windows x64)"
+  ];
+  assert.match(usefulBenchmarkError(lines) ?? "", /adapter unavailable/);
 });

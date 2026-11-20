@@ -15,6 +15,7 @@ type Worker = {
   id: number;
   requests: Map<number, Pending>;
   failed: Error | null;
+  diagnostics: string[];
 };
 
 export type GpuWorkerPool = {
@@ -79,10 +80,21 @@ export function createGpuWorkerPool(
         CODE_GUARDS_GPU_BATCH: config.features.has("batch") ? "1" : "0",
         CODE_GUARDS_GPU_CACHE: config.features.has("cache") ? "1" : "0"
       },
-      stdio: ["pipe", "pipe", "inherit"], windowsHide: true
+      stdio: ["pipe", "pipe", "pipe"], windowsHide: true
     });
-    const worker: Worker = { child, id, requests: new Map(), failed: null };
+    const worker: Worker = { child, id, requests: new Map(), failed: null, diagnostics: [] };
     workers.push(worker);
+    // The native ONNX model worker can terminate during initialisation.
+    // Without a listener, EPIPE on Bun's Writable stdin can become an
+    // unhandled process error instead of a useful diagnostic.
+    child.stdin?.on("error", error => {
+      rejectWorker(worker, new Error("GPU " + id + " worker stdin failed: " + error.message));
+    });
+    child.stderr?.on("data", (data: Buffer | string) => {
+      const lines = String(data).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      worker.diagnostics.push(...lines);
+      if (worker.diagnostics.length > 32) worker.diagnostics.splice(0, worker.diagnostics.length - 32);
+    });
     const output = child.stdout;
     if (!output) throw new Error("Could not read GPU worker output.");
     const lines = createInterface({ input: output, crlfDelay: Infinity });
@@ -109,10 +121,14 @@ export function createGpuWorkerPool(
         child.kill("SIGKILL");
       }
     });
-    child.once("error", error => rejectWorker(worker, error));
-    child.once("exit", (code, signal) => {
-      if (!closed) rejectWorker(worker, new Error("GPU " + id +
-        " worker exited: " + String(code ?? signal)));
+    child.once("error", error => rejectWorker(worker,
+      new Error("GPU " + id + " worker process failed: " + error.message)));
+    child.once("close", (code, signal) => {
+      if (!closed && !worker.failed) {
+        const detail = worker.diagnostics.slice(-12).join(" | ");
+        rejectWorker(worker, new Error("GPU " + id + " worker exited: " +
+          String(code ?? signal) + (detail ? ". Native stderr: " + detail : "")));
+      }
     });
   }
 
@@ -123,16 +139,18 @@ export function createGpuWorkerPool(
       if (!worker) return Promise.reject(new Error("No GPU worker available."));
       if (worker.failed) return Promise.reject(worker.failed);
       const input = worker.child.stdin;
-      if (!input || input.destroyed) return Promise.reject(new Error("GPU worker input is unavailable."));
+      if (!input || input.destroyed) return Promise.reject(new Error("GPU " + worker.id + " worker input is unavailable."));
       const id = ++nextId;
       return new Promise((resolve, reject) => {
         worker.requests.set(id, { resolve, reject });
-        input.write(JSON.stringify({ id, question }) + "\n", error => {
-          if (error) {
-            worker.requests.delete(id);
-            reject(error);
-          }
-        });
+        try {
+          input.write(JSON.stringify({ id, question }) + "\n", error => {
+            if (error) rejectWorker(worker,
+              new Error("GPU " + worker.id + " worker write failed: " + error.message));
+          });
+        } catch (error) {
+          rejectWorker(worker, error instanceof Error ? error : new Error(String(error)));
+        }
       });
     },
     close(): void {

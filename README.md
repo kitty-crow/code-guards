@@ -349,3 +349,8 @@ bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsco
 
 This is experimental and must be hardware-validated; compare both per-adapter
 counters and semantic scores before adopting it. It does not use NVLink.
+
+Before running the full native dual-WebGPU benchmark, run
+`bun run probe:dual-webgpu`. The probe initialises adapter 0 and 1,
+runs an inference on each and prints either their scores or the concrete
+failure. No TensorFlow project scan is needed for this smoke test.

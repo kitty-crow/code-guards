@@ -94,6 +94,16 @@ type ScanResult = {
 
 const eventPrefix = "CG_BENCH_EVENT ";
 
+/** Prefer the primary exception over the footer of Bun's crash report. */
+export function usefulBenchmarkError(lines: readonly string[]): string | null {
+  const useful = lines.filter(line =>
+    /(?:GPU \d+ worker|Traceback|Error:|error:|Exception:|panic:|EPIPE|WebGPU|ONNX Runtime|adapterIndex)/i.test(line) &&
+    !line.startsWith("[Code Guards]") && !/^Bun v\d/i.test(line)
+  );
+  return useful.at(0) ?? lines.find(line => !/^Bun v\d/i.test(line) &&
+    !line.startsWith("[Code Guards]")) ?? null;
+}
+
 function isTelemetry(value: unknown): value is ScanTelemetry {
   return typeof value === "object" && value !== null &&
     "type" in value && typeof value.type === "string";
@@ -172,7 +182,7 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     const trimmed = line.trim();
     if (trimmed) {
       diagnostics.push(trimmed);
-      if (diagnostics.length > 8) diagnostics.shift();
+      if (diagnostics.length > 64) diagnostics.shift();
     }
   };
   const errorStream = child.stderr;
@@ -221,7 +231,7 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     result.completed = !result.timedOut && close.code === 0;
     if (partial.trim()) handleLine(partial.trim());
     if (!result.timedOut && close.code !== 0) {
-      result.error = diagnostics.at(-1) ?? ("Child exited with code " + String(close.code));
+      result.error = usefulBenchmarkError(diagnostics) ?? ("Child exited with code " + String(close.code));
     }
   } finally {
     clearTimeout(deadline);

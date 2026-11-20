@@ -73,3 +73,11 @@ installation, the ONNX model's operator support, runtime results and score
 parity must be verified on KittyWin before treating this mode as production
 ready. A missing provider fails loudly and never silently falls back to
 single-GPU WebGPU or CPU. No NVLink communication is required.
+
+## Native WebGPU smoke test
+
+After installing the Python plugin, run `bun run probe:dual-webgpu` on
+KittyWin before any deadline-bounded TensorFlow scan. It sends an independent
+semantic question to each adapter and prints the two verdicts. It now
+propagates native stderr and handles worker stdin pipe closure safely, so
+an adapter failure is reported rather than crashing Bun with EPIPE.

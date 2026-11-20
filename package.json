@@ -13,6 +13,7 @@
     "test:bun": "tsc -p tsconfig.build.json && bun test --timeout 30000 ./test/*.test.ts",
     "benchmark:inference": "bun scripts/benchmark-inference.ts",
     "benchmark:throughput": "bun scripts/benchmark-throughput.ts",
+    "probe:dual-webgpu": "bun scripts/probe-dual-webgpu.ts",
     "guards": "tsc -p tsconfig.build.json && node dist/src/cli.js",
     "guards:strict": "tsc -p tsconfig.build.json && node dist/src/cli.js --strict",
     "guards:bun": "tsc -p tsconfig.build.json && bun dist/src/cli.js",
