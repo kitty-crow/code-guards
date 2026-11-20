@@ -168,3 +168,17 @@ test("disabled neural guards do not submit any semantic questions", async () => 
   assert.equal(result.maximum.windows, 0);
   assert.equal(result.maximum.modelCallsMaximum, 0);
 });
+
+test("explicit native WebGPU cache requires both directory and a remote for syncing", () => {
+  const base = ["all", "--accelerate", "batch,parallel,webgpu", "--gpu-ids", "0,1",
+    "--concurrency", "4", "--batch-size", "4"];
+  assert.throws(() => options([...base, "--sync-inference-cache"]), /requires/);
+  const local = options([...base, "--inference-cache-dir", "C:\\cache"]);
+  assert.equal(local.inferenceCacheDir, "C:\\cache");
+  assert.equal(local.syncInferenceCache, false);
+  const remote = options([...base, "--inference-cache-dir", "C:\\cache",
+    "--cache-remote", "https://github.com/kitty-crow/tensorflow-ts.git",
+    "--sync-inference-cache"]);
+  assert.equal(remote.syncInferenceCache, true);
+  assert.equal(remote.cacheRemote, "https://github.com/kitty-crow/tensorflow-ts.git");
+});
