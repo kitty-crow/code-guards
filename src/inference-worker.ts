@@ -1,4 +1,4 @@
-/** Dedicated CUDA model worker. Each process sees one physical GPU. */
+/** Dedicated DirectML or CUDA model worker with explicit adapter affinity. */
 import { createInterface } from "node:readline";
 import {
   configureSemanticAcceleration, observeSemanticProgress, observeSemanticTimings, zeroShot,
@@ -10,7 +10,9 @@ type Request = { id: number; question: SemanticQuestion };
 const gpuId = Number(process.env.CODE_GUARDS_GPU_WORKER_ID ?? "-1");
 if (!Number.isSafeInteger(gpuId) || gpuId < 0) throw new Error("Worker requires a valid GPU identifier.");
 const batchSize = Number(process.env.CODE_GUARDS_GPU_BATCH_SIZE ?? "4");
-const features = new Set<Acceleration>(["cuda"]);
+const backend = process.env.CODE_GUARDS_GPU_BACKEND;
+if (backend !== "dml" && backend !== "cuda") throw new Error("Worker requires dml or cuda backend.");
+const features = new Set<Acceleration>([backend]);
 if (process.env.CODE_GUARDS_GPU_BATCH === "1") features.add("batch");
 if (process.env.CODE_GUARDS_GPU_CACHE === "1") features.add("cache");
 configureSemanticAcceleration({ features, batchSize });

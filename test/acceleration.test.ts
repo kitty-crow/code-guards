@@ -23,6 +23,12 @@ test("acceleration flags combine, repeat, disable and reject invalid combination
   assert.throws(() => parseAccelerationFlags([
     "--accelerate", "parallel,cuda", "--concurrency", "2", "--gpu-ids", "0,0"
   ]), /unique/);
+  assert.deepEqual(parseAccelerationFlags([
+    "--accelerate", "parallel,dml", "--concurrency", "2", "--gpu-ids", "0,1"
+  ]).acceleration.gpuIds, [0, 1]);
+  assert.throws(() => parseAccelerationFlags([
+    "--accelerate", "parallel,cuda,dml", "--concurrency", "2", "--gpu-ids", "0,1"
+  ]), /requires/);
   assert.throws(() => parseAccelerationFlags(["--accelerate", "incorrect"]), /Unsupported acceleration/);
 });
 

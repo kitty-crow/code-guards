@@ -1,5 +1,5 @@
 /** Independent inference accelerations. Device choices are ordered alternatives. */
-export type Acceleration = "cache" | "batch" | "parallel" | "cuda" | "webgpu";
+export type Acceleration = "cache" | "batch" | "parallel" | "cuda" | "dml" | "webgpu";
 export type AccelerationConfig = {
   features: ReadonlySet<Acceleration>;
   batchSize: number;
@@ -58,7 +58,7 @@ export function parseAccelerationFlags(argv: readonly string[]): {
       const feature = item.trim().toLowerCase();
       if (feature === "none") { none = true; continue; }
       if (feature !== "cache" && feature !== "batch" && feature !== "parallel" &&
-          feature !== "cuda" && feature !== "webgpu") {
+          feature !== "cuda" && feature !== "dml" && feature !== "webgpu") {
         throw new Error("Unsupported acceleration: " + feature);
       }
       features.add(feature);
@@ -69,8 +69,10 @@ export function parseAccelerationFlags(argv: readonly string[]): {
   if (explicitConcurrency && !features.has("parallel")) {
     throw new Error("--concurrency requires --accelerate parallel.");
   }
-  if (gpuIds && (!features.has("parallel") || !features.has("cuda") || features.has("webgpu"))) {
-    throw new Error("--gpu-ids requires --accelerate parallel,cuda without webgpu.");
+  if (gpuIds && (!features.has("parallel") ||
+      Number(features.has("cuda")) + Number(features.has("dml")) !== 1 ||
+      features.has("webgpu"))) {
+    throw new Error("--gpu-ids requires parallel,cuda or parallel,dml, without webgpu.");
   }
   if (gpuIds && concurrency < gpuIds.length) {
     throw new Error("--concurrency must be at least the number of selected GPUs.");

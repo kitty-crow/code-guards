@@ -57,3 +57,13 @@ from completed model windows. `crossQuestionBatches` counts calls that
 include multiple independent questions, while `maximumBatchSize` records the
 largest model call. A nonzero `crossQuestionBatches` is direct evidence that
 `parallel,batch` grouped windows from different questions.
+
+To measure explicit dual-DirectML adapter execution on Windows:
+
+```powershell
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode dml --mode parallel,dml --gpu-ids 0,1 --concurrency 4
+```
+
+This reports work completed by each adapter and retains the 60-second
+per-mode limit. The DirectML execution provider may have different throughput
+and semantic confidence results from WebGPU or CPU.

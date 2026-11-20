@@ -1,4 +1,4 @@
-/** Explicit CUDA GPU affinity via independent child processes and line-based IPC. */
+/** Native DirectML / GPU affinity via isolated model child processes. */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join } from "node:path";
@@ -21,17 +21,15 @@ export type GpuWorkerPool = {
   close: () => void;
 };
 
-/** This path is CUDA-only; native Windows WebGPU adapter selection is not available here. */
+/** Bind each worker to a physical adapter through DirectML (Windows) or CUDA (Linux). */
 export function createGpuWorkerPool(
   ids: readonly number[],
   config: AccelerationConfig,
   event: (message: WorkerEvent) => void
 ): GpuWorkerPool {
-  if (process.platform !== "linux") {
-    throw new Error("--gpu-ids requires Linux or WSL2 with CUDA support; native Windows WebGPU GPU affinity is not verified.");
-  }
-  if (!config.features.has("cuda") || !config.features.has("parallel") || ids.length < 2) {
-    throw new Error("A multi-GPU pool requires at least two explicit CUDA GPU IDs and parallel acceleration.");
+  const backend = process.platform === "win32" ? "dml" : process.platform === "linux" ? "cuda" : null;
+  if (!backend || !config.features.has(backend) || !config.features.has("parallel") || ids.length < 2) {
+    throw new Error("GPU workers require parallel,dml on native Windows or parallel,cuda on Linux.");
   }
   const extension = fileURLToPath(import.meta.url).endsWith(".js") ? "js" : "ts";
   const workerFile = join(dirname(fileURLToPath(import.meta.url)), "inference-worker." + extension);
@@ -52,7 +50,8 @@ export function createGpuWorkerPool(
       cwd: process.cwd(),
       env: {
         ...process.env,
-        CUDA_VISIBLE_DEVICES: String(id),
+        ...(backend === "cuda" ? { CUDA_VISIBLE_DEVICES: String(id) } : {}),
+        CODE_GUARDS_GPU_BACKEND: backend,
         CODE_GUARDS_GPU_WORKER_ID: String(id),
         CODE_GUARDS_GPU_BATCH_SIZE: String(config.batchSize),
         CODE_GUARDS_GPU_BATCH: config.features.has("batch") ? "1" : "0",
@@ -63,7 +62,7 @@ export function createGpuWorkerPool(
     const worker: Worker = { child, id, requests: new Map(), failed: null };
     workers.push(worker);
     const output = child.stdout;
-    if (!output) throw new Error("Could not read CUDA worker output.");
+    if (!output) throw new Error("Could not read GPU worker output.");
     const lines = createInterface({ input: output, crlfDelay: Infinity });
     lines.on("line", line => {
       let message: unknown;
@@ -84,25 +83,25 @@ export function createGpuWorkerPool(
         request.resolve(message.verdict as WindowVerdict);
       } else if (message.type === "fatal") {
         const explanation = "message" in message ? String(message.message) : "unknown failure";
-        rejectWorker(worker, new Error("CUDA GPU " + id + " worker failed: " + explanation));
+        rejectWorker(worker, new Error("GPU " + id + " worker failed: " + explanation));
         child.kill("SIGKILL");
       }
     });
     child.once("error", error => rejectWorker(worker, error));
     child.once("exit", (code, signal) => {
-      if (!closed) rejectWorker(worker, new Error("CUDA GPU " + id +
+      if (!closed) rejectWorker(worker, new Error("GPU " + id +
         " worker exited: " + String(code ?? signal)));
     });
   }
 
   return {
     score(question): Promise<WindowVerdict> {
-      if (closed) return Promise.reject(new Error("CUDA worker pool has closed."));
+      if (closed) return Promise.reject(new Error("GPU worker pool has closed."));
       const worker = workers[nextWorker++ % workers.length];
-      if (!worker) return Promise.reject(new Error("No CUDA worker available."));
+      if (!worker) return Promise.reject(new Error("No GPU worker available."));
       if (worker.failed) return Promise.reject(worker.failed);
       const input = worker.child.stdin;
-      if (!input || input.destroyed) return Promise.reject(new Error("CUDA worker input is unavailable."));
+      if (!input || input.destroyed) return Promise.reject(new Error("GPU worker input is unavailable."));
       const id = ++nextId;
       return new Promise((resolve, reject) => {
         worker.requests.set(id, { resolve, reject });
@@ -118,7 +117,7 @@ export function createGpuWorkerPool(
       if (closed) return;
       closed = true;
       for (const worker of workers) {
-        rejectWorker(worker, new Error("CUDA worker pool closed."));
+        rejectWorker(worker, new Error("GPU worker pool closed."));
         worker.child.kill("SIGKILL");
       }
     }

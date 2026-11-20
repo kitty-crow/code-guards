@@ -55,7 +55,8 @@ export function throughputOptions(argv: readonly string[]): ThroughputOptions {
     const args = ["--accelerate", mode];
     if (mode.split(",").includes("batch")) args.push("--batch-size", String(batchSize));
     if (mode.split(",").includes("parallel")) args.push("--concurrency", String(concurrency));
-    if (gpuIds && mode.split(",").includes("cuda") && mode.split(",").includes("parallel")) {
+    if (gpuIds && mode.split(",").includes("parallel") &&
+        (mode.split(",").includes("cuda") || mode.split(",").includes("dml"))) {
       args.push("--gpu-ids", gpuIds);
     }
     const parsed = parseAccelerationFlags(args);
@@ -142,7 +143,8 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     "--accelerate", mode,
     ...(mode.split(",").includes("batch") ? ["--batch-size", String(settings.batchSize)] : []),
     ...(mode.split(",").includes("parallel") ? ["--concurrency", String(settings.concurrency)] : []),
-    ...(settings.gpuIds && mode.split(",").includes("cuda") && mode.split(",").includes("parallel")
+    ...(settings.gpuIds && mode.split(",").includes("parallel") &&
+      (mode.split(",").includes("cuda") || mode.split(",").includes("dml"))
       ? ["--gpu-ids", settings.gpuIds] : [])
   ];
   const started = performance.now();

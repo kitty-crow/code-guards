@@ -55,3 +55,16 @@ This path requires a working native CUDA ONNX Runtime provider on Linux or
 WSL2. It deliberately rejects native Windows, where this Transformers.js
 integration cannot reliably bind separate WebGPU adapters. It is not NVLink
 transport: the model is replicated and no intermediate tensors cross GPUs.
+
+## Native Windows DirectML GPU affinity
+
+The `dml` acceleration option selects ONNX Runtime's DirectML execution
+provider (Windows). For explicit dual-GPU selection use
+`--accelerate parallel,dml --gpu-ids 0,1 --concurrency 4`.
+Each child process loads its own model, passing
+`session_options.executionProviders = [{name:'dml', deviceId: GPU_ID}]`
+to Transformers.js. ONNX Runtime selects the Windows DirectML adapter;
+these device IDs follow DirectML/DXGI enumeration, not necessarily
+`nvidia-smi` numbering. Unsupported devices fail explicitly rather than
+falling back to another GPU or CPU. This is distinct from WebGPU acceleration,
+which remains single-device unless adapter selection is implemented.

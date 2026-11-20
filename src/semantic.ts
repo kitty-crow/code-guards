@@ -41,7 +41,7 @@ let timingObserver: ((event: SemanticTimingEvent) => void) | null = null;
 let classifierPromise: Promise<Classifier> | null = null;
 let questionBatcher: ReturnType<typeof createQuestionBatcher> | null = null;
 let acceleration: AccelerationConfig = NO_ACCELERATION;
-let activeDevice: "cpu" | "webgpu" | "cuda" = "cpu";
+let activeDevice: "cpu" | "webgpu" | "cuda" | "dml" = "cpu";
 const cache = new Map<string, Promise<WindowVerdict>>();
 let remoteScorer: ((question: SemanticQuestion) => Promise<WindowVerdict>) | null = null;
 
@@ -59,7 +59,7 @@ export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpu
   { type: "timing"; gpuId: number; timing: SemanticTimingEvent }): void {
   if (event.type === "loading") progressObserver("loading");
   if (event.type === "ready") {
-    activeDevice = "cuda";
+    activeDevice = process.platform === "win32" ? "dml" : "cuda";
     progressObserver("ready");
   }
   if (event.type === "timing") {
@@ -94,7 +94,7 @@ export function semanticConcurrency(): number {
   return acceleration.features.has("parallel") ? acceleration.concurrency ?? 1 : 1;
 }
 
-export function semanticExecutionProvider(): { device: "cpu" | "cuda" | "webgpu"; precision: "q8" | "fp32" } {
+export function semanticExecutionProvider(): { device: "cpu" | "cuda" | "webgpu" | "dml"; precision: "q8" | "fp32" } {
   return { device: activeDevice, precision: activeDevice === "cpu" ? "q8" : "fp32" };
 }
 
@@ -128,14 +128,22 @@ async function loadClassifier(): Promise<Classifier> {
   if (modelCache) env.cacheDir = modelCache;
 
   const chosen = [...acceleration.features].filter(
-    (feature): feature is "cuda" | "webgpu" => feature === "cuda" || feature === "webgpu"
+    (feature): feature is "cuda" | "dml" | "webgpu" =>
+      feature === "cuda" || feature === "dml" || feature === "webgpu"
   );
-  const devices: ("cpu" | "cuda" | "webgpu")[] = chosen.length ? chosen : ["cpu"];
+  const devices: ("cpu" | "cuda" | "dml" | "webgpu")[] = chosen.length ? chosen : ["cpu"];
   const failures: string[] = [];
   for (const device of devices) {
     try {
+      // DirectML exposes physical adapter affinity through ONNX Runtime's
+      // deviceId session option. Never silently fall back to another adapter.
+      const adapterId = process.env.CODE_GUARDS_GPU_WORKER_ID;
+      const sessionOptions = device === "dml" && adapterId !== undefined
+        ? { executionProviders: [{ name: "dml" as const, deviceId: Number(adapterId) }] }
+        : undefined;
       const classifier = await pipeline("zero-shot-classification", MODEL, {
-        device, dtype: device === "cpu" ? "q8" : "fp32"
+        device, dtype: device === "cpu" ? "q8" : "fp32",
+        ...(sessionOptions ? { session_options: sessionOptions } : {})
       });
       const single = async (premise: string, labels: string[], options: ClassifierOptions): Promise<Classification> => {
         const result: unknown = await classifier(premise, labels, options);

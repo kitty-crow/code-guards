@@ -96,3 +96,7 @@ Cross-question timing includes the number of distinct semantic questions
 represented in each underlying model invocation. The throughput supervisor
 uses this to distinguish genuinely shared batches from batches containing
 only windows belonging to one question.
+
+The native Windows `dml` backend uses FP32, and, when a dedicated GPU worker
+is selected, passes a DirectML adapter ID to ONNX Runtime via Transformers.js
+session options. CPU, CUDA and WebGPU remain selectable independently.
