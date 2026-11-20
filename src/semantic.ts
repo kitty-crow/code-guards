@@ -4,7 +4,7 @@ export type SimilarityVerdict = {
   sameConcept: number;
   differentConcept: number;
 };
-type WindowVerdict = SimilarityVerdict & {
+export type WindowVerdict = SimilarityVerdict & {
   evidence: { windows: number; supportWindow: number; oppositionWindow: number };
 };
 export type SemanticQuestion = { premise: string; same: string; different: string };
@@ -14,7 +14,7 @@ export type SemanticScorer = (question: SemanticQuestion) => Promise<SimilarityV
 export type SemanticTimingEvent =
   | { phase: "model-load"; milliseconds: number }
   | { phase: "windowing"; milliseconds: number; windows: number }
-  | { phase: "inference"; milliseconds: number; window: number; windows: number; batchSize: number }
+  | { phase: "inference"; milliseconds: number; window: number; windows: number; batchSize: number; gpuId?: number }
   | { phase: "cache-hit"; milliseconds: number }
   | { phase: "verdict"; milliseconds: number; windows: number };
 
@@ -42,6 +42,34 @@ let classifierPromise: Promise<Classifier> | null = null;
 let acceleration: AccelerationConfig = NO_ACCELERATION;
 let activeDevice: "cpu" | "webgpu" | "cuda" = "cpu";
 const cache = new Map<string, Promise<WindowVerdict>>();
+let remoteScorer: ((question: SemanticQuestion) => Promise<WindowVerdict>) | null = null;
+
+/** Replace local scoring only while an explicitly selected external GPU pool is active. */
+export function useRemoteSemanticScorer(
+  scorer: (question: SemanticQuestion) => Promise<WindowVerdict>
+): () => void {
+  const previous = remoteScorer;
+  remoteScorer = scorer;
+  return () => { remoteScorer = previous; };
+}
+
+/** Forward real worker telemetry to the existing scan progress observers. */
+export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpuId: number } |
+  { type: "timing"; gpuId: number; timing: SemanticTimingEvent }): void {
+  if (event.type === "loading") progressObserver("loading");
+  if (event.type === "ready") {
+    activeDevice = "cuda";
+    progressObserver("ready");
+  }
+  if (event.type === "timing") {
+    const timing = event.timing.phase === "inference"
+      ? { ...event.timing, gpuId: event.gpuId } : event.timing;
+    timingObserver?.(timing);
+    if (event.timing.phase === "inference") {
+      for (let index = 0; index < event.timing.batchSize; index += 1) progressObserver("inference");
+    }
+  }
+}
 
 /** Settings are scoped to the current scan; no inference engine changes on import. */
 export function configureSemanticAcceleration(config: AccelerationConfig): () => void {
@@ -212,6 +240,7 @@ async function classifyGroup(
 }
 
 export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdict> {
+  if (remoteScorer) return remoteScorer(question);
   const enabled = acceleration.features.has("cache");
   const key = enabled ? JSON.stringify([MODEL, question.premise, question.same, question.different]) : "";
   const previous = enabled ? cache.get(key) : undefined;

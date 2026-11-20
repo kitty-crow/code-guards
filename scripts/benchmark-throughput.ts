@@ -15,6 +15,7 @@ export type ThroughputOptions = {
   modes: string[];
   batchSize: number;
   concurrency: number;
+  gpuIds: string | null;
   guard: string;
 };
 
@@ -23,12 +24,13 @@ export function throughputOptions(argv: readonly string[]): ThroughputOptions {
   let seconds = 60;
   let batchSize = 4;
   let concurrency = 4;
+  let gpuIds: string | null = null;
   let guard = "all";
   const modes: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i] ?? "";
     if (flag !== "--project" && flag !== "--seconds" && flag !== "--mode" &&
-        flag !== "--batch-size" && flag !== "--concurrency" && flag !== "--guard") {
+        flag !== "--batch-size" && flag !== "--concurrency" && flag !== "--gpu-ids" && flag !== "--guard") {
       throw new Error("Unknown argument: " + flag);
     }
     const value = argv[++i] ?? "";
@@ -39,6 +41,7 @@ export function throughputOptions(argv: readonly string[]): ThroughputOptions {
     if (flag === "--seconds") seconds = Number(value);
     if (flag === "--batch-size") batchSize = Number(value);
     if (flag === "--concurrency") concurrency = Number(value);
+    if (flag === "--gpu-ids") gpuIds = value;
   }
   if (!project || !existsSync(project)) throw new Error("Supply --project with an existing TensorFlow tsconfig path.");
   if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 3600) throw new Error("--seconds must be 1..3600.");
@@ -52,12 +55,15 @@ export function throughputOptions(argv: readonly string[]): ThroughputOptions {
     const args = ["--accelerate", mode];
     if (mode.split(",").includes("batch")) args.push("--batch-size", String(batchSize));
     if (mode.split(",").includes("parallel")) args.push("--concurrency", String(concurrency));
+    if (gpuIds && mode.split(",").includes("cuda") && mode.split(",").includes("parallel")) {
+      args.push("--gpu-ids", gpuIds);
+    }
     const parsed = parseAccelerationFlags(args);
     if (parsed.remaining.length || !accelerationNames(parsed.acceleration).length) {
       throw new Error("Invalid mode: " + mode);
     }
   }
-  return { project, seconds, modes: selected, batchSize, concurrency, guard };
+  return { project, seconds, modes: selected, batchSize, concurrency, gpuIds, guard };
 }
 
 type ScanResult = {
@@ -77,6 +83,7 @@ type ScanResult = {
   completedSemanticQuestions: number;
   cacheHits: number;
   provider: string;
+  gpuWindows: Record<string, number>;
   error: string | null;
 };
 
@@ -101,6 +108,10 @@ function consumeEvent(result: ScanResult, event: ScanTelemetry): void {
     result.provider = event.device;
   } else if (event.type === "inference") {
     result.completedInferenceWindows += event.windows;
+    if (event.gpuId !== undefined) {
+      const key = String(event.gpuId);
+      result.gpuWindows[key] = (result.gpuWindows[key] ?? 0) + event.windows;
+    }
   } else if (event.type === "verdict") {
     result.completedSemanticQuestions += 1;
   } else if (event.type === "cache-hit") {
@@ -115,7 +126,7 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     completed: false, exitCode: null, loadedFiles: 0, enabledRules: 0,
     stage: "starting", completedStages: 0, totalStages: 0, stageFindings: 0,
     completedInferenceWindows: 0, completedSemanticQuestions: 0,
-    cacheHits: 0, provider: "not initialised", error: null
+    cacheHits: 0, provider: "not initialised", gpuWindows: {}, error: null
   };
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const args = [
@@ -123,7 +134,9 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     "--project", settings.project, "--benchmark-telemetry",
     "--accelerate", mode,
     ...(mode.split(",").includes("batch") ? ["--batch-size", String(settings.batchSize)] : []),
-    ...(mode.split(",").includes("parallel") ? ["--concurrency", String(settings.concurrency)] : [])
+    ...(mode.split(",").includes("parallel") ? ["--concurrency", String(settings.concurrency)] : []),
+    ...(settings.gpuIds && mode.split(",").includes("cuda") && mode.split(",").includes("parallel")
+      ? ["--gpu-ids", settings.gpuIds] : [])
   ];
   const started = performance.now();
   const child = spawn(process.execPath, args, {

@@ -14,6 +14,15 @@ test("acceleration flags combine, repeat, disable and reject invalid combination
   assert.throws(() => parseAccelerationFlags(["--batch-size", "4"]), /requires/);
   assert.throws(() => parseAccelerationFlags(["--concurrency", "4"]), /requires/);
   assert.equal(parseAccelerationFlags(["--accelerate", "parallel,webgpu", "--concurrency", "4"]).acceleration.concurrency, 4);
+  assert.deepEqual(parseAccelerationFlags([
+    "--accelerate", "parallel,cuda", "--concurrency", "2", "--gpu-ids", "0,1"
+  ]).acceleration.gpuIds, [0, 1]);
+  assert.throws(() => parseAccelerationFlags([
+    "--accelerate", "parallel,webgpu", "--concurrency", "2", "--gpu-ids", "0,1"
+  ]), /requires/);
+  assert.throws(() => parseAccelerationFlags([
+    "--accelerate", "parallel,cuda", "--concurrency", "2", "--gpu-ids", "0,0"
+  ]), /unique/);
   assert.throws(() => parseAccelerationFlags(["--accelerate", "incorrect"]), /Unsupported acceleration/);
 });
 

@@ -39,3 +39,10 @@ bun run benchmark:throughput --project /path/to/tsconfig.code-guards.json --mode
 
 `--concurrency` controls the limit for modes that include `parallel`. This
 isolates queueing benefits from model precision and GPU selection.
+
+For experimental dual-GPU CUDA execution under Linux/WSL2, add
+`--mode parallel,cuda --gpu-ids 0,1 --concurrency 4`. CUDA model workers
+must be independently loadable; unsupported installations fail explicitly.
+The JSON result includes `gpuWindows` per CUDA device to show whether both
+workers actually handled inference. This mode is not available on native
+Windows WebGPU.

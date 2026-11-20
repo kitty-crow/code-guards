@@ -41,3 +41,17 @@ This is same-process concurrency on the selected execution provider. It does
 **not** bind work to a second physical GPU, create extra GPU sessions, or
 exchange tensors over NVLink. Hardware acceleration should be verified using
 per-device telemetry and a before/after throughput benchmark.
+
+## Explicit dual-GPU CUDA workers (Linux/WSL2)
+
+`--accelerate parallel,cuda --concurrency 4 --gpu-ids 0,1` starts one
+independent model worker process for each selected NVIDIA GPU. Each receives
+`CUDA_VISIBLE_DEVICES` set to its assigned physical index, making device
+affinity explicit. Semantic questions are distributed across workers via
+line-based IPC; each process loads its own copy of MobileBERT. Completed
+windows from each worker are attributed to its GPU index in benchmark JSON.
+
+This path requires a working native CUDA ONNX Runtime provider on Linux or
+WSL2. It deliberately rejects native Windows, where this Transformers.js
+integration cannot reliably bind separate WebGPU adapters. It is not NVLink
+transport: the model is replicated and no intermediate tensors cross GPUs.

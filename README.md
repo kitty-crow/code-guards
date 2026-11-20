@@ -281,3 +281,15 @@ reordering results. Opt in with `--accelerate parallel,webgpu --concurrency 4`.
 Use the throughput benchmark with `--mode webgpu --mode parallel,webgpu`
 to establish whether it actually improves full-project throughput. This
 is one GPU backend per process, not verified dual-GPU or NVLink support.
+
+## Experimental multi-GPU CUDA workers
+
+For Linux/WSL2 hosts with two working CUDA-capable NVIDIA GPUs, select
+`--accelerate parallel,cuda --concurrency 4 --gpu-ids 0,1`. Code Guards
+runs two independent CUDA model processes with explicit
+`CUDA_VISIBLE_DEVICES` affinity. Native Windows WebGPU GPU selection is
+not implemented and these flags reject that platform. The two processes
+replicate MobileBERT instead of using NVLink, so no cross-GPU transfer is
+necessary. Use `benchmark:throughput --mode parallel,cuda --gpu-ids 0,1`
+to verify actual per-GPU inference work. Do not assume two GPUs are active
+without reviewing per-device counters and NVIDIA utilisation.

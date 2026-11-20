@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { analyse } from "./engine.ts";
 import { parseAccelerationFlags, type AccelerationConfig } from "./acceleration.ts";
-import { configureSemanticAcceleration } from "./semantic.ts";
+import { configureSemanticAcceleration, relaySemanticWorkerEvent, useRemoteSemanticScorer } from "./semantic.ts";
+import { createGpuWorkerPool } from "./inference-workers.ts";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { failed, guards, type GuardName } from "./model.ts";
@@ -15,7 +16,7 @@ function checkGuard(value: string | null): GuardName {
 }
 
 function usage(): never {
-  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline] [--progress] [--accelerate none|cache|batch|parallel|cuda|webgpu] [--batch-size 2..16] [--concurrency 2..16]");
+  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline] [--progress] [--accelerate none|cache|batch|parallel|cuda|webgpu] [--batch-size 2..16] [--concurrency 2..16] [--gpu-ids 0,1]");
   process.exit(2);
 }
 
@@ -86,6 +87,11 @@ export async function run(argv: string[]): Promise<number> {
     const config = options(argv);
     if (config.offline) process.env.CODE_GUARDS_OFFLINE = "1";
     const restore = configureSemanticAcceleration(config.acceleration);
+    const gpuIds = config.acceleration.gpuIds;
+    const pool = gpuIds
+      ? createGpuWorkerPool(gpuIds, config.acceleration, relaySemanticWorkerEvent)
+      : null;
+    const restoreRemote = pool ? useRemoteSemanticScorer(question => pool.score(question)) : () => {};
     try {
       const { findings, root } = await analyse(
         config,
@@ -97,6 +103,8 @@ export async function run(argv: string[]): Promise<number> {
       console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
       return failed(findings, config.strict) ? 1 : 0;
     } finally {
+      restoreRemote();
+      pool?.close();
       restore();
     }
   } catch (error) {
