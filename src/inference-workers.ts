@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { AccelerationConfig } from "./acceleration.ts";
 import type { SemanticQuestion, SemanticTimingEvent, WindowVerdict } from "./semantic.ts";
 
-type WorkerEvent = { type: "loading" | "ready"; gpuId: number } |
+type WorkerEvent = { type: "loading" | "ready"; gpuId: number; backend?: "cuda" | "dml" | "webgpu" } |
   { type: "timing"; gpuId: number; timing: SemanticTimingEvent };
 type Pending = { resolve: (value: WindowVerdict) => void; reject: (reason: Error) => void };
 type Worker = {
