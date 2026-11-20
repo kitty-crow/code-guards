@@ -15,7 +15,7 @@ function command(exe: string, args: string[], cwd: string, mayFail = false): boo
   });
   if (run.error) throw new Error(exe + " could not run: " + run.error.message);
   if (run.status === 0) return true;
-  if (mayFail && run.status === 1) return false;
+  if (mayFail && (run.status === 1 || run.status === 2)) return false;
   throw new Error(exe + " " + args[0] + " failed (exit " + String(run.status) +
     "): " + (run.stderr || run.stdout || "no diagnostics").trim());
 }
