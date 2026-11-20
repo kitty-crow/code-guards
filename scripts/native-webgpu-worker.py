@@ -27,6 +27,8 @@ def emit(message: dict[str, Any]) -> None:
 
 
 def model_files() -> tuple[str, str, dict[str, Any]]:
+    if os.environ.get("CODE_GUARDS_OFFLINE") == "1":
+        os.environ["HF_HUB_OFFLINE"] = "1"
     from huggingface_hub import hf_hub_download
     model = hf_hub_download(MODEL, filename="onnx/model.onnx")
     tokenizer = hf_hub_download(MODEL, filename="tokenizer.json")
@@ -48,6 +50,8 @@ def initialise(adapter_index: int) -> tuple[Any, Any, int, int]:
 
     # Unlike ORT's deviceId, adapterIndex selects a PHYSICAL Dawn adapter.
     options = ort.SessionOptions()
+    # Do not allow unsupported operators to execute silently on CPU.
+    options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
     options.add_provider_for_devices(
         [matching[0]], {"adapterIndex": str(adapter_index), "powerPreference": "high-performance"}
     )

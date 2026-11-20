@@ -78,3 +78,6 @@ The scanner remains Bun-based; the adapter-aware ONNX model sessions execute
 in isolated local worker processes through the plugin's Python binding.
 This requires optional separately installed Python dependencies and does not
 change the default `webgpu` backend.
+
+The native WebGPU bridge disables ONNX CPU EP fallback, so unsupported
+operators fail explicitly rather than making per-GPU counters misleading.

@@ -331,10 +331,17 @@ only the explicitly selected inference engine uses isolated Python plugin
 workers. The stock ONNX Runtime Node binding does **not** expose this
 physical-adapter selector.
 
-Install a separate Python environment with `onnxruntime==1.32.0`, the
-compatible `onnxruntime-ep-webgpu` plugin, `huggingface-hub`, `tokenizers`
-and `numpy`. Point `CODE_GUARDS_WEBGPU_PYTHON` at the environment's Python,
-then run:
+Install a separate Python environment with the matched pair
+`onnxruntime==1.31.0` and `onnxruntime-ep-webgpu==0.5.0`, plus
+`huggingface-hub`, `tokenizers` and `numpy`. For example on KittyWin:
+
+```powershell
+py -3.12 -m venv "$env:TEMP\\code-guards-webgpu"
+& "$env:TEMP\\code-guards-webgpu\\Scripts\\python.exe" -m pip install "onnxruntime==1.31.0" "onnxruntime-ep-webgpu==0.5.0" "huggingface-hub>=0.26,<2" "tokenizers>=0.20,<1" "numpy>=1.26,<3"
+$env:CODE_GUARDS_WEBGPU_PYTHON = "$env:TEMP\\code-guards-webgpu\\Scripts\\python.exe"
+```
+
+Then run:
 
 ```powershell
 bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode webgpu --mode parallel,webgpu --gpu-ids 0,1 --concurrency 4

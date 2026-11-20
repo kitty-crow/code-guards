@@ -83,3 +83,9 @@ Python ONNX Runtime plugin environment and set `CODE_GUARDS_WEBGPU_PYTHON`.
 The report's `gpuWindows` tracks completed inference windows by physical
 adapter index. See `docs/modules/inference-workers.md` for dependencies.
 Because these modes use distinct ORT bindings, also verify numerical parity.
+
+For the native WebGPU plugin, first-start model downloads are included in
+the 60-second limit. To compare warm inference, prefetch the full FP32
+`Xenova/mobilebert-uncased-mnli` model, configuration and tokenizer in
+the same Python environment. Native plugin sessions disable CPU EP fallback;
+unsupported WebGPU operators produce an explicit failure.

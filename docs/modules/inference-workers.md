@@ -46,11 +46,27 @@ scheduling and telemetry remain in Bun/TypeScript. Each worker sets
 MobileBERT ONNX model and Hugging Face tokenizer. The workers return scored
 semantic verdicts and per-adapter completed-inference telemetry.
 
-Install an isolated Python environment containing `onnxruntime==1.32.0`,
-the compatible `onnxruntime-ep-webgpu` plugin, `huggingface-hub` and
-`tokenizers`, then set `CODE_GUARDS_WEBGPU_PYTHON` to that environment's
-Python executable. ORT 1.32 uses a plugin EP distinct from the Node binding,
-and the WebGPU plugin must match the core runtime version.
+Install an isolated Python environment with the published matching versions
+`onnxruntime==1.31.0` and `onnxruntime-ep-webgpu==0.5.0`, plus
+`huggingface-hub`, `tokenizers` and `numpy`. Set
+`CODE_GUARDS_WEBGPU_PYTHON` to that Python executable. The native EP
+supports `adapterIndex` and is distinct from the Node WebGPU binding.
+Model sessions disable implicit CPU execution-provider fallback.
+
+In PowerShell on KittyWin, create the environment (Python 3.12 required
+for this example):
+
+```powershell
+py -3.12 -m venv "$env:TEMP\\code-guards-webgpu"
+& "$env:TEMP\\code-guards-webgpu\\Scripts\\python.exe" -m pip install --upgrade pip
+& "$env:TEMP\\code-guards-webgpu\\Scripts\\python.exe" -m pip install "onnxruntime==1.31.0" "onnxruntime-ep-webgpu==0.5.0" "huggingface-hub>=0.26,<2" "tokenizers>=0.20,<1" "numpy>=1.26,<3"
+$env:CODE_GUARDS_WEBGPU_PYTHON = "$env:TEMP\\code-guards-webgpu\\Scripts\\python.exe"
+```
+
+First start will download the full FP32 MobileBERT ONNX model from Hugging
+Face and will contribute to the 60-second scan deadline. For fair warm
+benchmarks, prepopulate the cache before running the timed comparison.
+
 
 The operation is **experimental**: native adapter enumeration, plugin
 installation, the ONNX model's operator support, runtime results and score
