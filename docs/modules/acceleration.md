@@ -82,8 +82,12 @@ change the default `webgpu` backend.
 The native WebGPU bridge disables ONNX CPU EP fallback, so unsupported
 operators fail explicitly rather than making per-GPU counters misleading.
 
-Explicit `--gpu-ids` now accepts one or more unique adapters. Selecting one
+Explicit `--gpu-ids` accepts one or more unique adapters. Selecting one
 adapter permits a like-for-like native WebGPU throughput baseline against
 two adapters, while preserving the same Bun scheduler and Python plugin
 implementation. The worker pool assigns new questions to the least-queued
 adapter with rotating tie-breaks.
+
+## Public configuration helpers
+
+`NO_ACCELERATION` supplies the default CPU configuration with no optional features. `accelerationNames(config)` formats the selected feature names, returning `["none"]` when no acceleration is selected. Both functions accept or return the same `AccelerationConfig` used by the CLI and preflight estimator.

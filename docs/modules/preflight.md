@@ -29,3 +29,9 @@ Documentation has adaptive selection: a strong README handover verdict can suppr
 The only available reference duration estimates use measured native WebGPU throughput of 1,569 windows per 60 seconds on one RTX 2080 Ti and 3,372 windows per 60 seconds on two. They are warm inference-only calibration estimates, not forecasts of total wall-clock time, and exclude model preparation, tokenisation, downloads, GPU contention and scheduling. Other configurations report work counts without unsupported timing estimates.
 
 Preflight does not write to the target project and does not emit ordinary findings. `--format json` returns machine-readable bounds and limitations; otherwise it prints a short text report. `--strict` has no effect on preflight because it never produces inferred violations.
+
+## Public preflight API
+
+`loadPreflightTokenizer()` loads the named MobileBERT tokenizer/configuration without initialising an inference session or downloading model weights. `estimateInference(config, acceleration, tokenizer?, progress?)` accepts ordinary `AnalysisOptions`, shares the production candidate selection and returns an `InferencePreflight` JSON-compatible result. Tests can inject a deterministic tokenizer rather than using the network.
+
+`InferenceCounter` implements the no-inference semantic scoring observer and exposes `reject`, `accept` and `snapshot()`. It returns an `InferenceWork` measurement with question, window and model-call bounds. Each `PreflightStage` records those bounds per guard. `formatInferencePreflight(result)` renders the full result for a human-readable CLI output without creating guard findings. The `InferencePreflight` result also contains optional calibration metadata, configuration and limitations.

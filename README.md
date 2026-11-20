@@ -296,7 +296,7 @@ without reviewing per-device counters and NVIDIA utilisation.
 
 ## Cross-question inference batching
 
-The `parallel,batch` combination now implements actual model-call
+The `parallel,batch` combination performs model-call
 batching across different semantic questions with identical candidate
 hypotheses. A single GPU inference dispatcher interleaves evidence windows
 and serialises the underlying model calls to avoid contention observed when

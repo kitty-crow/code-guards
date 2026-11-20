@@ -86,7 +86,7 @@ an adapter failure is reported rather than crashing Bun with EPIPE.
 
 MobileBERT contains operations that the native WebGPU provider assigns to
 CPU. Strictly disabling CPU EP fallback prevents session creation. This
-worker now allows supported CPU shape/control nodes, but does not permit
+worker permits supported CPU shape/control nodes, but does not permit
 whole-session fallback if WebGPU execution fails. The first inference is
 profiled via ONNX Runtime kernel events: the worker rejects CPU-only
 execution, reports actual WebGPU/CPU node counts and operator names and
@@ -109,3 +109,7 @@ round-robin assignment. Equal queue depths use a rotating tie-breaker.
 This improves responsiveness when question lengths or GPU speeds differ,
 while preserving the order of final guard findings. Workers still execute
 their assigned questions independently; no NVLink communication occurs.
+
+## Worker pool TypeScript API
+
+`createGpuWorkerPool(ids, config, event)` launches an explicitly requested set of device-affined worker processes and returns a `GpuWorkerPool` with `score(question)` and `close()` methods. `leastPendingWorkerIndex(counts, start)` chooses a pending-queue minimum using rotating ties, without loading a model itself. These exports are used by ordinary scans and benchmark supervision; preflight never calls `createGpuWorkerPool`.

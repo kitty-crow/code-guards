@@ -100,3 +100,11 @@ only windows belonging to one question.
 The native Windows `dml` backend uses FP32, and, when a dedicated GPU worker
 is selected, passes a DirectML adapter ID to ONNX Runtime via Transformers.js
 session options. CPU, CUDA and WebGPU remain selectable independently.
+
+## Scorer, worker and tokenizer contracts
+
+`Tokenizer` provides token-ID encoding and text decoding for the model-specific vocabulary. `WindowVerdict` includes supporting and opposing entailment scores plus the evidence-window indices. `SemanticTimingEvent` identifies model-load, windowing, cache, inference, verdict and provider-proof timings.
+
+`premiseWindowCount(question, tokenizer)` counts the exact windows from the same token plan as `premiseWindows` without decoding or running them, allowing preflight to avoid inference. `configureSemanticAcceleration(config)` scopes backend settings to a scan and returns a restoration callback; `semanticConcurrency()` reports its maximum independent pending comparisons. `semanticExecutionProvider()` reports the active device and precision.
+
+`useRemoteSemanticScorer(scorer)` temporarily binds an external GPU pool to the ordinary semantic API. `relaySemanticWorkerEvent(event)` forwards real GPU worker timing and readiness events to observers. Neither method is called during preflight, which supplies a counting-only scorer directly to production guards.
