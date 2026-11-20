@@ -229,3 +229,26 @@ bun run guards:strict:bun --path ../my-project --progress
 Progress includes the number of files, each scan stage, elapsed time, findings and neural inference windows. TypeScript checks retain all 23 guards, with the related deterministic code-health rules grouped into one traversal. MobileBERT is still executed on CPU and each inference is counted without changing its score. CI can use `--format github --progress` to preserve GitHub annotations and emit readable progress logs.
 
 Vendored dependencies are excluded from both TypeScript findings and documentation checks. This covers `vendor/`, `third_party/`, `third-party/` and all submodule paths declared in the target repository's `.gitmodules`, including submodules located outside those conventional directories. The target's own source and tests remain subject to the configured checks.
+
+## Optional MobileBERT acceleration
+
+By default Code Guards uses CPU/q8 inference, exactly as before. Use explicit,
+composable flags for cache, batching and GPU inference:
+
+```sh
+bun run benchmark:inference --accelerate none
+bun run benchmark:inference --accelerate cache
+CODE_GUARDS_BENCHMARK_LONG=1 bun run benchmark:inference --accelerate batch --batch-size 4
+bun run benchmark:inference --accelerate webgpu
+bun run benchmark:inference --accelerate cuda
+bun run benchmark:inference --accelerate cache,batch,webgpu --batch-size 4
+bun run guards:bun --project ../tensorflow-ts/tsconfig.code-guards.json --accelerate cache,batch,cuda --batch-size 4
+```
+
+CUDA and WebGPU are explicit GPU requests; model compatibility, runtime
+libraries and drivers determine availability. Use `--accelerate cuda,webgpu`
+to try CUDA then WebGPU, or reverse the order. These are alternative
+providers, not simultaneous multi-GPU execution. CPU is **not** silently
+selected if both fail. GPU precision is FP32, and semantic scores may differ
+from CPU/q8. All work remains local. The TensorFlow fork is a real-world
+project-scan target, not an inference model.

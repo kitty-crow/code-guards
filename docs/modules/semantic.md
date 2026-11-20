@@ -47,3 +47,21 @@ remaining overhead times for every run, plus memory use and warm-run mean.
 This benchmark executes real MobileBERT inference and is deliberately excluded
 from routine unit tests and hosted CI. Timing data is platform-dependent and is
 not a claim that GPU execution or WASM would be faster.
+
+## Acceleration flags
+
+The scanner and real-model benchmark accept `--accelerate` with comma-separated
+features, or repeated flags. Valid choices are `none`, `cache`, `batch`,
+`cuda` and `webgpu`. Default `none` preserves CPU/q8 inference. The `none`
+value is exclusive.
+
+`cache` stores up to 512 identical semantic verdicts per scan in memory and
+deduplicates concurrent calls. `batch` groups multiple inference windows,
+preserving their individual positive and opposing evidence and progress events.
+Use `--batch-size 2..16` only when batching is enabled; the default is 4.
+
+CUDA and WebGPU are selected through Transformers.js 4 with FP32 weights.
+They depend on actual runtime and hardware support and may give scores
+different from CPU/q8. If both GPU backends are selected, their flag order
+determines fallback priority. They are alternatives, not simultaneous
+model sharding. There is **no implicit CPU fallback** when a GPU is requested.

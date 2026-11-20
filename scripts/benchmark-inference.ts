@@ -2,9 +2,10 @@
 /** Opt-in local CPU/q8 MobileBERT benchmark. Never used by routine CI. */
 import { performance } from "node:perf_hooks";
 import {
-  MODEL, observeSemanticTimings, zeroShot,
+  MODEL, configureSemanticAcceleration, observeSemanticTimings, semanticExecutionProvider, zeroShot,
   type SemanticQuestion, type SemanticTimingEvent
 } from "../src/semantic.ts";
+import { accelerationNames, parseAccelerationFlags } from "../src/acceleration.ts";
 
 type Sample = {
   iteration: number;
@@ -49,6 +50,9 @@ function rounded(milliseconds: number): number {
   return Number(milliseconds.toFixed(3));
 }
 
+const parsed = parseAccelerationFlags(process.argv.slice(2));
+if (parsed.remaining.length) throw new Error("Unknown benchmark argument: " + parsed.remaining[0]);
+const restoreAcceleration = configureSemanticAcceleration(parsed.acceleration);
 const repetitions = positiveIterations();
 const long = process.env.CODE_GUARDS_BENCHMARK_LONG === "1";
 const question = benchmarkQuestion(long);
@@ -67,7 +71,8 @@ try {
     const modelLoadMs = elapsed(iterationEvents, "model-load");
     const windowingMs = elapsed(iterationEvents, "windowing");
     const inferenceMs = elapsed(iterationEvents, "inference");
-    const completedWindows = iterationEvents.filter(event => event.phase === "inference").length;
+    const completedWindows = iterationEvents.filter(event => event.phase === "inference")
+      .reduce((total, event) => total + event.batchSize, 0);
     if (completedWindows !== verdict.evidence.windows) {
       throw new Error("Benchmark window count differs from completed inference calls.");
     }
@@ -88,14 +93,18 @@ try {
   restore();
 }
 
+const provider = semanticExecutionProvider();
+restoreAcceleration();
 const warm = samples.slice(1);
 const meanWarmMs = warm.length
   ? rounded(warm.reduce((sum, sample) => sum + sample.totalMs, 0) / warm.length)
   : null;
 console.log(JSON.stringify({
   model: MODEL,
-  executionProvider: "cpu",
-  precision: "q8",
+  requestedAcceleration: accelerationNames(parsed.acceleration),
+  batchSize: parsed.acceleration.features.has("batch") ? parsed.acceleration.batchSize : 1,
+  executionProvider: provider.device,
+  precision: provider.precision,
   runtime: "Bun",
   bunVersion: process.versions["bun"] ?? "unknown",
   platform: process.platform,

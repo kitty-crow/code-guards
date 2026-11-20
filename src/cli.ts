@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { analyse } from "./engine.ts";
+import { parseAccelerationFlags, type AccelerationConfig } from "./acceleration.ts";
+import { configureSemanticAcceleration } from "./semantic.ts";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { failed, guards, type GuardName } from "./model.ts";
 import { renderFindings, type Format, type ColourMode } from "./diagnostics.ts";
 
-type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean; progress: boolean };
+type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean; progress: boolean; acceleration: AccelerationConfig };
 
 function checkGuard(value: string | null): GuardName {
   if (!guards.some(name => name === value)) usage();
@@ -13,7 +15,7 @@ function checkGuard(value: string | null): GuardName {
 }
 
 function usage(): never {
-  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline] [--progress]");
+  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline] [--progress] [--accelerate none|cache|batch|cuda|webgpu] [--batch-size 2..16]");
   process.exit(2);
 }
 
@@ -26,6 +28,7 @@ function readTarget(argv: string[], index: number, selected: boolean): string {
 
 // Parse local CI flags explicitly: all guards are enabled unless opted out.
 export function options(argv: string[]): Options {
+  const { remaining, acceleration } = parseAccelerationFlags(argv);
   const enabled = new Set<GuardName>(guards);
   let project = "tsconfig.json";
   let targetSelected = false;
@@ -36,27 +39,27 @@ export function options(argv: string[]): Options {
   let offline = false;
   let progress = false;
   let selected = false;
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i] ?? usage();
+  for (let i = 0; i < remaining.length; i += 1) {
+    const arg = remaining[i] ?? usage();
     if (arg === "--project" || arg === "--path") {
-      project = readTarget(argv, i, targetSelected);
+      project = readTarget(remaining, i, targetSelected);
       i += 1;
       targetSelected = true;
       continue;
     }
     if (arg === "--format") {
-      const next = argv[++i] ?? usage();
+      const next = remaining[++i] ?? usage();
       format = next === "text" || next === "json" || next === "github" ? next : usage();
       continue;
     }
     if (arg === "--colour" || arg === "--color") {
-      const next = argv[++i] ?? usage();
+      const next = remaining[++i] ?? usage();
       colour = next === "auto" || next === "always" || next === "never" ? next : usage();
       continue;
     }
     if (arg === "--no-colour" || arg === "--no-color") { colour = "never"; continue; }
     if (arg === "--disable") {
-      const next = argv[++i] ?? usage();
+      const next = remaining[++i] ?? usage();
       enabled.delete(checkGuard(next));
       continue;
     }
@@ -73,18 +76,23 @@ export function options(argv: string[]): Options {
     }
     usage();
   }
-  return { enabled, project, format, colour, strict, includeTests, offline, progress };
+  return { enabled, project, format, colour, strict, includeTests, offline, progress, acceleration };
 }
 
 export async function run(argv: string[]): Promise<number> {
   try {
     const config = options(argv);
     if (config.offline) process.env.CODE_GUARDS_OFFLINE = "1";
-    const { findings, root } = await analyse(
-      config, config.progress ? message => console.error(message) : () => {}
-    );
-    console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
-    return failed(findings, config.strict) ? 1 : 0;
+    const restore = configureSemanticAcceleration(config.acceleration);
+    try {
+      const { findings, root } = await analyse(
+        config, config.progress ? message => console.error(message) : () => {}
+      );
+      console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
+      return failed(findings, config.strict) ? 1 : 0;
+    } finally {
+      restore();
+    }
   } catch (error) {
     if (error == null) {
       console.error(error === null ? "null" : "undefined");
