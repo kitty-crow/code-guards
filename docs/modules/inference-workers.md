@@ -81,3 +81,15 @@ KittyWin before any deadline-bounded TensorFlow scan. It sends an independent
 semantic question to each adapter and prints the two verdicts. It now
 propagates native stderr and handles worker stdin pipe closure safely, so
 an adapter failure is reported rather than crashing Bun with EPIPE.
+
+### Mixed CPU/WebGPU graph partitioning
+
+MobileBERT contains operations that the native WebGPU provider assigns to
+CPU. Strictly disabling CPU EP fallback prevents session creation. This
+worker now allows supported CPU shape/control nodes, but does not permit
+whole-session fallback if WebGPU execution fails. The first inference is
+profiled via ONNX Runtime kernel events: the worker rejects CPU-only
+execution, reports actual WebGPU/CPU node counts and operator names and
+cleans up the temporary profile JSON. Later inferences avoid profiling
+overhead. A separate model instance is still selected via physical
+`adapterIndex` per worker.

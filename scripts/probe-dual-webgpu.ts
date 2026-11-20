@@ -8,11 +8,25 @@ const { acceleration, remaining } = parseAccelerationFlags([
 ]);
 if (remaining.length || !acceleration.gpuIds) throw new Error("Invalid dual-WebGPU probe configuration.");
 const loaded = new Set<number>();
+const proofs = new Map<number, {
+  gpuNodes: number; cpuNodes: number; gpuOps: string[];
+  gpuTimeMs: number; cpuTimeMs: number;
+}>();
 const pool = createGpuWorkerPool(acceleration.gpuIds, acceleration, event => {
   if (event.type === "loading") console.error("[Code Guards] WebGPU adapter " + event.gpuId + ": loading model");
   if (event.type === "ready") {
     loaded.add(event.gpuId);
     console.error("[Code Guards] WebGPU adapter " + event.gpuId + ": model ready");
+  }
+  if (event.type === "timing" && event.timing.phase === "provider-proof") {
+    proofs.set(event.gpuId, {
+      gpuNodes: event.timing.gpuNodes, cpuNodes: event.timing.cpuNodes,
+      gpuOps: event.timing.gpuOps,
+      gpuTimeMs: event.timing.gpuTimeMs, cpuTimeMs: event.timing.cpuTimeMs
+    });
+    console.error("[Code Guards] WebGPU adapter " + event.gpuId +
+      ": executed " + event.timing.gpuNodes + " WebGPU nodes and " +
+      event.timing.cpuNodes + " CPU nodes");
   }
 });
 const question = {
@@ -22,9 +36,12 @@ const question = {
 };
 try {
   const answers = await Promise.all([pool.score(question), pool.score(question)]);
-  if (loaded.size !== 2) throw new Error("Both adapters were not confirmed ready.");
+  if (loaded.size !== 2 || proofs.size !== 2) {
+    throw new Error("Both adapters must confirm actual WebGPU inference.");
+  }
   console.log(JSON.stringify({
     adapters: [...loaded].sort((a, b) => a - b),
+    providerProofs: Object.fromEntries(proofs),
     results: answers
   }, null, 2));
 } catch (error) {

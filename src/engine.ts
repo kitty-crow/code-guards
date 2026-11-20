@@ -21,7 +21,9 @@ export type ScanTelemetry =
   | { type: "model-ready"; device: string }
   | { type: "inference"; windows: number; gpuId?: number; questions?: number }
   | { type: "verdict"; windows: number }
-  | { type: "cache-hit" };
+  | { type: "cache-hit" }
+  | { type: "provider-proof"; gpuId: number; gpuNodes: number; cpuNodes: number;
+      gpuOps: string[]; gpuTimeMs: number; cpuTimeMs: number };
 
 type Stage = {
   name: string;
@@ -94,6 +96,11 @@ export async function analyse(
       telemetry({ type: "inference", windows: event.batchSize,
         ...(event.gpuId === undefined ? {} : { gpuId: event.gpuId }),
         ...(event.distinctQuestions === undefined ? {} : { questions: event.distinctQuestions }) });
+    }
+    if (event.phase === "provider-proof" && event.gpuId !== undefined) {
+      telemetry({ type: "provider-proof", gpuId: event.gpuId, gpuNodes: event.gpuNodes,
+        cpuNodes: event.cpuNodes, gpuOps: event.gpuOps,
+        gpuTimeMs: event.gpuTimeMs, cpuTimeMs: event.cpuTimeMs });
     }
     if (event.phase === "verdict") telemetry({ type: "verdict", windows: event.windows });
     if (event.phase === "cache-hit") telemetry({ type: "cache-hit" });

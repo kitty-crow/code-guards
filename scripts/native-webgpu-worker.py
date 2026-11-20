@@ -50,14 +50,16 @@ def initialise(adapter_index: int) -> tuple[Any, Any, int, int]:
 
     # Unlike ORT's deviceId, adapterIndex selects a PHYSICAL Dawn adapter.
     options = ort.SessionOptions()
-    # Do not allow unsupported operators to execute silently on CPU.
-    options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    # CPU kernels are allowed only for unsupported graph operations. We
+    # independently verify WebGPU execution using ONNX's node profiler.
+    options.enable_profiling = True
     options.add_provider_for_devices(
         [matching[0]], {"adapterIndex": str(adapter_index), "powerPreference": "high-performance"}
     )
-    session = ort.InferenceSession(model_path, sess_options=options)
-    if not any("WebGpu" in provider or "WebGPU" in provider for provider in session.get_providers()):
-        raise RuntimeError("Native WebGPU provider was not activated; CPU fallback is not allowed.")
+    session = ort.InferenceSession(model_path, sess_options=options, enable_fallback=False)
+    session.disable_fallback()
+    if not any("webgpu" in provider.lower() for provider in session.get_providers()):
+        raise RuntimeError("Native WebGPU provider was not activated.")
     labels = {str(name).lower(): int(index) for name, index in config["label2id"].items()}
     return session, tokenizer, labels["entailment"], labels["contradiction"]
 
@@ -105,6 +107,54 @@ def run_pairs(session: Any, tokenizer: Any, pairs: list[tuple[str, str]]) -> Any
     return logits
 
 
+
+
+def summarise_provider_profile(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Prove execution, not mere registration of a WebGPU provider."""
+    kernels = [
+        event for event in events
+        if event.get("cat") == "Node" and
+        isinstance(event.get("args"), dict) and
+        isinstance(event["args"].get("provider"), str)
+    ]
+    gpu = [event for event in kernels if "webgpu" in event["args"]["provider"].lower()]
+    cpu = [event for event in kernels if "cpu" in event["args"]["provider"].lower()]
+    if not gpu:
+        providers = sorted({event["args"]["provider"] for event in kernels})
+        raise RuntimeError(
+            "MobileBERT executed no WebGPU kernels; rejecting CPU-only inference. "
+            f"Observed node providers: {providers or ['no profiling node events']}"
+        )
+    return {
+        "gpuNodes": len(gpu),
+        "cpuNodes": len(cpu),
+        "gpuOps": sorted({
+            str(event["args"].get("op_name") or "unknown") for event in gpu
+        })[:16],
+        "gpuTimeMs": round(sum(float(event.get("dur", 0)) for event in gpu) / 1000, 3),
+        "cpuTimeMs": round(sum(float(event.get("dur", 0)) for event in cpu) / 1000, 3),
+    }
+
+
+def verify_webgpu_execution(session: Any, gpu_id: int) -> dict[str, Any]:
+    """After first inference, inspect actual ONNX Runtime kernel events."""
+    profile = session.end_profiling()
+    if not profile:
+        raise RuntimeError("ONNX Runtime did not produce a WebGPU execution profile.")
+    target = Path(profile)
+    try:
+        events = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(events, list):
+            raise RuntimeError("ONNX Runtime emitted a malformed execution profile.")
+        proof = summarise_provider_profile(events)
+    finally:
+        target.unlink(missing_ok=True)
+    emit({"type": "timing", "gpuId": gpu_id, "timing": {
+        "phase": "provider-proof", "milliseconds": 0, **proof
+    }})
+    return proof
+
+
 def sigmoid(delta: float) -> float:
     if delta >= 0:
         return 1 / (1 + math.exp(-delta))
@@ -135,6 +185,9 @@ def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: 
         began = time.perf_counter()
         logits = run_pairs(session, tokenizer, pairs)
         elapsed = (time.perf_counter() - began) * 1000
+        if not hasattr(session, "_code_guards_verified"):
+            verify_webgpu_execution(session, gpu_id)
+            session._code_guards_verified = True
         emit({"type": "timing", "gpuId": gpu_id, "timing": {
             "phase": "inference", "milliseconds": elapsed, "batchSize": len(group),
             "window": index + 1, "windows": len(windows)

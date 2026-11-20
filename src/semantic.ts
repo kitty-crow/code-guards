@@ -16,7 +16,9 @@ export type SemanticTimingEvent =
   | { phase: "windowing"; milliseconds: number; windows: number }
   | { phase: "inference"; milliseconds: number; window: number; windows: number; batchSize: number; gpuId?: number; distinctQuestions?: number }
   | { phase: "cache-hit"; milliseconds: number }
-  | { phase: "verdict"; milliseconds: number; windows: number };
+  | { phase: "verdict"; milliseconds: number; windows: number }
+  | { phase: "provider-proof"; milliseconds: number; gpuNodes: number; cpuNodes: number;
+      gpuOps: string[]; gpuTimeMs: number; cpuTimeMs: number; gpuId?: number };
 
 export const MODEL = "Xenova/mobilebert-uncased-mnli";
 export const MAX_MODEL_TOKENS = 512;
@@ -63,7 +65,7 @@ export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpu
     progressObserver("ready");
   }
   if (event.type === "timing") {
-    const timing = event.timing.phase === "inference"
+    const timing = event.timing.phase === "inference" || event.timing.phase === "provider-proof"
       ? { ...event.timing, gpuId: event.gpuId } : event.timing;
     timingObserver?.(timing);
     if (event.timing.phase === "inference") {

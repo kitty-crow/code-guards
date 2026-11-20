@@ -89,6 +89,10 @@ type ScanResult = {
   cacheHits: number;
   provider: string;
   gpuWindows: Record<string, number>;
+  gpuProviderProof: Record<string, {
+    gpuNodes: number; cpuNodes: number; gpuOps: string[];
+    gpuTimeMs: number; cpuTimeMs: number;
+  }>;
   error: string | null;
 };
 
@@ -132,6 +136,11 @@ function consumeEvent(result: ScanResult, event: ScanTelemetry): void {
     }
   } else if (event.type === "verdict") {
     result.completedSemanticQuestions += 1;
+  } else if (event.type === "provider-proof") {
+    result.gpuProviderProof[String(event.gpuId)] = {
+      gpuNodes: event.gpuNodes, cpuNodes: event.cpuNodes,
+      gpuOps: event.gpuOps, gpuTimeMs: event.gpuTimeMs, cpuTimeMs: event.cpuTimeMs
+    };
   } else if (event.type === "cache-hit") {
     result.completedSemanticQuestions += 1;
     result.cacheHits += 1;
@@ -145,7 +154,7 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     stage: "starting", completedStages: 0, totalStages: 0, stageFindings: 0,
     completedInferenceWindows: 0, completedInferenceCalls: 0,
     crossQuestionBatches: 0, maximumBatchSize: 0, completedSemanticQuestions: 0,
-    cacheHits: 0, provider: "not initialised", gpuWindows: {}, error: null
+    cacheHits: 0, provider: "not initialised", gpuWindows: {}, gpuProviderProof: {}, error: null
   };
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const args = [
@@ -261,6 +270,7 @@ async function main(): Promise<void> {
       completedStages: "Entire guard stages finished before the deadline",
       completedInferenceWindows: "Actual completed MobileBERT model inference windows",
       completedInferenceCalls: "Underlying MobileBERT pipeline invocations",
+      gpuProviderProof: "First inference kernel counts and timing grouped by actual ONNX execution provider for each GPU adapter",
       crossQuestionBatches: "Invocations containing windows from more than one semantic question",
       maximumBatchSize: "Highest number of windows in a single inference invocation",
       completedSemanticQuestions: "Completed semantic verdicts, including cache hits"
