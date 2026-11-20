@@ -25,6 +25,8 @@ jobs:
         run: bun run build
       - name: Run complete Bun unit test suite
         run: bun test --timeout 30000 ./test/*.test.ts
+      - name: Validate persistent window cache and snapshot roundtrip without GPU
+        run: python3 -m unittest discover -s test -p test_inference_cache_store.py
       - name: Verify actual model tokenizer without loading neural weights
         run: |
           bun src/cli.ts type-reuse --project examples/semantic/tsconfig.json --preflight --format json > preflight-smoke.json

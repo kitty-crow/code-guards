@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from inference_cache_store import WindowCache, model_namespace
 
 MODEL = "Xenova/mobilebert-uncased-mnli"
 TEMPLATE = "The evidence indicates that {}."
@@ -36,7 +37,7 @@ def model_files() -> tuple[str, str, dict[str, Any]]:
     return model, tokenizer, config
 
 
-def initialise(adapter_index: int) -> tuple[Any, Any, int, int]:
+def initialise(adapter_index: int) -> tuple[Any, Any, int, int, str]:
     import onnxruntime as ort
     import onnxruntime_ep_webgpu as webgpu_ep
     from tokenizers import Tokenizer
@@ -61,7 +62,7 @@ def initialise(adapter_index: int) -> tuple[Any, Any, int, int]:
     if not any("webgpu" in provider.lower() for provider in session.get_providers()):
         raise RuntimeError("Native WebGPU provider was not activated.")
     labels = {str(name).lower(): int(index) for name, index in config["label2id"].items()}
-    return session, tokenizer, labels["entailment"], labels["contradiction"]
+    return session, tokenizer, labels["entailment"], labels["contradiction"], model_namespace(model_path, tokenizer_path, (labels["entailment"], labels["contradiction"]))
 
 
 def evidence_windows(question: dict[str, str], tokenizer: Any) -> list[str]:
@@ -163,7 +164,7 @@ def sigmoid(delta: float) -> float:
 
 
 def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: int,
-             contradiction: int, gpu_id: int, batch_size: int) -> None:
+             contradiction: int, gpu_id: int, batch_size: int, cache: WindowCache | None = None) -> None:
     question = request["question"]
     if not isinstance(question, dict) or any(
         not isinstance(question.get(key), str) for key in ("premise", "same", "different")
@@ -180,23 +181,45 @@ def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: 
     positive_window = negative_window = 0
     for index in range(0, len(windows), batch_size):
         group = windows[index:index + batch_size]
-        pairs = [(window, TEMPLATE.format(label)) for window in group
-                 for label in (question["same"], question["different"])]
-        began = time.perf_counter()
-        logits = run_pairs(session, tokenizer, pairs)
-        elapsed = (time.perf_counter() - began) * 1000
-        if not hasattr(session, "_code_guards_verified"):
-            verify_webgpu_execution(session, gpu_id)
-            session._code_guards_verified = True
-        emit({"type": "timing", "gpuId": gpu_id, "timing": {
-            "phase": "inference", "milliseconds": elapsed, "batchSize": len(group),
-            "window": index + 1, "windows": len(windows)
-        }})
-        for offset, _ in enumerate(group):
-            same = logits[offset * 2]
-            different = logits[offset * 2 + 1]
-            same_score = sigmoid(float(same[entailment]) - float(same[contradiction]))
-            different_score = sigmoid(float(different[entailment]) - float(different[contradiction]))
+        keys = ([cache.key(window, question["same"], question["different"]) for window in group]
+                if cache is not None else [])
+        cached = cache.get_many(keys) if cache is not None else {}
+        positions = [offset for offset in range(len(group))
+                     if cache is None or keys[offset] not in cached]
+        computed: dict[int, tuple[float, float]] = {}
+        if positions:
+            pairs = [(group[offset], TEMPLATE.format(label)) for offset in positions
+                     for label in (question["same"], question["different"])]
+            began = time.perf_counter()
+            logits = run_pairs(session, tokenizer, pairs)
+            elapsed = (time.perf_counter() - began) * 1000
+            if not hasattr(session, "_code_guards_verified"):
+                verify_webgpu_execution(session, gpu_id)
+                session._code_guards_verified = True
+            emit({"type": "timing", "gpuId": gpu_id, "timing": {
+                "phase": "inference", "milliseconds": elapsed, "batchSize": len(positions),
+                "window": index + 1, "windows": len(windows)
+            }})
+            new_rows: list[tuple[str, float, float]] = []
+            for pos_index, offset in enumerate(positions):
+                same_logits = logits[pos_index * 2]
+                different_logits = logits[pos_index * 2 + 1]
+                same_score = sigmoid(float(same_logits[entailment]) - float(same_logits[contradiction]))
+                different_score = sigmoid(float(different_logits[entailment]) - float(different_logits[contradiction]))
+                computed[offset] = (same_score, different_score)
+                if cache is not None:
+                    new_rows.append((keys[offset], same_score, different_score))
+            if cache is not None:
+                cache.put_many(new_rows)
+        else:
+            emit({"type": "timing", "gpuId": gpu_id, "timing": {
+                "phase": "cache-hit", "milliseconds": 0
+            }})
+        for offset in range(len(group)):
+            result = computed.get(offset)
+            if result is None:
+                result = cached[keys[offset]]
+            same_score, different_score = result
             if same_score > positive:
                 positive = same_score
                 positive_window = index + offset + 1
@@ -225,18 +248,24 @@ def main() -> int:
         raise ValueError("Batch size must be 1..16.")
     emit({"type": "loading", "gpuId": gpu_id})
     start = time.perf_counter()
-    session, tokenizer, entailment, contradiction = initialise(gpu_id)
+    session, tokenizer, entailment, contradiction, namespace = initialise(gpu_id)
+    cache_dir = os.environ.get("CODE_GUARDS_INFERENCE_CACHE_DIR")
+    cache = WindowCache(cache_dir, namespace) if cache_dir else None
     emit({"type": "timing", "gpuId": gpu_id, "timing": {
         "phase": "model-load", "milliseconds": (time.perf_counter() - start) * 1000
     }})
     emit({"type": "ready", "gpuId": gpu_id, "backend": "webgpu", "adapterIndex": gpu_id})
-    for line in sys.stdin:
-        if not line.strip():
-            continue
-        request = json.loads(line)
-        if not isinstance(request, dict) or not isinstance(request.get("id"), int):
-            raise ValueError("Malformed WebGPU worker request.")
-        classify(request, session, tokenizer, entailment, contradiction, gpu_id, batch_size)
+    try:
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            request = json.loads(line)
+            if not isinstance(request, dict) or not isinstance(request.get("id"), int):
+                raise ValueError("Malformed WebGPU worker request.")
+            classify(request, session, tokenizer, entailment, contradiction, gpu_id, batch_size, cache)
+    finally:
+        if cache is not None:
+            cache.close()
     return 0
 
 
