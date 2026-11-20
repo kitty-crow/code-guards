@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { analyse } from "./engine.ts";
+import { estimateInference, formatInferencePreflight } from "./preflight.ts";
 import { parseAccelerationFlags, type AccelerationConfig } from "./acceleration.ts";
 import { configureSemanticAcceleration, relaySemanticWorkerEvent, useRemoteSemanticScorer } from "./semantic.ts";
 import { createGpuWorkerPool } from "./inference-workers.ts";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { failed, guards, type GuardName } from "./model.ts";
 import { renderFindings, type Format, type ColourMode } from "./diagnostics.ts";
 
-type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean; progress: boolean; benchmarkTelemetry: boolean; acceleration: AccelerationConfig };
+type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean; progress: boolean; preflight: boolean; benchmarkTelemetry: boolean; acceleration: AccelerationConfig };
 
 function checkGuard(value: string | null): GuardName {
   if (!guards.some(name => name === value)) usage();
@@ -16,7 +17,7 @@ function checkGuard(value: string | null): GuardName {
 }
 
 function usage(): never {
-  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline] [--progress] [--accelerate none|cache|batch|parallel|cuda|dml|webgpu] [--batch-size 2..16] [--concurrency 2..16] [--gpu-ids 0[,1...]]");
+  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline] [--progress] [--preflight] [--accelerate none|cache|batch|parallel|cuda|dml|webgpu] [--batch-size 2..16] [--concurrency 2..16] [--gpu-ids 0[,1...]]");
   process.exit(2);
 }
 
@@ -40,6 +41,7 @@ export function options(argv: string[]): Options {
   let offline = false;
   let progress = false;
   let benchmarkTelemetry = false;
+  let preflight = false;
   let selected = false;
   for (let i = 0; i < remaining.length; i += 1) {
     const arg = remaining[i] ?? usage();
@@ -70,6 +72,7 @@ export function options(argv: string[]): Options {
     if (arg === "--offline") { offline = true; continue; }
     if (arg === "--progress") { progress = true; continue; }
     if (arg === "--benchmark-telemetry") { benchmarkTelemetry = true; continue; }
+    if (arg === "--preflight") { preflight = true; continue; }
     if (!selected && arg === "all") { selected = true; continue; }
     if (!selected && guards.some(name => name === arg)) {
       enabled.clear();
@@ -79,13 +82,23 @@ export function options(argv: string[]): Options {
     }
     usage();
   }
-  return { enabled, project, format, colour, strict, includeTests, offline, progress, benchmarkTelemetry, acceleration };
+  return { enabled, project, format, colour, strict, includeTests, offline, progress, preflight, benchmarkTelemetry, acceleration };
 }
 
 export async function run(argv: string[]): Promise<number> {
   try {
     const config = options(argv);
     if (config.offline) process.env.CODE_GUARDS_OFFLINE = "1";
+    if (config.preflight) {
+      const result = await estimateInference(
+        config, config.acceleration, undefined,
+        config.progress ? message => console.error(message) : () => {}
+      );
+      console.log(config.format === "json"
+        ? JSON.stringify(result, null, 2)
+        : formatInferencePreflight(result));
+      return 0;
+    }
     const restore = configureSemanticAcceleration(config.acceleration);
     let pool: ReturnType<typeof createGpuWorkerPool> | null = null;
     let restoreRemote: () => void = () => {};
