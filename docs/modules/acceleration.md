@@ -71,3 +71,10 @@ which remains single-device unless adapter selection is implemented.
 
 DirectML session options explicitly disable ONNX memory patterns and use
 sequential session execution, as required by the DirectML execution provider.
+
+`parallel,webgpu` with explicit `--gpu-ids` uses an optional **native
+WebGPU plugin**, rather than treating ONNX's `deviceId` as a physical GPU.
+The scanner remains Bun-based; the adapter-aware ONNX model sessions execute
+in isolated local worker processes through the plugin's Python binding.
+This requires optional separately installed Python dependencies and does not
+change the default `webgpu` backend.

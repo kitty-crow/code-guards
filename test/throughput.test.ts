@@ -35,6 +35,15 @@ test("throughput accepts dual Windows DirectML modes with explicit adapter IDs",
   assert.equal(result.gpuIds, "0,1");
 });
 
+test("throughput supports separate native WebGPU adapters", () => {
+  const result = throughputOptions([
+    "--project", "tsconfig.json", "--mode", "webgpu",
+    "--mode", "parallel,webgpu", "--gpu-ids", "0,1", "--concurrency", "4"
+  ]);
+  assert.equal(result.gpuIds, "0,1");
+  assert.deepEqual(result.modes, ["webgpu", "parallel,webgpu"]);
+});
+
 test("throughput rejects invalid modes, bounds and non-existent projects", () => {
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--mode", "none,cuda"]), /cannot be combined/);
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--seconds", "0"]), /--seconds/);

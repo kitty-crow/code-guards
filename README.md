@@ -321,3 +321,24 @@ match `nvidia-smi` ordering. This path is independent of WebGPU and does not
 use NVLink; each worker has its own full model and reports its own inference
 window counter. On unsupported DirectML installations the scan fails rather
 than claiming to have used both GPUs.
+
+## Experimental native dual-WebGPU adapters (Windows)
+
+To select **two physical WebGPU adapters** rather than two instances of the
+same default GPU, Code Guards can use ONNX Runtime's newer native WebGPU
+plugin and its `adapterIndex` option. The scanner remains Bun/TypeScript;
+only the explicitly selected inference engine uses isolated Python plugin
+workers. The stock ONNX Runtime Node binding does **not** expose this
+physical-adapter selector.
+
+Install a separate Python environment with `onnxruntime==1.32.0`, the
+compatible `onnxruntime-ep-webgpu` plugin, `huggingface-hub`, `tokenizers`
+and `numpy`. Point `CODE_GUARDS_WEBGPU_PYTHON` at the environment's Python,
+then run:
+
+```powershell
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode webgpu --mode parallel,webgpu --gpu-ids 0,1 --concurrency 4
+```
+
+This is experimental and must be hardware-validated; compare both per-adapter
+counters and semantic scores before adopting it. It does not use NVLink.

@@ -1,0 +1,192 @@
+"""Physical-adapter WebGPU inference using ONNX Runtime's native plugin.
+
+Bun owns Code Guards, candidate scheduling and the 60-second benchmark.
+This optional Python subprocess exists because the current JS/Node WebGPU
+binding does not expose Dawn's physical adapterIndex selection.
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+MODEL = "Xenova/mobilebert-uncased-mnli"
+TEMPLATE = "The evidence indicates that {}."
+MAX_TOKENS = 512
+OVERLAP = 48
+SAFETY_TOKENS = 8
+
+
+def emit(message: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(message, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def model_files() -> tuple[str, str, dict[str, Any]]:
+    from huggingface_hub import hf_hub_download
+    model = hf_hub_download(MODEL, filename="onnx/model.onnx")
+    tokenizer = hf_hub_download(MODEL, filename="tokenizer.json")
+    config = json.loads(Path(hf_hub_download(MODEL, filename="config.json")).read_text(encoding="utf-8"))
+    return model, tokenizer, config
+
+
+def initialise(adapter_index: int) -> tuple[Any, Any, int, int]:
+    import onnxruntime as ort
+    import onnxruntime_ep_webgpu as webgpu_ep
+    from tokenizers import Tokenizer
+
+    model_path, tokenizer_path, config = model_files()
+    tokenizer = Tokenizer.from_file(tokenizer_path)
+    ort.register_execution_provider_library("code_guards_webgpu", webgpu_ep.get_library_path())
+    matching = [item for item in ort.get_ep_devices() if item.ep_name == webgpu_ep.get_ep_name()]
+    if not matching:
+        raise RuntimeError("The ONNX Runtime native WebGPU plugin exposed no GPU EP device.")
+
+    # Unlike ORT's deviceId, adapterIndex selects a PHYSICAL Dawn adapter.
+    options = ort.SessionOptions()
+    options.add_provider_for_devices(
+        [matching[0]], {"adapterIndex": str(adapter_index), "powerPreference": "high-performance"}
+    )
+    session = ort.InferenceSession(model_path, sess_options=options)
+    if not any("WebGpu" in provider or "WebGPU" in provider for provider in session.get_providers()):
+        raise RuntimeError("Native WebGPU provider was not activated; CPU fallback is not allowed.")
+    labels = {str(name).lower(): int(index) for name, index in config["label2id"].items()}
+    return session, tokenizer, labels["entailment"], labels["contradiction"]
+
+
+def evidence_windows(question: dict[str, str], tokenizer: Any) -> list[str]:
+    hypotheses = [TEMPLATE.format(question["same"]), TEMPLATE.format(question["different"])]
+    max_hypothesis = max(len(tokenizer.encode(text, add_special_tokens=False).ids) for text in hypotheses)
+    capacity = MAX_TOKENS - max_hypothesis - 3 - SAFETY_TOKENS
+    if capacity < 48:
+        raise ValueError("Zero-shot hypothesis exceeds MobileBERT context budget.")
+    tokens = tokenizer.encode(question["premise"], add_special_tokens=False).ids
+    if len(tokens) <= capacity:
+        return [question["premise"]]
+    windows: list[str] = []
+    step = max(1, capacity - OVERLAP)
+    for start in range(0, len(tokens), step):
+        chunk = tokens[start:start + capacity]
+        windows.append(tokenizer.decode(chunk, skip_special_tokens=True))
+        if start + capacity >= len(tokens):
+            break
+    return windows
+
+
+def run_pairs(session: Any, tokenizer: Any, pairs: list[tuple[str, str]]) -> Any:
+    import numpy as np
+
+    encoded = [tokenizer.encode(premise, hypothesis) for premise, hypothesis in pairs]
+    if any(len(enc.ids) > MAX_TOKENS for enc in encoded):
+        raise RuntimeError("Tokenized NLI pair exceeded MobileBERT's 512-token budget.")
+    width = max(len(item.ids) for item in encoded)
+    input_fields = {
+        "input_ids": [[*item.ids, *([0] * (width - len(item.ids)))] for item in encoded],
+        "attention_mask": [[*item.attention_mask, *([0] * (width - len(item.ids)))] for item in encoded],
+        "token_type_ids": [[*item.type_ids, *([0] * (width - len(item.ids)))] for item in encoded],
+    }
+    feeds = {}
+    for arg in session.get_inputs():
+        if arg.name not in input_fields:
+            raise RuntimeError("Unexpected ONNX input: " + arg.name)
+        dtype = np.int32 if arg.type == "tensor(int32)" else np.int64
+        feeds[arg.name] = np.asarray(input_fields[arg.name], dtype=dtype)
+    logits = session.run(None, feeds)[0]
+    if logits.shape[0] != len(pairs):
+        raise RuntimeError("ONNX model returned the wrong batch length.")
+    return logits
+
+
+def sigmoid(delta: float) -> float:
+    if delta >= 0:
+        return 1 / (1 + math.exp(-delta))
+    exponent = math.exp(delta)
+    return exponent / (1 + exponent)
+
+
+def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: int,
+             contradiction: int, gpu_id: int, batch_size: int) -> None:
+    question = request["question"]
+    if not isinstance(question, dict) or any(
+        not isinstance(question.get(key), str) for key in ("premise", "same", "different")
+    ):
+        raise ValueError("Invalid semantic question.")
+    started = time.perf_counter()
+    window_started = time.perf_counter()
+    windows = evidence_windows(question, tokenizer)
+    emit({"type": "timing", "gpuId": gpu_id, "timing": {
+        "phase": "windowing", "milliseconds": (time.perf_counter() - window_started) * 1000,
+        "windows": len(windows)
+    }})
+    positive = negative = 0.0
+    positive_window = negative_window = 0
+    for index in range(0, len(windows), batch_size):
+        group = windows[index:index + batch_size]
+        pairs = [(window, TEMPLATE.format(label)) for window in group
+                 for label in (question["same"], question["different"])]
+        began = time.perf_counter()
+        logits = run_pairs(session, tokenizer, pairs)
+        elapsed = (time.perf_counter() - began) * 1000
+        emit({"type": "timing", "gpuId": gpu_id, "timing": {
+            "phase": "inference", "milliseconds": elapsed, "batchSize": len(group),
+            "window": index + 1, "windows": len(windows)
+        }})
+        for offset, _ in enumerate(group):
+            same = logits[offset * 2]
+            different = logits[offset * 2 + 1]
+            same_score = sigmoid(float(same[entailment]) - float(same[contradiction]))
+            different_score = sigmoid(float(different[entailment]) - float(different[contradiction]))
+            if same_score > positive:
+                positive = same_score
+                positive_window = index + offset + 1
+            if different_score > negative:
+                negative = different_score
+                negative_window = index + offset + 1
+    emit({"type": "timing", "gpuId": gpu_id, "timing": {
+        "phase": "verdict", "milliseconds": (time.perf_counter() - started) * 1000,
+        "windows": len(windows)
+    }})
+    emit({"type": "result", "id": request["id"], "gpuId": gpu_id, "verdict": {
+        "sameConcept": positive, "differentConcept": negative,
+        "evidence": {
+            "windows": len(windows), "supportWindow": positive_window,
+            "oppositionWindow": negative_window
+        }
+    }})
+
+
+def main() -> int:
+    gpu_id = int(os.environ["CODE_GUARDS_GPU_WORKER_ID"])
+    if not 0 <= gpu_id < 16:
+        raise ValueError("GPU adapter index must be between 0 and 15.")
+    batch_size = int(os.getenv("CODE_GUARDS_GPU_BATCH_SIZE", "4")) if os.getenv("CODE_GUARDS_GPU_BATCH") == "1" else 1
+    if not 1 <= batch_size <= 16:
+        raise ValueError("Batch size must be 1..16.")
+    emit({"type": "loading", "gpuId": gpu_id})
+    start = time.perf_counter()
+    session, tokenizer, entailment, contradiction = initialise(gpu_id)
+    emit({"type": "timing", "gpuId": gpu_id, "timing": {
+        "phase": "model-load", "milliseconds": (time.perf_counter() - start) * 1000
+    }})
+    emit({"type": "ready", "gpuId": gpu_id, "backend": "webgpu", "adapterIndex": gpu_id})
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        request = json.loads(line)
+        if not isinstance(request, dict) or not isinstance(request.get("id"), int):
+            raise ValueError("Malformed WebGPU worker request.")
+        classify(request, session, tokenizer, entailment, contradiction, gpu_id, batch_size)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        emit({"type": "fatal", "gpuId": int(os.getenv("CODE_GUARDS_GPU_WORKER_ID", "-1")),
+              "message": f"{type(exc).__name__}: {exc}"})
+        sys.exit(1)

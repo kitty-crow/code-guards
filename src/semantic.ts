@@ -55,11 +55,11 @@ export function useRemoteSemanticScorer(
 }
 
 /** Forward real worker telemetry to the existing scan progress observers. */
-export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpuId: number } |
+export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpuId: number; backend?: "cuda" | "dml" | "webgpu" } |
   { type: "timing"; gpuId: number; timing: SemanticTimingEvent }): void {
   if (event.type === "loading") progressObserver("loading");
   if (event.type === "ready") {
-    activeDevice = process.platform === "win32" ? "dml" : "cuda";
+    activeDevice = event.backend ?? (process.platform === "win32" ? "dml" : "cuda");
     progressObserver("ready");
   }
   if (event.type === "timing") {

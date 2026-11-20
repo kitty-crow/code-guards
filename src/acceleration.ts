@@ -70,9 +70,8 @@ export function parseAccelerationFlags(argv: readonly string[]): {
     throw new Error("--concurrency requires --accelerate parallel.");
   }
   if (gpuIds && (!features.has("parallel") ||
-      Number(features.has("cuda")) + Number(features.has("dml")) !== 1 ||
-      features.has("webgpu"))) {
-    throw new Error("--gpu-ids requires parallel,cuda or parallel,dml, without webgpu.");
+      Number(features.has("cuda")) + Number(features.has("dml")) + Number(features.has("webgpu")) !== 1)) {
+    throw new Error("--gpu-ids requires parallel plus exactly one GPU backend: cuda, dml or webgpu.");
   }
   if (gpuIds && concurrency < gpuIds.length) {
     throw new Error("--concurrency must be at least the number of selected GPUs.");

@@ -2,6 +2,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { AccelerationConfig } from "./acceleration.ts";
 import type { SemanticQuestion, SemanticTimingEvent, WindowVerdict } from "./semantic.ts";
@@ -27,12 +28,26 @@ export function createGpuWorkerPool(
   config: AccelerationConfig,
   event: (message: WorkerEvent) => void
 ): GpuWorkerPool {
-  const backend = process.platform === "win32" ? "dml" : process.platform === "linux" ? "cuda" : null;
-  if (!backend || !config.features.has(backend) || !config.features.has("parallel") || ids.length < 2) {
-    throw new Error("GPU workers require parallel,dml on native Windows or parallel,cuda on Linux.");
+  const backend = config.features.has("webgpu") ? "webgpu"
+    : process.platform === "win32" ? "dml"
+    : process.platform === "linux" ? "cuda" : null;
+  if (!backend || !config.features.has(backend) || !config.features.has("parallel") || ids.length < 2 ||
+      (backend === "dml" && process.platform !== "win32") ||
+      (backend === "cuda" && process.platform !== "linux") ||
+      (backend === "webgpu" && process.platform !== "win32")) {
+    throw new Error("Explicit GPU workers require parallel,dml (Windows), parallel,cuda (Linux), or parallel,webgpu (Windows native plugin).");
   }
+  const sourceDir = dirname(fileURLToPath(import.meta.url));
   const extension = fileURLToPath(import.meta.url).endsWith(".js") ? "js" : "ts";
-  const workerFile = join(dirname(fileURLToPath(import.meta.url)), "inference-worker." + extension);
+  const nativeWorkerCandidates = [
+    join(sourceDir, "..", "scripts", "native-webgpu-worker.py"),
+    join(sourceDir, "..", "..", "scripts", "native-webgpu-worker.py")
+  ];
+  const nativeWorkerFile = nativeWorkerCandidates.find(candidate => existsSync(candidate));
+  if (backend === "webgpu" && !nativeWorkerFile) {
+    throw new Error("Native WebGPU adapter worker script is missing.");
+  }
+  const workerFile = join(sourceDir, "inference-worker." + extension);
   const workers: Worker[] = [];
   let nextId = 0;
   let nextWorker = 0;
@@ -46,7 +61,14 @@ export function createGpuWorkerPool(
   }
 
   for (const id of ids) {
-    const child = spawn(process.execPath, [workerFile], {
+    // The current ONNX Runtime Node binding does not expose physical
+    // WebGPU adapter selection. The native plugin's Python binding does.
+    // Code Guards and scheduling remain in Bun; only GPU execution is external.
+    const executable = backend === "webgpu"
+      ? process.env.CODE_GUARDS_WEBGPU_PYTHON ?? "python"
+      : process.execPath;
+    const args = backend === "webgpu" ? [nativeWorkerFile ?? ""] : [workerFile];
+    const child = spawn(executable, args, {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -71,7 +93,7 @@ export function createGpuWorkerPool(
       if (!message || typeof message !== "object" || !("type" in message) ||
           !("gpuId" in message) || message.gpuId !== id) return;
       if (message.type === "ready" || message.type === "loading") {
-        event({ type: message.type, gpuId: id });
+        event({ type: message.type, gpuId: id, backend });
       } else if (message.type === "timing" && "timing" in message &&
                  typeof message.timing === "object" && message.timing !== null) {
         event({ type: "timing", gpuId: id, timing: message.timing as SemanticTimingEvent });

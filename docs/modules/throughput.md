@@ -73,3 +73,13 @@ For native Windows dual-DirectML mode, the benchmark supervisor uses
 **and its model worker subprocesses**. Other platforms use the existing
 POSIX process-group termination. If Windows process-tree termination fails,
 the supervisor falls back to terminating the scanner itself.
+
+### Physical WebGPU adapter comparison on Windows
+
+The `--mode webgpu --mode parallel,webgpu --gpu-ids 0,1 --concurrency 4`
+combination compares the existing single WebGPU model with the optional
+adapter-index-aware native WebGPU plugin workers. Install the corresponding
+Python ONNX Runtime plugin environment and set `CODE_GUARDS_WEBGPU_PYTHON`.
+The report's `gpuWindows` tracks completed inference windows by physical
+adapter index. See `docs/modules/inference-workers.md` for dependencies.
+Because these modes use distinct ORT bindings, also verify numerical parity.

@@ -31,3 +31,29 @@ DirectML workers set `enableMemPattern: false` and
 `executionMode: 'sequential'` as required by ONNX Runtime. Cross-device
 parallelism comes from separate inference sessions in separate processes,
 not by calling a single DirectML session concurrently.
+
+## Native dual-WebGPU adapter workers
+
+The current native Windows ONNX Runtime Node binding does not expose physical
+Dawn adapter enumeration. ORT's separately packaged WebGPU plugin **does**
+provide `adapterIndex`; it must not be confused with `deviceId`, a context ID.
+
+The opt-in `--accelerate parallel,webgpu --gpu-ids 0,1 --concurrency 4`
+mode therefore starts independent Python WebGPU plugin worker processes
+(`scripts/native-webgpu-worker.py`), while the entire scanner, guard logic,
+scheduling and telemetry remain in Bun/TypeScript. Each worker sets
+`adapterIndex` through the native ONNX Runtime plugin and runs the exact
+MobileBERT ONNX model and Hugging Face tokenizer. The workers return scored
+semantic verdicts and per-adapter completed-inference telemetry.
+
+Install an isolated Python environment containing `onnxruntime==1.32.0`,
+the compatible `onnxruntime-ep-webgpu` plugin, `huggingface-hub` and
+`tokenizers`, then set `CODE_GUARDS_WEBGPU_PYTHON` to that environment's
+Python executable. ORT 1.32 uses a plugin EP distinct from the Node binding,
+and the WebGPU plugin must match the core runtime version.
+
+The operation is **experimental**: native adapter enumeration, plugin
+installation, the ONNX model's operator support, runtime results and score
+parity must be verified on KittyWin before treating this mode as production
+ready. A missing provider fails loudly and never silently falls back to
+single-GPU WebGPU or CPU. No NVLink communication is required.
