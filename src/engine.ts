@@ -4,7 +4,7 @@ import {
   documentation, repoHygiene, enterpriseLookingNaming, reviewPractices
 } from "./guards/index.ts";
 import { guards, resolveExpectations, type Finding, type GuardName } from "./model.ts";
-import { observeSemanticProgress } from "./semantic.ts";
+import { observeSemanticProgress, semanticExecutionProvider } from "./semantic.ts";
 
 export type AnalysisOptions = {
   enabled: Set<GuardName>;
@@ -61,8 +61,8 @@ export async function analyse(
   let lastWindowReport = 0;
   let lastReportAt = Date.now();
   const restore = observeSemanticProgress(event => {
-    if (event === "loading") { report(`[Code Guards] ${activeStage}: loading MobileBERT CPU model`); return; }
-    if (event === "ready") { report(`[Code Guards] ${activeStage}: MobileBERT ready`); return; }
+    if (event === "loading") { report(`[Code Guards] ${activeStage}: loading MobileBERT model`); return; }
+    if (event === "ready") { report(`[Code Guards] ${activeStage}: MobileBERT ready (${semanticExecutionProvider().device})`); return; }
     semanticWindows += 1;
     const now = Date.now();
     if (semanticWindows - lastWindowReport >= 25 || now - lastReportAt >= 10000) {

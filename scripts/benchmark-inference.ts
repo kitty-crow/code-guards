@@ -15,6 +15,8 @@ type Sample = {
   inferenceMs: number;
   otherMs: number;
   windows: number;
+  inferenceWindows: number;
+  cacheHit: boolean;
   sameConcept: number;
   differentConcept: number;
   residentMemoryMb: number;
@@ -71,9 +73,11 @@ try {
     const modelLoadMs = elapsed(iterationEvents, "model-load");
     const windowingMs = elapsed(iterationEvents, "windowing");
     const inferenceMs = elapsed(iterationEvents, "inference");
-    const completedWindows = iterationEvents.filter(event => event.phase === "inference")
-      .reduce((total, event) => total + event.batchSize, 0);
-    if (completedWindows !== verdict.evidence.windows) {
+    const completedWindows = iterationEvents.reduce(
+      (total, event) => total + (event.phase === "inference" ? event.batchSize : 0), 0
+    );
+    const cacheHit = iterationEvents.some(event => event.phase === "cache-hit");
+    if (!cacheHit && completedWindows !== verdict.evidence.windows) {
       throw new Error("Benchmark window count differs from completed inference calls.");
     }
     samples.push({
@@ -83,7 +87,9 @@ try {
       windowingMs: rounded(windowingMs),
       inferenceMs: rounded(inferenceMs),
       otherMs: rounded(Math.max(0, totalMs - modelLoadMs - windowingMs - inferenceMs)),
-      windows: completedWindows,
+      windows: verdict.evidence.windows,
+      inferenceWindows: completedWindows,
+      cacheHit,
       sameConcept: verdict.sameConcept,
       differentConcept: verdict.differentConcept,
       residentMemoryMb: Number((process.memoryUsage().rss / 1048576).toFixed(2))

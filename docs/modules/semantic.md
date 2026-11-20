@@ -65,3 +65,8 @@ They depend on actual runtime and hardware support and may give scores
 different from CPU/q8. If both GPU backends are selected, their flag order
 determines fallback priority. They are alternatives, not simultaneous
 model sharding. There is **no implicit CPU fallback** when a GPU is requested.
+
+When caching is enabled, repeated questions have zero new inference windows.
+The benchmark separately reports the evidence-window count, actual inference
+windows and whether a cached verdict was returned, preventing misleading
+inference timing comparisons.
