@@ -28,7 +28,7 @@ const SAFETY_TOKENS = 8;
 
 type Classification = { labels: string[]; scores: number[] };
 type ClassifierOptions = { multi_label: boolean; hypothesis_template: string };
-type Tokenizer = {
+export type Tokenizer = {
   encode: (text: string, options: { add_special_tokens: false }) => number[];
   decode: (ids: number[], options: { skip_special_tokens: true }) => string;
 };
@@ -180,22 +180,37 @@ async function loadClassifier(): Promise<Classifier> {
   throw new Error("No requested MobileBERT provider could initialise. " + failures.join("; "));
 }
 
-/** Budget the premise after allowing for BOTH hypothesis labels and pair separators. */
-export function premiseWindows(question: SemanticQuestion, tokenizer: Tokenizer): string[] {
+/** Shared model-token budget for production inference and preflight. */
+function windowPlan(question: SemanticQuestion, tokenizer: Tokenizer): {
+  tokens: number[]; capacity: number; step: number
+} {
   const labels = [question.same, question.different];
   const hypothesisLength = Math.max(...labels.map(label =>
     tokenizer.encode(TEMPLATE.replace("{}", label), { add_special_tokens: false }).length
   ));
-  // BERT pairs contain [CLS], two [SEP] tokens and possibly tokeniser-added tokens.
+  // BERT pairs contain [CLS], two [SEP] tokens and a safety reserve.
   const capacity = MAX_MODEL_TOKENS - hypothesisLength - 3 - SAFETY_TOKENS;
   if (capacity < 48) throw new Error("Zero-shot hypothesis is too long for MobileBERT's 512-token context; shorten the rule labels.");
-  const tokens = tokenizer.encode(question.premise, { add_special_tokens: false });
+  return {
+    tokens: tokenizer.encode(question.premise, { add_special_tokens: false }),
+    capacity,
+    step: Math.max(1, capacity - OVERLAP)
+  };
+}
+
+/** Count exactly the windows production inference would submit, without decoding them. */
+export function premiseWindowCount(question: SemanticQuestion, tokenizer: Tokenizer): number {
+  const { tokens, capacity, step } = windowPlan(question, tokenizer);
+  return tokens.length <= capacity ? 1 : Math.ceil((tokens.length - capacity) / step) + 1;
+}
+
+/** Split the same token plan into overlapping evidence windows for real inference. */
+export function premiseWindows(question: SemanticQuestion, tokenizer: Tokenizer): string[] {
+  const { tokens, capacity, step } = windowPlan(question, tokenizer);
   if (tokens.length <= capacity) return [question.premise];
   const windows: string[] = [];
-  const step = Math.max(1, capacity - OVERLAP);
   for (let start = 0; start < tokens.length; start += step) {
-    const part = tokens.slice(start, start + capacity);
-    windows.push(tokenizer.decode(part, { skip_special_tokens: true }));
+    windows.push(tokenizer.decode(tokens.slice(start, start + capacity), { skip_special_tokens: true }));
     if (start + capacity >= tokens.length) break;
   }
   return windows;
