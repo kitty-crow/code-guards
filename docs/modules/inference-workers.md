@@ -1,19 +1,20 @@
-# Multi-GPU CUDA worker pool
+# Multi-GPU inference worker pool
 
 Sources: [`src/inference-workers.ts`](../../src/inference-workers.ts) and
 [`src/inference-worker.ts`](../../src/inference-worker.ts).
 
-With an explicit pair of GPU IDs, the scanner starts one subprocess per
-selected CUDA card, setting `CUDA_VISIBLE_DEVICES` for each before loading
-ONNX Runtime. Workers receive semantic questions through JSON-lines stdin and
-return scored verdicts plus completed-inference telemetry on stdout. A failed
-worker rejects pending requests without falling back to CPU.
+With explicit GPU IDs, the scanner starts an independent model worker
+subprocess for every selected GPU and forwards semantic questions through
+JSON-lines IPC. Each worker returns scored verdicts and completed-inference
+telemetry. Failures reject outstanding work instead of falling back to CPU.
 
-Use `--accelerate parallel,cuda --concurrency 4 --gpu-ids 0,1` only on
-Linux/WSL2 with native CUDA bindings and libraries available. There is no
-equivalent validated physical-adapter selector for native Windows WebGPU
-within the current Transformers.js pipeline. This architecture duplicates
-models, not memory, and does not use or require NVLink.
+On Linux/WSL2, `--accelerate parallel,cuda --concurrency 4 --gpu-ids 0,1`
+uses `CUDA_VISIBLE_DEVICES` before initialising ONNX Runtime. On native
+Windows, `--accelerate parallel,dml --concurrency 4 --gpu-ids 0,1`
+uses ONNX Runtime DirectML's explicit adapter selection via `deviceId`.
+Windows WebGPU still has no verified physical-adapter selection in this
+integration. Neither approach uses NVLink, because the model is replicated
+and no peer-to-peer tensor exchange is necessary.
 
 ## Windows DirectML mode
 

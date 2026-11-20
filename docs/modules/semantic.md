@@ -10,7 +10,7 @@ Source: [`src/semantic.ts`](../../src/semantic.ts)
 
 ## Behaviour and boundaries
 
-The Transformers.js pipeline runs locally on CPU. Model weights are downloaded on first use and cached.
+The Transformers.js pipeline runs locally, using CPU/q8 by default or an explicitly requested accelerator. Model weights are downloaded on first use and cached.
 
 | Option or condition | Behaviour |
 | --- | --- |

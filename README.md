@@ -193,7 +193,7 @@ For implementation detail and each module's exports, consult [docs/index.md](doc
 
 ## Semantic analysis and limitations
 
-The `type-reuse`, `function-quality` and `documentation` guards use `Xenova/mobilebert-uncased-mnli` through `@huggingface/transformers` for *shortlisted* ambiguous comparisons. Model inference is local on CPU and downloads weights on first use unless `--offline` is set. Semantic warnings express a likelihood, **not proof** of equivalence, an unsafe change, or factual inaccuracy. TypeScript AST checks can verify narrower issues such as duplicate structures, missing exports, undefined package scripts and broken local links. Model loading failures exit 2 rather than silently substituting a heuristic decision.
+The `type-reuse`, `function-quality` and `documentation` guards use `Xenova/mobilebert-uncased-mnli` through `@huggingface/transformers` for *shortlisted* ambiguous comparisons. Model inference is local, defaults to CPU/q8 and downloads weights on first use unless `--offline` is set. Semantic warnings express a likelihood, **not proof** of equivalence, an unsafe change, or factual inaccuracy. TypeScript AST checks can verify narrower issues such as duplicate structures, missing exports, undefined package scripts and broken local links. Model loading failures exit 2 rather than silently substituting a heuristic decision.
 
 The demonstration commands use different evidence sources:
 
@@ -226,7 +226,7 @@ Use `--progress` to see live progress on standard error without changing the nor
 bun run guards:strict:bun --path ../my-project --progress
 ```
 
-Progress includes the number of files, each scan stage, elapsed time, findings and neural inference windows. TypeScript checks retain all 23 guards, with the related deterministic code-health rules grouped into one traversal. MobileBERT is still executed on CPU and each inference is counted without changing its score. CI can use `--format github --progress` to preserve GitHub annotations and emit readable progress logs.
+Progress includes the number of files, each scan stage, elapsed time, findings and neural inference windows. TypeScript checks retain all 23 guards, with the related deterministic code-health rules grouped into one traversal. MobileBERT defaults to CPU/q8 but supports explicit accelerator selection, and each completed inference window is counted. CI can use `--format github --progress` to preserve GitHub annotations and emit readable progress logs.
 
 Vendored dependencies are excluded from both TypeScript findings and documentation checks. This covers `vendor/`, `third_party/`, `third-party/` and all submodule paths declared in the target repository's `.gitmodules`, including submodules located outside those conventional directories. The target's own source and tests remain subject to the configured checks.
 

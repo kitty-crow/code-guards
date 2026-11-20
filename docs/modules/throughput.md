@@ -49,8 +49,8 @@ Windows WebGPU.
 
 On Linux/WSL2 the supervisor launches each scanner in a dedicated process
 group and kills that entire group at the deadline, including any GPU workers
-created beneath it. On native Windows a scan does not support the external
-CUDA worker pool and the supervisor kills the scan process directly.
+created beneath it. Native Windows DirectML uses a separate process tree;
+the supervisor kills that tree using `taskkill.exe /T /F`.
 
 The JSON summary now distinguishes actual ONNX/Transformers.js inference calls
 from completed model windows. `crossQuestionBatches` counts calls that
