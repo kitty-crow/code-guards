@@ -22,3 +22,7 @@ The Transformers.js pipeline runs locally on CPU. Model weights are downloaded o
 | Real inference | Optional integration check on the executing machine |
 
 Model scores express semantic support; they do not prove that a refactor preserves behaviour.
+
+## Progress observation
+
+`observeSemanticProgress(observer)` registers a process-local callback for `SemanticProgressEvent` values `loading`, `ready` and `inference`. It returns a restoration function for the preceding observer. A loading event occurs when the MobileBERT runtime is initialised; every completed inference window emits an inference event, including windows generated from long premises. This interface reports activity without modifying classification scores, order or acceptance thresholds.

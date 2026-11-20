@@ -197,7 +197,7 @@ bun run test:bun
 
 `bun run ci:bun` includes the strict Code Guards self-scan. New guard tests should cover passing and failing cases plus the strict-mode exit code.
 
-Package status: private repository, not published to npm. GitHub-hosted CI is not configured.
+The package is marked private and is not published to npm. GitHub CI runs type checks, unit tests and the strict self-scan using Bun.
 
 MIT licence.
 

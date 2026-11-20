@@ -14,14 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install
-        run: npm install --no-audit --no-fund
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install dependencies with Bun
+        run: bun install
       - name: Type check
-        run: npm run typecheck
-      - name: Unit tests
-        run: npm test
-      - name: Strict self-check
-        run: npm run guards:strict -- --include-tests
+        run: bun run typecheck
+      - name: Build TypeScript with Bun
+        run: bun run build
+      - name: Unit tests with Bun
+        run: bun test ./test/*.test.ts
+      - name: Strict full self-check with progress
+        run: bun dist/src/cli.js --strict --include-tests --progress

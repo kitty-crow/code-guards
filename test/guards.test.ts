@@ -177,14 +177,14 @@ test("documentation commands use the nearest package manifest", async () => {
     "one.ts": "export const valid = 1;",
     "package.json": JSON.stringify({ scripts: { build: "tsc" } }),
     "README.md": "# Parent\n\n```sh\nnpm run build\n```\n",
-    "vendor/tool/package.json": JSON.stringify({ scripts: { bootstrap: "bun src/cli.ts" } }),
-    "vendor/tool/docs/use.md": "# Tool\n\n```sh\nnpm run bootstrap\nnpm run build\nnpm run missing\n```\n"
+    "plugins/tool/package.json": JSON.stringify({ scripts: { bootstrap: "bun src/cli.ts" } }),
+    "plugins/tool/docs/use.md": "# Tool\n\n```sh\nnpm run bootstrap\nnpm run build\nnpm run missing\n```\n"
   });
   const findings = await documentation(sample, reject);
   const commands = findings.filter(finding => finding.code === "CG406");
   assert.deepEqual(commands.map(finding => [finding.location.file, finding.subject]), [
-    ["vendor/tool/docs/use.md", "npm run build"],
-    ["vendor/tool/docs/use.md", "npm run missing"]
+    ["plugins/tool/docs/use.md", "npm run build"],
+    ["plugins/tool/docs/use.md", "npm run missing"]
   ]);
 });
 
