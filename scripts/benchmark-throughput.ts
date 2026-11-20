@@ -140,7 +140,10 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
   ];
   const started = performance.now();
   const child = spawn(process.execPath, args, {
-    cwd: root, windowsHide: true, stdio: ["ignore", "ignore", "pipe"]
+    cwd: root, windowsHide: true, stdio: ["ignore", "ignore", "pipe"],
+    // On POSIX, make an independent process group so the deadline can also
+    // terminate any CUDA model workers started by this scan.
+    detached: process.platform !== "win32"
   });
   let partial = "";
   const diagnostics: string[] = [];
@@ -173,10 +176,21 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
       pos = partial.indexOf("\n");
     }
   });
+  const terminate = (): void => {
+    if (process.platform !== "win32" && child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+        return;
+      } catch {
+        // Fall back to terminating the scan itself if its group has exited.
+      }
+    }
+    child.kill("SIGKILL");
+  };
   const deadline = setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) {
       result.timedOut = true;
-      child.kill("SIGKILL");
+      terminate();
     }
   }, settings.seconds * 1000);
   try {
@@ -192,7 +206,7 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     }
   } finally {
     clearTimeout(deadline);
-    if (child.exitCode === null && !result.timedOut) child.kill("SIGKILL");
+    if (child.exitCode === null && !result.timedOut) terminate();
     result.elapsedSeconds = Number(((performance.now() - started) / 1000).toFixed(3));
   }
   return result;

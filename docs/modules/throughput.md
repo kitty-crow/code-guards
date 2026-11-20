@@ -46,3 +46,8 @@ must be independently loadable; unsupported installations fail explicitly.
 The JSON result includes `gpuWindows` per CUDA device to show whether both
 workers actually handled inference. This mode is not available on native
 Windows WebGPU.
+
+On Linux/WSL2 the supervisor launches each scanner in a dedicated process
+group and kills that entire group at the deadline, including any GPU workers
+created beneath it. On native Windows a scan does not support the external
+CUDA worker pool and the supervisor kills the scan process directly.

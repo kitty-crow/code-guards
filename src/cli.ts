@@ -87,12 +87,15 @@ export async function run(argv: string[]): Promise<number> {
     const config = options(argv);
     if (config.offline) process.env.CODE_GUARDS_OFFLINE = "1";
     const restore = configureSemanticAcceleration(config.acceleration);
-    const gpuIds = config.acceleration.gpuIds;
-    const pool = gpuIds
-      ? createGpuWorkerPool(gpuIds, config.acceleration, relaySemanticWorkerEvent)
-      : null;
-    const restoreRemote = pool ? useRemoteSemanticScorer(question => pool.score(question)) : () => {};
+    let pool: ReturnType<typeof createGpuWorkerPool> | null = null;
+    let restoreRemote: () => void = () => {};
     try {
+      const gpuIds = config.acceleration.gpuIds;
+      if (gpuIds) {
+        pool = createGpuWorkerPool(gpuIds, config.acceleration, relaySemanticWorkerEvent);
+        const workerPool = pool;
+        restoreRemote = useRemoteSemanticScorer(question => workerPool.score(question));
+      }
       const { findings, root } = await analyse(
         config,
         config.progress ? message => console.error(message) : () => {},
