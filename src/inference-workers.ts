@@ -88,7 +88,10 @@ export function createGpuWorkerPool(
     // Without a listener, EPIPE on Bun's Writable stdin can become an
     // unhandled process error instead of a useful diagnostic.
     child.stdin?.on("error", error => {
-      rejectWorker(worker, new Error("GPU " + id + " worker stdin failed: " + error.message));
+      // A broken pipe is usually secondary to a native worker failure.
+      // Keep it as a diagnostic, but let the worker's fatal IPC message
+      // or close event report the original exception.
+      worker.diagnostics.push("Worker stdin: " + error.message);
     });
     child.stderr?.on("data", (data: Buffer | string) => {
       const lines = String(data).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -101,7 +104,13 @@ export function createGpuWorkerPool(
     lines.on("line", line => {
       let message: unknown;
       try { message = JSON.parse(line); }
-      catch { return; } // ONNX Runtime may also write diagnostics to stdout.
+      catch {
+        // Native runtimes sometimes print errors directly to stdout.
+        // Preserve them so the parent can report a useful failure.
+        if (line.trim()) worker.diagnostics.push(line.trim());
+        if (worker.diagnostics.length > 32) worker.diagnostics.splice(0, worker.diagnostics.length - 32);
+        return;
+      }
       if (!message || typeof message !== "object" || !("type" in message) ||
           !("gpuId" in message) || message.gpuId !== id) return;
       if (message.type === "ready" || message.type === "loading") {
@@ -145,8 +154,11 @@ export function createGpuWorkerPool(
         worker.requests.set(id, { resolve, reject });
         try {
           input.write(JSON.stringify({ id, question }) + "\n", error => {
-            if (error) rejectWorker(worker,
-              new Error("GPU " + worker.id + " worker write failed: " + error.message));
+            if (error) {
+              // The subprocess may have emitted a more useful fatal error.
+              // Save EPIPE for the close handler rather than masking it.
+              worker.diagnostics.push("Worker write: " + error.message);
+            }
           });
         } catch (error) {
           rejectWorker(worker, error instanceof Error ? error : new Error(String(error)));
