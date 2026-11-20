@@ -29,6 +29,10 @@ test("acceleration flags combine, repeat, disable and reject invalid combination
   assert.deepEqual(parseAccelerationFlags([
     "--accelerate", "parallel,webgpu", "--concurrency", "2", "--gpu-ids", "0,1"
   ]).acceleration.gpuIds, [0, 1]);
+  assert.deepEqual(parseAccelerationFlags([
+    "--accelerate", "batch,parallel,webgpu", "--batch-size", "4",
+    "--concurrency", "4", "--gpu-ids", "0"
+  ]).acceleration.gpuIds, [0]);
   assert.throws(() => parseAccelerationFlags([
     "--accelerate", "parallel,cuda,dml", "--concurrency", "2", "--gpu-ids", "0,1"
   ]), /requires/);

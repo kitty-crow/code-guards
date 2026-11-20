@@ -93,3 +93,19 @@ execution, reports actual WebGPU/CPU node counts and operator names and
 cleans up the temporary profile JSON. Later inferences avoid profiling
 overhead. A separate model instance is still selected via physical
 `adapterIndex` per worker.
+
+## Single-adapter baseline and load balancing
+
+An explicit `--gpu-ids 0` selects the same native ONNX WebGPU plugin and
+MobileBERT implementation as `--gpu-ids 0,1`, but starts just one worker.
+Both require `--accelerate batch,parallel,webgpu` with the same batch size,
+concurrency and project settings for a fair 1 versus 2 GPU comparison.
+The ordinary `--accelerate webgpu` mode uses a different Node ONNX backend,
+so it should not be treated as the one-GPU native plugin baseline.
+
+Across multiple workers, each incoming semantic question goes to the worker
+with the smallest number of outstanding requests, rather than strict
+round-robin assignment. Equal queue depths use a rotating tie-breaker.
+This improves responsiveness when question lengths or GPU speeds differ,
+while preserving the order of final guard findings. Workers still execute
+their assigned questions independently; no NVLink communication occurs.

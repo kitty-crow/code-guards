@@ -23,7 +23,32 @@ export type GpuWorkerPool = {
   close: () => void;
 };
 
-/** Bind each worker to a physical adapter through DirectML (Windows) or CUDA (Linux). */
+/**
+ * Select the worker with the fewest unfinished questions. Rotate ties so that
+ * workers with equal queue depth do not always favour the first adapter.
+ * Counts include running work as well as queued requests.
+ */
+export function leastPendingWorkerIndex(counts: readonly number[], start: number): number {
+  if (!counts.length || !Number.isSafeInteger(start) || start < 0) {
+    throw new Error("Invalid GPU worker selection.");
+  }
+  let selected = -1;
+  let minimum = Infinity;
+  for (let offset = 0; offset < counts.length; offset += 1) {
+    const index = (start + offset) % counts.length;
+    const count = counts[index];
+    if (count === undefined || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error("Invalid GPU pending request count.");
+    }
+    if (count < minimum) {
+      minimum = count;
+      selected = index;
+    }
+  }
+  return selected;
+}
+
+/** Bind each worker to a selected GPU adapter through native execution providers. */
 export function createGpuWorkerPool(
   ids: readonly number[],
   config: AccelerationConfig,
@@ -32,7 +57,9 @@ export function createGpuWorkerPool(
   const backend = config.features.has("webgpu") ? "webgpu"
     : process.platform === "win32" ? "dml"
     : process.platform === "linux" ? "cuda" : null;
-  if (!backend || !config.features.has(backend) || !config.features.has("parallel") || ids.length < 2 ||
+  if (!backend || !config.features.has(backend) || !config.features.has("parallel") ||
+      ids.length < 1 || ids.length > 16 || new Set(ids).size !== ids.length ||
+      ids.some(id => !Number.isSafeInteger(id) || id < 0 || id > 15) ||
       (backend === "dml" && process.platform !== "win32") ||
       (backend === "cuda" && process.platform !== "linux") ||
       (backend === "webgpu" && process.platform !== "win32")) {
@@ -144,7 +171,11 @@ export function createGpuWorkerPool(
   return {
     score(question): Promise<WindowVerdict> {
       if (closed) return Promise.reject(new Error("GPU worker pool has closed."));
-      const worker = workers[nextWorker++ % workers.length];
+      const index = leastPendingWorkerIndex(
+        workers.map(candidate => candidate.requests.size), nextWorker
+      );
+      nextWorker = (index + 1) % workers.length;
+      const worker = workers[index];
       if (!worker) return Promise.reject(new Error("No GPU worker available."));
       if (worker.failed) return Promise.reject(worker.failed);
       const input = worker.child.stdin;

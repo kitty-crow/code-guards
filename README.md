@@ -354,3 +354,18 @@ Before running the full native dual-WebGPU benchmark, run
 `bun run probe:dual-webgpu`. The probe initialises adapter 0 and 1,
 runs an inference on each and prints either their scores or the concrete
 failure. No TensorFlow project scan is needed for this smoke test.
+
+## Fair native WebGPU scaling comparison
+
+The `--gpu-ids` flag accepts one adapter (`0`) or several (`0,1`).
+Unlike the default `webgpu` mode, both of the following use the **same
+native ONNX WebGPU plugin** and model format:
+
+```powershell
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0 --concurrency 4 --batch-size 4
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4
+```
+
+Question assignment across workers now favours the least-queued adapter and
+rotates equal-depth assignments. This is experimental scheduling and should
+be evaluated on real hardware before claiming a throughput improvement.

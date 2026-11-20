@@ -32,9 +32,9 @@ export function parseAccelerationFlags(argv: readonly string[]): {
     if (gpu) {
       const parts = value.split(",");
       gpuIds = parts.map(part => Number(part));
-      if (gpuIds.length < 2 || gpuIds.length > 16 || new Set(gpuIds).size !== gpuIds.length ||
+      if (gpuIds.length < 1 || gpuIds.length > 16 || new Set(gpuIds).size !== gpuIds.length ||
           gpuIds.some(id => !Number.isSafeInteger(id) || id < 0 || id > 15)) {
-        throw new Error("--gpu-ids requires 2 to 16 unique GPU indices from 0 to 15.");
+        throw new Error("--gpu-ids requires 1 to 16 unique GPU indices from 0 to 15.");
       }
       continue;
     }

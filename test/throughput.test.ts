@@ -44,6 +44,15 @@ test("throughput supports separate native WebGPU adapters", () => {
   assert.deepEqual(result.modes, ["webgpu", "parallel,webgpu"]);
 });
 
+test("throughput supports one explicit native WebGPU adapter for a fair baseline", () => {
+  const result = throughputOptions([
+    "--project", "tsconfig.json", "--mode", "batch,parallel,webgpu",
+    "--gpu-ids", "0", "--concurrency", "4", "--batch-size", "4"
+  ]);
+  assert.equal(result.gpuIds, "0");
+  assert.deepEqual(result.modes, ["batch,parallel,webgpu"]);
+});
+
 test("throughput rejects invalid modes, bounds and non-existent projects", () => {
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--mode", "none,cuda"]), /cannot be combined/);
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--seconds", "0"]), /--seconds/);

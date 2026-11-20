@@ -96,3 +96,18 @@ inference profile on each native WebGPU worker. This distinguishes
 registered-but-unused providers from actual GPU kernel execution,
 while allowing partial CPU graph execution. The first profiled inference
 is diagnostic and may be slower than later ones.
+
+### Fair native WebGPU one-versus-two-adapter comparison
+
+Run each command separately, retaining identical batch size and concurrency:
+
+```powershell
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0 --concurrency 4 --batch-size 4
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4
+```
+
+This compares the same native plugin, model format and scoring path rather
+than comparing Python WebGPU workers with a different Node/Transformers.js
+execution provider. The benchmark's hard stop and per-device attribution
+continue to apply. Work is assigned to the least-queued worker, not round
+robin, to reduce idle time during heterogeneous semantic questions.
