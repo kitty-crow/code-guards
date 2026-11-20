@@ -26,3 +26,8 @@ accidentally sharing an unconfigured default WebGPU adapter. Run the
 throughput benchmark and inspect `gpuWindows` plus GPU utilisation to
 verify that both adapters actually executed work. Device ordinal ordering
 may differ from `nvidia-smi`. Model precision is FP32.
+
+DirectML workers set `enableMemPattern: false` and
+`executionMode: 'sequential'` as required by ONNX Runtime. Cross-device
+parallelism comes from separate inference sessions in separate processes,
+not by calling a single DirectML session concurrently.

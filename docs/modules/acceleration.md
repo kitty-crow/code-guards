@@ -68,3 +68,6 @@ these device IDs follow DirectML/DXGI enumeration, not necessarily
 `nvidia-smi` numbering. Unsupported devices fail explicitly rather than
 falling back to another GPU or CPU. This is distinct from WebGPU acceleration,
 which remains single-device unless adapter selection is implemented.
+
+DirectML session options explicitly disable ONNX memory patterns and use
+sequential session execution, as required by the DirectML execution provider.

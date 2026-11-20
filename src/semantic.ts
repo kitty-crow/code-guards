@@ -138,8 +138,18 @@ async function loadClassifier(): Promise<Classifier> {
       // DirectML exposes physical adapter affinity through ONNX Runtime's
       // deviceId session option. Never silently fall back to another adapter.
       const adapterId = process.env.CODE_GUARDS_GPU_WORKER_ID;
-      const sessionOptions = device === "dml" && adapterId !== undefined
-        ? { executionProviders: [{ name: "dml" as const, deviceId: Number(adapterId) }] }
+      const sessionOptions = device === "dml"
+        ? {
+            executionProviders: [{
+              name: "dml" as const,
+              ...(adapterId === undefined ? {} : { deviceId: Number(adapterId) })
+            }],
+            // DirectML forbids memory-pattern optimisation and parallel
+            // execution within one session. Separate model workers may run
+            // concurrently on different physical adapters.
+            enableMemPattern: false,
+            executionMode: "sequential" as const
+          }
         : undefined;
       const classifier = await pipeline("zero-shot-classification", MODEL, {
         device, dtype: device === "cpu" ? "q8" : "fp32",
