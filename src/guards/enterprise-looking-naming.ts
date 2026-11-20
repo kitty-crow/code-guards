@@ -7,14 +7,14 @@ import type { Project } from "../project.ts";
 /** Declaration-based naming review; each declaration is reported once, not at every use. */
 const suffixes = new Set(["manager", "service", "handler", "processor", "coordinator", "provider", "factory", "builder", "implementation", "wrapper", "utility", "helper", "controller", "component"]);
 const filler = new Set(["very", "really", "actually", "currently", "specific", "that", "those", "which", "might", "need", "needs", "some", "all", "entire", "complete", "the", "this", "these", "for", "with", "and", "of", "to", "in", "order", "please", "perform", "execute", "operation", "functionality", "information", "are", "is", "being", "existing", "new", "custom", "various", "different", "multiple", "shortening"]);
-const abbreviations: Readonly<Record<string, string>> = {
+const abbreviations = new Map<string, string>(Object.entries({
   long: "lng", names: "nms", name: "nm", calculate: "calc", calculation: "calc",
   customer: "cust", customers: "cust", configuration: "cfg", synchronisation: "sync",
   synchronization: "sync", processing: "proc", processor: "proc", validation: "valid",
   identifier: "id", identifiers: "ids", address: "addr", billing: "bill",
   authentication: "auth", application: "app", response: "resp", request: "req",
   document: "doc", documentation: "docs", transaction: "txn", management: "mgmt"
-};
+}));
 const testPath = /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/;
 const generated = /(?:^|[\\/])(?:generated|__generated__|gen|vendor|node_modules|dist)[\\/]|(?:\.generated|\.g|\.d)\.[cm]?tsx?$/i;
 
@@ -56,7 +56,7 @@ function compact(parts: string[], style: "identifier" | "path"): string {
   const meaningful = parts.filter(part => !filler.has(part));
   const kept = meaningful.filter((part, index) => index < 2 || !suffixes.has(part)).slice(0, 3);
   if (!kept.length) return "a shorter domain-specific name";
-  const selected = kept.map(part => abbreviations[part] ?? (part.length > 8 ? part.slice(0, 5) : part));
+  const selected = kept.map(part => abbreviations.get(part) ?? (part.length > 8 ? part.slice(0, 5) : part));
   if (style === "path") return `\`${selected.join("-")}\``;
   const camel = selected.map((part, index) => index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1)).join("");
   return `\`${camel}\``;
