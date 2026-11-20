@@ -140,8 +140,10 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
       if (diagnostics.length > 8) diagnostics.shift();
     }
   };
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => {
+  const errorStream = child.stderr;
+  if (!errorStream) throw new Error("Unable to capture benchmark telemetry from the child process.");
+  errorStream.setEncoding("utf8");
+  errorStream.on("data", (chunk: string) => {
     partial += chunk;
     let pos = partial.indexOf("\n");
     while (pos >= 0) {
@@ -151,8 +153,10 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     }
   });
   const deadline = setTimeout(() => {
-    result.timedOut = true;
-    child.kill("SIGKILL");
+    if (child.exitCode === null && child.signalCode === null) {
+      result.timedOut = true;
+      child.kill("SIGKILL");
+    }
   }, settings.seconds * 1000);
   try {
     const close = await new Promise<{ code: number | null; signal: string | null }>((accept, reject) => {
