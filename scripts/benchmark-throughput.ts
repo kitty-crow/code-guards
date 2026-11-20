@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /** Run real Code Guards scans under an external, fixed wall-clock deadline. */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -186,6 +186,14 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     }
   });
   const terminate = (): void => {
+    if (process.platform === "win32" && child.pid !== undefined) {
+      // taskkill /T terminates the entire scanner process tree, including
+      // DirectML child workers. Terminating only the scanner would orphan GPUs.
+      const killed = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+        windowsHide: true, stdio: "ignore", timeout: 2500
+      });
+      if (!killed.error && killed.status === 0) return;
+    }
     if (process.platform !== "win32" && child.pid !== undefined) {
       try {
         process.kill(-child.pid, "SIGKILL");

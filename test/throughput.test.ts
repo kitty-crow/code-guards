@@ -26,6 +26,15 @@ test("throughput options support explicit acceleration, guard and diagnostic dea
   assert.deepEqual(options.modes, ["cache,batch,webgpu", "none"]);
 });
 
+test("throughput accepts dual Windows DirectML modes with explicit adapter IDs", () => {
+  const result = throughputOptions([
+    "--project", "tsconfig.json", "--mode", "dml", "--mode", "parallel,dml",
+    "--gpu-ids", "0,1", "--concurrency", "4"
+  ]);
+  assert.deepEqual(result.modes, ["dml", "parallel,dml"]);
+  assert.equal(result.gpuIds, "0,1");
+});
+
 test("throughput rejects invalid modes, bounds and non-existent projects", () => {
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--mode", "none,cuda"]), /cannot be combined/);
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--seconds", "0"]), /--seconds/);

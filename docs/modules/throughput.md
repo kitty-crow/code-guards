@@ -67,3 +67,9 @@ bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsco
 This reports work completed by each adapter and retains the 60-second
 per-mode limit. The DirectML execution provider may have different throughput
 and semantic confidence results from WebGPU or CPU.
+
+For native Windows dual-DirectML mode, the benchmark supervisor uses
+`taskkill.exe /T /F` at the deadline to terminate the scanner process
+**and its model worker subprocesses**. Other platforms use the existing
+POSIX process-group termination. If Windows process-tree termination fails,
+the supervisor falls back to terminating the scanner itself.
