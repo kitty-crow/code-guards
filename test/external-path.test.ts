@@ -146,9 +146,8 @@ test("progress provides stage timing while keeping findings unchanged", async ()
   const enabled = new Set<GuardName>(["no-nested-if"]);
   const messages: string[] = [];
   const analysis = await analyse({
-    project: root, enabled: new Set(enabled), includeTests: false,
-    onProgress: message => { messages.push(message); }
-  });
+    project: root, enabled: new Set(enabled), includeTests: false
+  }, message => { messages.push(message); });
   assert.equal(analysis.findings.length, 1);
   assert.ok(messages.some(message => message.includes("Loaded 1 source files")));
   assert.ok(messages.some(message => message.includes("[1/1] no-nested-if: started")));

@@ -10,7 +10,6 @@ export type AnalysisOptions = {
   enabled: Set<GuardName>;
   project: string;
   includeTests: boolean;
-  onProgress?: (message: string) => void;
 };
 export type Analysis = { findings: Finding[]; root: string };
 
@@ -28,13 +27,15 @@ const codeHealthGuards: readonly GuardName[] = [
 const crossModuleGuards: readonly GuardName[] = ["single-source", "project-conventions"];
 
 /** Run every selected rule and report stage-level progress independently of the findings format. */
-export async function analyse(config: AnalysisOptions): Promise<Analysis> {
-  const report = config.onProgress ?? null;
+export async function analyse(
+  config: AnalysisOptions,
+  report: (message: string) => void = () => {}
+): Promise<Analysis> {
   const started = Date.now();
-  report?.("[Code Guards] Loading TypeScript project");
+  report("[Code Guards] Loading TypeScript project");
   const project = loadProject(config.project);
   const selected = guards.filter(name => config.enabled.has(name));
-  report?.(`[Code Guards] Loaded ${project.files.length} source files; ${selected.length} rules enabled`);
+  report(`[Code Guards] Loaded ${project.files.length} source files; ${selected.length} rules enabled`);
 
   const stages: Stage[] = [
     {name: "no-nested-if", includes: ["no-nested-if"], run: () => noNestedIf(project)},
@@ -59,7 +60,7 @@ export async function analyse(config: AnalysisOptions): Promise<Analysis> {
   let stageWindows = 0;
   let lastWindowReport = 0;
   let lastReportAt = Date.now();
-  const restore = report ? observeSemanticProgress(event => {
+  const restore = observeSemanticProgress(event => {
     if (event === "loading") { report(`[Code Guards] ${activeStage}: loading MobileBERT CPU model`); return; }
     if (event === "ready") { report(`[Code Guards] ${activeStage}: MobileBERT ready`); return; }
     semanticWindows += 1;
@@ -69,7 +70,7 @@ export async function analyse(config: AnalysisOptions): Promise<Analysis> {
       lastWindowReport = semanticWindows;
       lastReportAt = now;
     }
-  }) : () => {};
+  });
 
   try {
     for (const [index, stage] of enabledStages.entries()) {
@@ -78,15 +79,15 @@ export async function analyse(config: AnalysisOptions): Promise<Analysis> {
       stageWindows = semanticWindows;
       lastWindowReport = semanticWindows;
       lastReportAt = before;
-      report?.(`[Code Guards] [${index + 1}/${enabledStages.length}] ${stage.name}: started`);
+      report(`[Code Guards] [${index + 1}/${enabledStages.length}] ${stage.name}: started`);
       const results = await stage.run();
       findings.push(...results);
-      report?.(`[Code Guards] [${index + 1}/${enabledStages.length}] ${stage.name}: ${results.length} findings, ${semanticWindows - stageWindows} inference windows, ${((Date.now() - before) / 1000).toFixed(1)}s`);
+      report(`[Code Guards] [${index + 1}/${enabledStages.length}] ${stage.name}: ${results.length} findings, ${semanticWindows - stageWindows} inference windows, ${((Date.now() - before) / 1000).toFixed(1)}s`);
     }
   } finally {
     restore();
   }
   const resolved = resolveExpectations(project.root, project.files, findings);
-  report?.(`[Code Guards] Completed: ${resolved.length} findings in ${((Date.now() - started) / 1000).toFixed(1)}s, ${semanticWindows} inference windows`);
+  report(`[Code Guards] Completed: ${resolved.length} findings in ${((Date.now() - started) / 1000).toFixed(1)}s, ${semanticWindows} inference windows`);
   return { findings: resolved, root: project.root };
 }

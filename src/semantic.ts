@@ -26,7 +26,7 @@ type Classifier = ((premise: string, labels: string[], options: ClassifierOption
 };
 
 export type SemanticProgressEvent = "loading" | "ready" | "inference";
-let progressObserver: ((event: SemanticProgressEvent) => void) | null = null;
+let progressObserver: (event: SemanticProgressEvent) => void = () => {};
 let classifierPromise: Promise<Classifier> | null = null;
 
 /** Observe model activity without changing model scoring or its inference order. */
@@ -37,13 +37,13 @@ export function observeSemanticProgress(observer: (event: SemanticProgressEvent)
 }
 
 async function loadClassifier(): Promise<Classifier> {
-  progressObserver?.("loading");
+  progressObserver("loading");
   const { env, pipeline } = await import("@huggingface/transformers");
   if ((process.env.CODE_GUARDS_OFFLINE ?? "") === "1") env.allowRemoteModels = false;
   const cache = process.env.CODE_GUARDS_MODEL_CACHE ?? "";
   if (cache) env.cacheDir = cache;
   const classifier = await pipeline("zero-shot-classification", MODEL, { device: "cpu", dtype: "q8" });
-  progressObserver?.("ready");
+  progressObserver("ready");
   return classifier;
 }
 
@@ -88,7 +88,7 @@ export async function assessWindows(question: SemanticQuestion, classifier: Clas
       multi_label: true,
       hypothesis_template: TEMPLATE
     }), question);
-    progressObserver?.("inference");
+    progressObserver("inference");
     if (result.sameConcept > sameConcept) {
       sameConcept = result.sameConcept;
       supportWindow = index + 1;

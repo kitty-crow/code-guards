@@ -80,9 +80,9 @@ export async function run(argv: string[]): Promise<number> {
   try {
     const config = options(argv);
     if (config.offline) process.env.CODE_GUARDS_OFFLINE = "1";
-    const { findings, root } = await analyse(config.progress
-      ? { ...config, onProgress: message => console.error(message) }
-      : config);
+    const { findings, root } = await analyse(
+      config, config.progress ? message => console.error(message) : () => {}
+    );
     console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
     return failed(findings, config.strict) ? 1 : 0;
   } catch (error) {
