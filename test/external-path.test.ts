@@ -6,6 +6,9 @@ import { afterEach, test } from "node:test";
 import { loadProject } from "../src/project.ts";
 import { options } from "../src/cli.ts";
 import { noNestedIf } from "../src/guards/no-nested-if.ts";
+import { documentation } from "../src/guards/documentation.ts";
+import { analyse } from "../src/engine.ts";
+import type { GuardName } from "../src/model.ts";
 import { writeFixture } from "./fixture.ts";
 
 const temporary: string[] = [];
@@ -49,6 +52,8 @@ test("external directories without tsconfig exclude build outputs and dependency
     "src/validate.ts": nested,
     "dist/generated.ts": nested,
     "node_modules/vendor/index.ts": nested,
+    "vendor/dependency/source.ts": nested,
+    "third_party/library/source.ts": nested,
     "build/copied.ts": nested
   });
   const project = loadProject(root);
@@ -114,4 +119,39 @@ test("README includes all emitted warning codes with descriptions", () => {
   ];
   const emitted = new Set(sourceFiles.flatMap(file => [...readFileSync(path.resolve(file), "utf8").matchAll(/CG\d{3}/g)].map(match => match[0])));
   for (const code of emitted) assert.match(readme, new RegExp("\\| `" + code + "` \\|\\s+\\S"), `README missing description for ${code}`);
+});
+
+test("explicit tsconfig and pinned submodule paths cannot cause vendored source scans", async () => {
+  const root = external({
+    ".gitmodules": '[submodule "external/foreign"]\n\tpath = external/foreign\n\turl = https://github.com/example/foreign.git\n',
+    "tsconfig.json": JSON.stringify({compilerOptions: {strict: true, noEmit: true}, include: ["**/*.ts"]}),
+    "src/clean.ts": "export const ready: boolean = true;",
+    "vendor/library/bad.ts": nested,
+    "third_party/library/bad.ts": nested,
+    "external/foreign/bad.ts": nested,
+    "vendor/library/README.md": "The most powerful solution.",
+    "external/foreign/README.md": "The most powerful solution.",
+    "README.md": "# Scan\n\nRun `bun run test` to execute tests."
+  });
+  const project = loadProject(root);
+  assert.deepEqual(project.files.map(file => path.relative(root, file.fileName)), ["src/clean.ts"]);
+  const docs = await documentation(project, async () => ({sameConcept: 0, differentConcept: 1}));
+  assert.equal(docs.some(item => item.location.file.startsWith("vendor/") ||
+    item.location.file.startsWith("third_party/") ||
+    item.location.file.startsWith("external/foreign/")), false);
+});
+
+test("progress provides stage timing while keeping findings unchanged", async () => {
+  const root = external({ "src/validate.ts": nested });
+  const enabled = new Set<GuardName>(["no-nested-if"]);
+  const messages: string[] = [];
+  const analysis = await analyse({
+    project: root, enabled: new Set(enabled), includeTests: false,
+    onProgress: message => { messages.push(message); }
+  });
+  assert.equal(analysis.findings.length, 1);
+  assert.ok(messages.some(message => message.includes("Loaded 1 source files")));
+  assert.ok(messages.some(message => message.includes("[1/1] no-nested-if: started")));
+  assert.ok(messages.some(message => message.includes("1 findings, 0 inference windows")));
+  assert.ok(messages.some(message => message.includes("Completed: 1 findings")));
 });

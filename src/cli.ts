@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { failed, guards, type GuardName } from "./model.ts";
 import { renderFindings, type Format, type ColourMode } from "./diagnostics.ts";
 
-type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean };
+type Options = { enabled: Set<GuardName>; project: string; format: Format; colour: ColourMode; strict: boolean; includeTests: boolean; offline: boolean; progress: boolean };
 
 function checkGuard(value: string | null): GuardName {
   if (!guards.some(name => name === value)) usage();
@@ -13,7 +13,7 @@ function checkGuard(value: string | null): GuardName {
 }
 
 function usage(): never {
-  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline]");
+  console.error("Usage: code-guards [all|guard-name] [--disable <guard>] [--strict] [--path directory|tsconfig|file] [--project tsconfig.json] [--format text|json|github] [--colour auto|always|never] [--include-tests] [--offline] [--progress]");
   process.exit(2);
 }
 
@@ -34,6 +34,7 @@ export function options(argv: string[]): Options {
   let strict = false;
   let includeTests = false;
   let offline = false;
+  let progress = false;
   let selected = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? usage();
@@ -62,6 +63,7 @@ export function options(argv: string[]): Options {
     if (arg === "--strict") { strict = true; continue; }
     if (arg === "--include-tests") { includeTests = true; continue; }
     if (arg === "--offline") { offline = true; continue; }
+    if (arg === "--progress") { progress = true; continue; }
     if (!selected && arg === "all") { selected = true; continue; }
     if (!selected && guards.some(name => name === arg)) {
       enabled.clear();
@@ -71,14 +73,16 @@ export function options(argv: string[]): Options {
     }
     usage();
   }
-  return { enabled, project, format, colour, strict, includeTests, offline };
+  return { enabled, project, format, colour, strict, includeTests, offline, progress };
 }
 
 export async function run(argv: string[]): Promise<number> {
   try {
     const config = options(argv);
     if (config.offline) process.env.CODE_GUARDS_OFFLINE = "1";
-    const { findings, root } = await analyse(config);
+    const { findings, root } = await analyse(config.progress
+      ? { ...config, onProgress: message => console.error(message) }
+      : config);
     console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
     return failed(findings, config.strict) ? 1 : 0;
   } catch (error) {

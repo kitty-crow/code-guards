@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 
@@ -11,16 +11,43 @@ export type Project = {
 
 const excludedDirectories = [
   "**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**",
-  "**/coverage/**", "**/.next/**", "**/.cache/**", "**/out/**"
+  "**/coverage/**", "**/.next/**", "**/.cache/**", "**/out/**",
+  "**/vendor/**", "**/third_party/**", "**/third-party/**"
 ];
 
+const vendoredDirectoryNames = new Set(["vendor", "third_party", "third-party"]);
+
+/** Read pinned Git submodule paths so nonstandard vendor locations are excluded. */
+export function vendoredPaths(root: string): ReadonlySet<string> {
+  const filename = path.join(root, ".gitmodules");
+  const paths = new Set<string>();
+  if (!existsSync(filename)) return paths;
+  for (const match of readFileSync(filename, "utf8").matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)) {
+    const relative = (match[1] ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+    if (!relative || path.posix.isAbsolute(relative) || relative.split("/").includes("..")) continue;
+    paths.add(relative);
+  }
+  return paths;
+}
+
+/** Never inspect vendored sources, even when they match an explicit tsconfig glob. */
+export function isVendoredPath(root: string, filename: string, submodules: ReadonlySet<string>): boolean {
+  const relative = path.relative(root, filename).replace(/\\/g, "/");
+  if (relative === ".." || relative.startsWith("../") || path.posix.isAbsolute(relative)) return false;
+  return relative.split("/").some(name => vendoredDirectoryNames.has(name)) ||
+    [...submodules].some(prefix => relative === prefix || relative.startsWith(prefix + "/"));
+}
+
 function createProject(root: string, names: string[], options: ts.CompilerOptions): Project {
-  if (!names.length) throw new Error(`No TypeScript source files found in ${root}. Provide --project with a tsconfig.json if sources are elsewhere.`);
-  const program = ts.createProgram({ rootNames: names, options });
+  const submodules = vendoredPaths(root);
+  const projectNames = names.filter(filename => !isVendoredPath(root, filename, submodules));
+  if (!projectNames.length) throw new Error(`No TypeScript source files found in ${root}. Provide --project with a tsconfig.json if sources are elsewhere.`);
+  const program = ts.createProgram({ rootNames: projectNames, options });
   const files = program.getSourceFiles().filter(file => {
     const relative = path.relative(root, file.fileName);
     return !file.isDeclarationFile &&
       !file.fileName.split(/[\\/]/).includes("node_modules") &&
+      !isVendoredPath(root, file.fileName, submodules) &&
       relative !== ".." && !relative.startsWith(`..${path.sep}`) &&
       !path.isAbsolute(relative);
   });

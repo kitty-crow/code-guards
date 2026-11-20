@@ -25,14 +25,26 @@ type Classifier = ((premise: string, labels: string[], options: ClassifierOption
   tokenizer: Tokenizer;
 };
 
+export type SemanticProgressEvent = "loading" | "ready" | "inference";
+let progressObserver: ((event: SemanticProgressEvent) => void) | null = null;
 let classifierPromise: Promise<Classifier> | null = null;
 
+/** Observe model activity without changing model scoring or its inference order. */
+export function observeSemanticProgress(observer: (event: SemanticProgressEvent) => void): () => void {
+  const previous = progressObserver;
+  progressObserver = observer;
+  return () => { progressObserver = previous; };
+}
+
 async function loadClassifier(): Promise<Classifier> {
+  progressObserver?.("loading");
   const { env, pipeline } = await import("@huggingface/transformers");
   if ((process.env.CODE_GUARDS_OFFLINE ?? "") === "1") env.allowRemoteModels = false;
   const cache = process.env.CODE_GUARDS_MODEL_CACHE ?? "";
   if (cache) env.cacheDir = cache;
-  return pipeline("zero-shot-classification", MODEL, { device: "cpu", dtype: "q8" });
+  const classifier = await pipeline("zero-shot-classification", MODEL, { device: "cpu", dtype: "q8" });
+  progressObserver?.("ready");
+  return classifier;
 }
 
 /** Budget the premise after allowing for BOTH hypothesis labels and pair separators. */
@@ -76,6 +88,7 @@ export async function assessWindows(question: SemanticQuestion, classifier: Clas
       multi_label: true,
       hypothesis_template: TEMPLATE
     }), question);
+    progressObserver?.("inference");
     if (result.sameConcept > sameConcept) {
       sameConcept = result.sameConcept;
       supportWindow = index + 1;

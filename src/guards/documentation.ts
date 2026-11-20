@@ -2,7 +2,7 @@ import { withoutIgnored } from "../model.ts";
 import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import type { Project } from "../project.ts";
+import { isVendoredPath, vendoredPaths, type Project } from "../project.ts";
 import type { Finding, Location } from "../model.ts";
 import { readScripts } from "../scripts.ts";
 import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
@@ -19,7 +19,7 @@ type DocIssue = {
 };
 type RelatedDocIssue = DocIssue & { related: Location };
 
-const ignored = new Set([".git", "node_modules", "dist", "coverage", "examples", ".cache"]);
+const ignored = new Set([".git", "node_modules", "dist", "coverage", "examples", ".cache", "vendor", "third_party", "third-party"]);
 const marketing = /\b(?:seamlessly|cutting.edge|state.of.the.art|robust and scalable|powerful solution|revolutionary|effortlessly|leverage the power|unlock the potential|comprehensive suite|future.proof|game.changing)\b/i;
 const promptLeak = /\b(?:you are an (?:expert|assistant)|as an ai language model|your task is to|do not hallucinate|act as a (?:senior|professional|helpful)|here is the prompt|follow these instructions)\b/i;
 const vague = /\b(?:easy.to.use|highly flexible|powerful|robust|comprehensive|best.in.class|intuitive|efficient|enterprise.ready|production.ready|modern solution)\b/i;
@@ -72,7 +72,7 @@ function read(root: string, file: string): string | null {
   catch { return null; }
 }
 
-function markdownFiles(root: string, relative = "", depth = 0): string[] {
+function markdownFiles(root: string, relative = "", depth = 0, submodules: ReadonlySet<string> = vendoredPaths(root)): string[] {
   if (depth > 9) return [];
   let items: Dirent[];
   try { items = readdirSync(path.join(root, relative), { withFileTypes: true }); }
@@ -81,7 +81,8 @@ function markdownFiles(root: string, relative = "", depth = 0): string[] {
   for (const item of items) {
     if (ignored.has(item.name) || item.name.startsWith(".")) continue;
     const file = path.posix.join(relative, item.name);
-    if (item.isDirectory()) { files.push(...markdownFiles(root, file, depth + 1)); continue; }
+    if (isVendoredPath(root, path.join(root, file), submodules)) continue;
+    if (item.isDirectory()) { files.push(...markdownFiles(root, file, depth + 1, submodules)); continue; }
     if (item.isFile() && /\.mdx?$/i.test(item.name)) files.push(file);
   }
   return files.sort();

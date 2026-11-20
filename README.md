@@ -200,3 +200,15 @@ bun run test:bun
 Package status: private repository, not published to npm. GitHub-hosted CI is not configured.
 
 MIT licence.
+
+## Progress reporting and vendor boundaries
+
+Use `--progress` to see live progress on standard error without changing the normal findings output on standard output:
+
+```sh
+bun run guards:strict:bun --path ../my-project --progress
+```
+
+Progress includes the number of files, each scan stage, elapsed time, findings and neural inference windows. TypeScript checks retain all 23 guards, with the related deterministic code-health rules grouped into one traversal. MobileBERT is still executed on CPU and each inference is counted without changing its score. CI can use `--format github --progress` to preserve GitHub annotations and emit readable progress logs.
+
+Vendored dependencies are excluded from both TypeScript findings and documentation checks. This covers `vendor/`, `third_party/`, `third-party/` and all submodule paths declared in the target repository's `.gitmodules`, including submodules located outside those conventional directories. The target's own source and tests remain subject to the configured checks.
