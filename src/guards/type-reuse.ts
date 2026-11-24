@@ -12,6 +12,7 @@ type Definition = {
   kind: "type" | "interface" | "class";
   node: ts.Node;
   type: ts.Type;
+  genericSignature: string;
   fingerprint: string;
   properties: Property[];
 };
@@ -127,7 +128,14 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
   try {
     if (type.flags & ts.TypeFlags.TypeParameter) {
       const constraint = checker.getBaseConstraintOfType(type);
-      return `parameter:${checker.typeToString(type)}:${constraint ? fingerprint(constraint, checker, active, depth + 1) : "unconstrained"}`;
+      const fallback = checker.getDefaultFromTypeParameter(type);
+      const declaration = type.symbol ? declarationOf(type.symbol) : null;
+      const owner = declaration?.parent ?? null;
+      const parameters = owner && (ts.isInterfaceDeclaration(owner) || ts.isTypeAliasDeclaration(owner) || ts.isClassDeclaration(owner))
+        ? owner.typeParameters ?? [] : [];
+      const position = declaration && ts.isTypeParameterDeclaration(declaration) ? parameters.indexOf(declaration) : -1;
+      const identity = position >= 0 ? String(position) : checker.typeToString(type);
+      return `parameter:${identity}:${constraint ? fingerprint(constraint, checker, active, depth + 1) : "unconstrained"}:${fallback ? fingerprint(fallback, checker, active, depth + 1) : "no-default"}`;
     }
     const reference = (type.flags & ts.TypeFlags.Object) && ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference);
     const args = reference ? checker.getTypeArguments(type as ts.TypeReference) : type.aliasTypeArguments ?? [];
@@ -198,7 +206,10 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
       });
       // Primitive aliases, utility aliases and one-field records are too noisy.
       if (properties.length >= 2) {
-        definitions.push({ name: identifier.text, node, kind, type, properties, fingerprint: fingerprint(type, project.checker) });
+        const genericSignature = (node.typeParameters ?? []).map(parameter =>
+          fingerprint(project.checker.getTypeAtLocation(parameter.name), project.checker)
+        ).join(";");
+        definitions.push({ name: identifier.text, node, kind, type, genericSignature, properties, fingerprint: fingerprint(type, project.checker) });
       }
       ts.forEachChild(node, visit);
     };
@@ -285,11 +296,15 @@ function reuseAdvice(a: Definition, b: Definition, exact: boolean): string {
 async function compareDefinitions(project: Project, a: Definition, b: Definition, score: SemanticScorer): Promise<Finding | null> {
   if (a.node.getSourceFile() === b.node.getSourceFile()) return null;
   const isClass = a.kind === "class" || b.kind === "class";
-  const commonShape = a.fingerprint === b.fingerprint && !isClass;
-  // A bounded structural fingerprint is a shortlist, not proof of equivalence.
-  // Mutual assignability checks instantiated properties and discriminants.
-  const exactMatch = commonShape && project.checker.isTypeAssignableTo(a.type, b.type) &&
-    project.checker.isTypeAssignableTo(b.type, a.type);
+  const commonShape = a.fingerprint === b.fingerprint && a.genericSignature === b.genericSignature && !isClass;
+  // Independent generic declarations have distinct formal parameter symbols.
+  // Compare their position-normalised constraints and full structural shape;
+  // do not claim exact generic equivalence from a bounded expansion alone.
+  const generic = a.genericSignature.length > 0;
+  const equivalent = generic
+    ? !a.fingerprint.includes("complex:") && !a.genericSignature.includes("complex:")
+    : project.checker.isTypeAssignableTo(a.type, b.type) && project.checker.isTypeAssignableTo(b.type, a.type);
+  const exactMatch = commonShape && equivalent;
   const commonFields = fieldSimilarity(a, b, false);
   const semanticFields = fieldSimilarity(a, b, true);
   const nearMatch = commonFields >= 0.7 && !exactMatch && !isClass;
