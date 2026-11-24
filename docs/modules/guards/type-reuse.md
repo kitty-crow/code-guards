@@ -6,7 +6,7 @@ Source: [`src/guards/type-reuse.ts`](../../../src/guards/type-reuse.ts)
 
 ## Behaviour and boundaries
 
-Merged declarations are collected once by their TypeScript symbol, with the original declaration preferred over module augmentations. Named aliases (including generic specialisations) already reuse a definition and are not independent duplicates. Structural fingerprints retain generic arguments and literal discriminants; CG101 additionally requires mutual TypeScript assignability before declaring a duplicate.
+Merged declarations are collected once by their TypeScript symbol, with the original declaration preferred over module augmentations. Named aliases (including generic specialisations) already reuse a definition and are not independent duplicates. Structural fingerprints retain generic arguments and literal discriminants; CG101 additionally requires mutual TypeScript assignability for concrete types. Independent generic declarations use position-normalised formal parameters, constraints and defaults, and cannot be exact matches on a truncated fingerprint alone.
 
 Classes with different runtime behaviour are never declared exact duplicates solely from matching properties. Scalar and array aliases are not equivalent. The tool makes suggestions and does not automatically merge types.
 
