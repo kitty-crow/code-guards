@@ -3,7 +3,8 @@ import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
 import type { Project } from "../project.ts";
-import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
+import { supportsReuse, zeroShot, semanticConcurrency, type SemanticScorer } from "../semantic.ts";
+import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
 type FunctionInfo = {
   name: string;
@@ -204,7 +205,24 @@ export async function functionQuality(project: Project, includeTests = false, sc
       ...(related ? { related: location(project.root, nameNode(related)), relatedSpan: related.name.length } : {})
     });
   };
-  for (const info of functions) await reviewFunction(info, score, emit);
+  // Independent function questions run concurrently on the physical GPU pool.
+  // Collect per-function findings in source order to preserve stable diagnostics.
+  const reviewed = await orderedConcurrentMap(functions, semanticConcurrency(), async info => {
+    const local: Finding[] = [];
+    const localEmit: Emit = (target, code, similarity, related) => {
+      const note = explain(target, code, related);
+      local.push({ guard: "function-quality", severity: "warning", code, message: note.title,
+        location: location(project.root, nameNode(target)),
+        subject: target.name, span: target.name.length,
+        reason: note.reason, suggestion: note.suggestion, similarity,
+        ...(related ? { related: location(project.root, nameNode(related)),
+          relatedSpan: related.name.length } : {})
+      });
+    };
+    await reviewFunction(info, score, localEmit);
+    return local;
+  });
+  for (const result of reviewed) findings.push(...result);
   await reviewSimilarFunctions(functions, score, emit);
   return withoutIgnored(project.root, findings);
 }

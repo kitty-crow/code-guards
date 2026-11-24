@@ -77,6 +77,23 @@ export function externalAbi(memory: number, a: number, b: number, c: number, d: 
 
 **Inference disclosure:** This coverage showcase injects fixed, labelled zero-shot verdicts for reproducibility. It validates guard integration and reporting, but is not evidence of real MobileBERT quality. `bun run demo:semantic:bun` uses the actual model. To smoke-test the ONNX model itself with a deliberately overlong premise, run `bun run demo:model:bun` (or `npm run demo:model` under native Node). It downloads and executes real MobileBERT inference; it is deliberately **not** run as part of the routine unit tests. Long NLI inputs are tokenised and split into overlapping passages respecting MobileBERT's 512-token limit; evidence from all passages is combined conservatively.
 
+### Local inference performance baseline
+
+`bun run benchmark:inference` runs the real CPU/q8 MobileBERT pipeline twice
+with identical evidence, separating model startup, tokenisation/window preparation,
+inference and remaining overhead. It reports JSON timings and memory use.
+A warm sample makes model-loading overhead distinguishable from inference speed.
+
+```sh
+bun run benchmark:inference
+CODE_GUARDS_BENCHMARK_LONG=1 CODE_GUARDS_BENCHMARK_ITERATIONS=3 bun run benchmark:inference
+CODE_GUARDS_OFFLINE=1 bun run benchmark:inference
+```
+
+The long run measures overlapping inference windows. It is optional, downloads
+weights if absent, and may take substantially longer than ordinary unit tests.
+The benchmark is not part of CI and does not change semantic decisions.
+
 The `enterprise-looking-naming` guard checks functions, classes, methods, types, variables, parameters, members, aliases, filenames and directories. It identifies very long descriptive names and stacked generic suffixes. For instance, a function called `veryLongNamesThatAreVerySpecificAndMightNeedShortening` can be shortened to an abbreviation such as `lngNms` if that is clear in context. It never applies renames automatically.
 
 The `review-practices` guard checks code and test maintainability:
@@ -176,7 +193,7 @@ For implementation detail and each module's exports, consult [docs/index.md](doc
 
 ## Semantic analysis and limitations
 
-The `type-reuse`, `function-quality` and `documentation` guards use `Xenova/mobilebert-uncased-mnli` through `@huggingface/transformers` for *shortlisted* ambiguous comparisons. Model inference is local on CPU and downloads weights on first use unless `--offline` is set. Semantic warnings express a likelihood, **not proof** of equivalence, an unsafe change, or factual inaccuracy. TypeScript AST checks can verify narrower issues such as duplicate structures, missing exports, undefined package scripts and broken local links. Model loading failures exit 2 rather than silently substituting a heuristic decision.
+The `type-reuse`, `function-quality` and `documentation` guards use `Xenova/mobilebert-uncased-mnli` through `@huggingface/transformers` for *shortlisted* ambiguous comparisons. Model inference is local, defaults to CPU/q8 and downloads weights on first use unless `--offline` is set. Semantic warnings express a likelihood, **not proof** of equivalence, an unsafe change, or factual inaccuracy. TypeScript AST checks can verify narrower issues such as duplicate structures, missing exports, undefined package scripts and broken local links. Model loading failures exit 2 rather than silently substituting a heuristic decision.
 
 The demonstration commands use different evidence sources:
 
@@ -209,8 +226,148 @@ Use `--progress` to see live progress on standard error without changing the nor
 bun run guards:strict:bun --path ../my-project --progress
 ```
 
-Progress includes the number of files, each scan stage, elapsed time, findings and neural inference windows. TypeScript checks retain all 23 guards, with the related deterministic code-health rules grouped into one traversal. MobileBERT is still executed on CPU and each inference is counted without changing its score. CI can use `--format github --progress` to preserve GitHub annotations and emit readable progress logs.
+Progress includes the number of files, each scan stage, elapsed time, findings and neural inference windows. TypeScript checks retain all 23 guards, with the related deterministic code-health rules grouped into one traversal. MobileBERT defaults to CPU/q8 but supports explicit accelerator selection, and each completed inference window is counted. CI can use `--format github --progress` to preserve GitHub annotations and emit readable progress logs.
 
 Vendored dependencies are excluded from both TypeScript findings and documentation checks. This covers `vendor/`, `third_party/`, `third-party/` and all submodule paths declared in the target repository's `.gitmodules`, including submodules located outside those conventional directories. The target's own source and tests remain subject to the configured checks.
 
-Strict mode converts warning-level findings into error-level CLI diagnostics and GitHub annotations, while advisory mode retains warning severity. The underlying checks and suggested fixes are unchanged.
+Strict mode reports warning-level findings as errors; advisory mode retains warning severity. Checks and suggested fixes are unchanged.
+
+## Optional MobileBERT acceleration
+
+By default Code Guards uses CPU/q8 inference, exactly as before. Use explicit,
+composable flags for cache, batching and GPU inference:
+
+```sh
+bun run benchmark:inference --accelerate none
+bun run benchmark:inference --accelerate cache
+CODE_GUARDS_BENCHMARK_LONG=1 bun run benchmark:inference --accelerate batch --batch-size 4
+bun run benchmark:inference --accelerate webgpu
+bun run benchmark:inference --accelerate cuda
+bun run benchmark:inference --accelerate cache,batch,webgpu --batch-size 4
+bun run guards:bun --project ../tensorflow-ts/tsconfig.code-guards.json --accelerate cache,batch,cuda --batch-size 4
+```
+
+CUDA and WebGPU are explicit GPU requests; model compatibility, runtime
+libraries and drivers determine availability. Use `--accelerate cuda,webgpu`
+to try CUDA then WebGPU, or reverse the order. These are alternative
+providers, not simultaneous multi-GPU execution. CPU is **not** silently
+selected if both fail. GPU precision is FP32, and semantic scores may differ
+from CPU/q8. All work remains local. The TensorFlow fork is a real-world
+project-scan target, not an inference model.
+
+## Sixty-second TensorFlow source throughput comparison
+
+To compare actual Code Guards progress across CPU and GPU modes using
+the TensorFlow TypeScript fork, start from a checkout of Code Guards
+and an existing checkout of TensorFlow TypeScript:
+
+```sh
+bun run benchmark:throughput --project /absolute/path/to/tensorflow-ts/tsconfig.code-guards.json
+```
+
+The supervisor runs three independent real scans, each with a hard
+60-second deadline: CPU/q8, WebGPU/FP32 and WebGPU/FP32 with batch size 4.
+It measures completed semantic questions, real inference windows and fully
+completed guard stages, including time spent loading the TypeScript project.
+The loaded source-file count is *not* a processed-file count. Different
+model precisions can affect semantic findings. Use `--mode` to select a
+specific acceleration setting, `--guard type-reuse` to isolate the
+semantic type-reuse guard, or `--seconds` for a different diagnostic
+limit. A timed-out scan is forcibly stopped, not allowed to continue
+in the background. The benchmark is local and is excluded from CI.
+
+## Experimental bounded inference parallelism
+
+Independent type-reuse comparisons can now execute concurrently without
+reordering results. Opt in with `--accelerate parallel,webgpu --concurrency 4`.
+Use the throughput benchmark with `--mode webgpu --mode parallel,webgpu`
+to establish whether it actually improves full-project throughput. This
+is one GPU backend per process, not verified dual-GPU or NVLink support.
+
+## Experimental multi-GPU CUDA workers
+
+For Linux/WSL2 hosts with two working CUDA-capable NVIDIA GPUs, select
+`--accelerate parallel,cuda --concurrency 4 --gpu-ids 0,1`. Code Guards
+runs two independent CUDA model processes with explicit
+`CUDA_VISIBLE_DEVICES` affinity. Native Windows WebGPU GPU selection is
+not implemented and these flags reject that platform. The two processes
+replicate MobileBERT instead of using NVLink, so no cross-GPU transfer is
+necessary. Use `benchmark:throughput --mode parallel,cuda --gpu-ids 0,1`
+to verify actual per-GPU inference work. Do not assume two GPUs are active
+without reviewing per-device counters and NVIDIA utilisation.
+
+## Cross-question inference batching
+
+The `parallel,batch` combination performs model-call
+batching across different semantic questions with identical candidate
+hypotheses. A single GPU inference dispatcher interleaves evidence windows
+and serialises the underlying model calls to avoid contention observed when
+multiple calls targeted the same WebGPU session concurrently.
+
+Compare it directly against the previous WebGPU baseline:
+
+```powershell
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode webgpu --mode batch,webgpu --mode batch,parallel,webgpu --concurrency 4
+```
+
+This optimisation is experimental and its throughput improvement needs to
+be measured. It neither activates the second graphics card nor uses NVLink.
+
+## Windows dual-GPU DirectML benchmark
+
+Native Windows can use two separate DirectML GPU adapters with independent
+MobileBERT worker processes. Use `--accelerate parallel,dml --gpu-ids 0,1
+--concurrency 4` and compare `--mode dml` against `--mode parallel,dml`
+in the 60-second throughput benchmark. DirectML uses its own adapter ordering. Each worker holds a model copy and reports its inference window count. A missing provider terminates the scan.
+
+## Experimental native dual-WebGPU adapters (Windows)
+
+To select **two physical WebGPU adapters** rather than two instances of the
+same default GPU, Code Guards can use ONNX Runtime's newer native WebGPU
+plugin and its `adapterIndex` option. The scanner remains Bun/TypeScript;
+only the explicitly selected inference engine uses isolated Python plugin
+workers. The stock ONNX Runtime Node binding does **not** expose this
+physical-adapter selector.
+
+Install a separate Python environment with the matched pair
+`onnxruntime==1.31.0` and `onnxruntime-ep-webgpu==0.5.0`, plus
+`huggingface-hub`, `tokenizers` and `numpy`. For example on KittyWin:
+
+```powershell
+py -3.12 -m venv "$env:TEMP\\code-guards-webgpu"
+& "$env:TEMP\\code-guards-webgpu\\Scripts\\python.exe" -m pip install "onnxruntime==1.31.0" "onnxruntime-ep-webgpu==0.5.0" "huggingface-hub>=0.26,<2" "tokenizers>=0.20,<1" "numpy>=1.26,<3"
+$env:CODE_GUARDS_WEBGPU_PYTHON = "$env:TEMP\\code-guards-webgpu\\Scripts\\python.exe"
+```
+
+Then run:
+
+```powershell
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode webgpu --mode parallel,webgpu --gpu-ids 0,1 --concurrency 4
+```
+
+This is experimental and must be hardware-validated; compare both per-adapter
+counters and semantic scores before adopting it. It does not use NVLink.
+
+Before running the full native dual-WebGPU benchmark, run
+`bun run probe:dual-webgpu`. The probe initialises adapter 0 and 1,
+runs an inference on each and prints either their scores or the concrete
+failure. No TensorFlow project scan is needed for this smoke test.
+
+## Fair native WebGPU scaling comparison
+
+The `--gpu-ids` flag accepts one adapter (`0`) or several (`0,1`).
+Unlike the default `webgpu` mode, both of the following use the **same
+native ONNX WebGPU plugin** and model format:
+
+```powershell
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0 --concurrency 4 --batch-size 4
+bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4
+```
+
+Question assignment across workers now favours the least-queued adapter and
+rotates equal-depth assignments. This is experimental scheduling and should
+be evaluated on real hardware before claiming a throughput improvement.
+
+## Read-only neural inference preflight
+
+`bun src/cli.ts all --project <tsconfig.json> --preflight --format json` counts candidate semantic questions, exact MobileBERT token windows and compatible batching calls before training or scanning. It loads only the tokenizer, not ONNX weights or GPU workers. README verdict-dependent work is reported as a bounded range rather than a false exact prediction. See [preflight module documentation](docs/modules/preflight.md).

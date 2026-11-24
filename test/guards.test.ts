@@ -56,6 +56,83 @@ test("matching types across files are reported without running NLP", async () =>
   assert.deepEqual(result.map(item => item.code), ["CG101"]);
 });
 
+test("CG101 treats module augmentations as a single canonical declaration", async () => {
+  const sample = project({
+    "tensor.ts": "export interface Tensor<R extends number = number> { rank: R; size: number }",
+    "abs.ts": "import './tensor'; declare module './tensor' { interface Tensor<R extends number = number> { abs(): Tensor<R> } }",
+    "neg.ts": "import './tensor'; declare module './tensor' { interface Tensor<R extends number = number> { neg(): Tensor<R> } }"
+  });
+  const forbidden: SemanticScorer = async () => { throw new Error("Merged declarations must not reach NLP"); };
+  assert.deepEqual(await typeReuse(sample, false, forbidden), []);
+});
+
+test("CG101 does not report aliases or rank specialisations of a canonical type", async () => {
+  const fields = Array.from(Array<number>(35).keys(), index => `field${index}: string;`).join(" ");
+  const sample = project({
+    "tensor.ts": `export enum Rank { R0, R1 } export interface Tensor<R extends Rank = Rank> { rank: R; ${fields} }`,
+    "scalar.ts": "import { Tensor, Rank } from './tensor'; export type Scalar = Tensor<Rank.R0>;",
+    "vector.ts": "import { Tensor, Rank } from './tensor'; export type Vector = Tensor<Rank.R1>;",
+    "alias.ts": "import { Tensor as Original } from './tensor'; export type Alias = (Original);",
+    "reexport.ts": "export { Tensor as PublicTensor } from './tensor';",
+    "alias-chain.ts": "import { Alias } from './alias'; export type AliasChain = Alias;"
+  });
+  const forbidden: SemanticScorer = async () => { throw new Error("Canonical aliases must not reach NLP"); };
+  assert.deepEqual(await typeReuse(sample, false, forbidden), []);
+});
+
+test("CG101 retains genuine independent duplicates after declaration merging", async () => {
+  const sample = project({
+    "base.ts": "export interface Contact { name: string; email: string }",
+    "augment.ts": "import './base'; declare module './base' { interface Contact { phone: string } }",
+    "alias.ts": "import { Contact } from './base'; export type Alias = Contact;",
+    "copy.ts": "export interface ContactCopy { name: string; email: string; phone: string }"
+  });
+  const forbidden: SemanticScorer = async () => { throw new Error("Identical independent shapes must not reach NLP"); };
+  const findings = await typeReuse(sample, false, forbidden);
+  assert.deepEqual(findings.map(item => item.code), ["CG101"]);
+  const finding = findings[0] ?? null;
+  assert.ok(finding && "related" in finding);
+  assert.equal(finding.related.file, "base.ts");
+  assert.equal(finding.location.file, "copy.ts");
+});
+
+test("CG101 recognises independent generic contracts with renamed formal parameters", async () => {
+  const sample = project({
+    "one.ts": "export interface One<T extends string> { value: T; id: number }",
+    "two.ts": "export interface Two<U extends string> { value: U; id: number }"
+  });
+  const forbidden: SemanticScorer = async () => { throw new Error("Equivalent generic shapes must not reach NLP"); };
+  assert.deepEqual((await typeReuse(sample, false, forbidden)).map(item => item.code), ["CG101"]);
+});
+
+test("CG101 preserves constraints and defaults of otherwise identical generic contracts", async () => {
+  const sample = project({
+    "one.ts": "export interface One<T extends string = 'a'> { value: T; id: number }",
+    "two.ts": "export interface Two<T extends string = 'b'> { value: T; id: number }",
+    "three.ts": "export interface Three<T extends number = 1> { value: T; id: number }"
+  });
+  assert.ok((await typeReuse(sample, false, endorse)).every(item => item.code !== "CG101"));
+});
+
+test("CG101 preserves nested generic arguments even for large phantom types", async () => {
+  const fields = Array.from(Array<number>(35).keys(), index => `field${index}: string;`).join(" ");
+  const sample = project({
+    "base.ts": `export interface Payload<T> { ${fields} }`,
+    "one.ts": "import { Payload } from './base'; export interface One { value: Payload<0>; id: string }",
+    "two.ts": "import { Payload } from './base'; export interface Two { value: Payload<1>; id: string }"
+  });
+  assert.deepEqual(await typeReuse(sample, false, endorse), []);
+});
+
+test("CG101 distinguishes large records with incompatible literal discriminants", async () => {
+  const fields = Array.from(Array<number>(35).keys(), index => `field${index}: string;`).join(" ");
+  const sample = project({
+    "one.ts": `export interface Event { kind: 'open'; ${fields} }`,
+    "two.ts": `export interface Event { kind: 'closed'; ${fields} }`
+  });
+  assert.ok((await typeReuse(sample, false, endorse)).every(item => item.code !== "CG101"));
+});
+
 test("conceptual type reuse invokes zero-shot scorer", async () => {
   const sample = project({
     "one.ts": "export interface Customer { name: string; email: string }",

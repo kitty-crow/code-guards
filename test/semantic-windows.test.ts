@@ -1,14 +1,12 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { assessWindows, MAX_MODEL_TOKENS, premiseWindows, supportsReuse, type SemanticQuestion } from "../src/semantic.ts";
-
-type Runtime = Parameters<typeof assessWindows>[1];
+import { assessWindows, MAX_MODEL_TOKENS, observeSemanticTimings, premiseWindows, supportsReuse, type SemanticQuestion, type SemanticTimingEvent, type Classifier } from "../src/semantic.ts";
 
 function fakeRuntime(assess: (window: string) => { same: number; different: number }) {
   const dictionary = new Map<string, number>();
   const reverse = new Map<number, string>();
   const tokenize = (text: string): string[] => text.trim().split(/\s+/).filter(Boolean);
-  const tokenizer: Runtime["tokenizer"] = {
+  const tokenizer: Classifier["tokenizer"] = {
     encode: text => tokenize(text).map(word => {
       const known = dictionary.get(word) ?? null;
       if (known !== null) return known;
@@ -20,11 +18,11 @@ function fakeRuntime(assess: (window: string) => { same: number; different: numb
     decode: ids => ids.map(id => reverse.get(id) ?? "").join(" ")
   };
   const calls: string[] = [];
-  const classify: Runtime = Object.assign(async (premise: string, labels: string[]) => {
+  const classify: Classifier = Object.assign(async (premise: string, labels: string[]) => {
     calls.push(premise);
     const verdict = assess(premise);
     return { labels, scores: [verdict.same, verdict.different] };
-  }, { tokenizer });
+  }, { tokenizer, classifyBatch: null });
   return { classify, tokenizer, calls };
 }
 
@@ -74,4 +72,24 @@ test("contradictory evidence in another window prevents an unsupported reuse war
 test("overlength hypotheses fail explicitly instead of silently truncating labels", () => {
   const runtime = fakeRuntime(() => ({ same: 1, different: 0 }));
   assert.throws(() => premiseWindows({ premise: "text", same: "phrase ".repeat(510), different: "short" }, runtime.tokenizer), /hypothesis is too long/);
+});
+
+
+test("timing observations measure preparation and each inference without changing verdicts", async () => {
+  const runtime = fakeRuntime(() => ({ same: 0.88, different: 0.04 }));
+  const observed: SemanticTimingEvent[] = [];
+  const restore = observeSemanticTimings(event => { observed.push(event); });
+  try {
+    const verdict = await assessWindows(question("Both interfaces contain equivalent fields."), runtime.classify);
+    assert.equal(verdict.sameConcept, 0.88);
+    assert.equal(verdict.differentConcept, 0.04);
+    assert.deepEqual(observed.map(event => event.phase), ["windowing", "inference", "verdict"]);
+    assert.ok(observed.every(event => Number.isFinite(event.milliseconds) && event.milliseconds >= 0));
+    const first = observed[0] ?? null;
+    assert.equal(first && first.phase === "windowing" ? first.windows : -1, 1);
+    const second = observed[1] ?? null;
+    assert.equal(second && second.phase === "inference" ? second.window : -1, 1);
+  } finally {
+    restore();
+  }
 });

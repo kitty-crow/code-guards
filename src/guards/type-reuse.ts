@@ -3,13 +3,16 @@ import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
 import type { Project } from "../project.ts";
-import { zeroShot, supportsReuse, type SemanticScorer } from "../semantic.ts";
+import { zeroShot, supportsReuse, semanticConcurrency, type SemanticScorer } from "../semantic.ts";
+import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
 type Property = { name: string; fingerprint: string };
 type Definition = {
   name: string;
   kind: "type" | "interface" | "class";
   node: ts.Node;
+  type: ts.Type;
+  genericSignature: string;
   fingerprint: string;
   properties: Property[];
 };
@@ -40,6 +43,7 @@ function tokenSimilarity(left: string, right: string): number {
 }
 
 function primitiveFingerprint(type: ts.Type, checker: ts.TypeChecker): string | null {
+  if (type.flags & ts.TypeFlags.EnumLiteral && type.symbol) return `enum:${checker.getFullyQualifiedName(type.symbol)}`;
   if (type.isStringLiteral()) return `string-literal:${JSON.stringify(type.value)}`;
   if (type.isNumberLiteral()) return `number-literal:${type.value}`;
   if (type.flags & ts.TypeFlags.BooleanLiteral) return `boolean-literal:${checker.typeToString(type)}`;
@@ -61,12 +65,18 @@ function declarationOf(symbol: ts.Symbol): ts.Declaration | null {
   return symbol.valueDeclaration ?? (declarations[0] ?? null);
 }
 
+function qualifiedTypeName(type: ts.Type, checker: ts.TypeChecker): string {
+  const symbol = type.symbol ?? (type.aliasSymbol ?? null);
+  const declaration = symbol ? declarationOf(symbol) : null;
+  return declaration ? checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType) : checker.typeToString(type);
+}
+
 function objectFingerprint(type: ts.Type, checker: ts.TypeChecker, active: Set<ts.Type>, depth: number): string {
   // Large structural types are too costly to expand here. For smaller ones,
   // resolve members at their declarations so aliases retain their context.
   const properties = checker.getPropertiesOfType(type);
   const symbol = type.symbol ?? null;
-  if (properties.length > 32) return `complex:${symbol ? symbol.getName() : type.flags}`;
+  if (depth > 0 && properties.length > 32) return `complex:${qualifiedTypeName(type, checker)}`;
   const members = properties.map(property => {
     const declaration = declarationOf(property);
     const memberType = declaration ? checker.getTypeOfSymbolAtLocation(property, declaration) : null;
@@ -100,7 +110,7 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
   if (declaration && (source.includes("node_modules") || /(?:^|[\\/])lib\.[^\\/]+\.d\.ts$/.test(source))) {
     return `external:${checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation)}`;
   }
-  if (depth >= 5) return `complex:${symbol ? symbol.getName() : type.flags}`;
+  if (depth >= 5 || active.has(type)) return `complex:${qualifiedTypeName(type, checker)}`;
   const primitive = primitiveFingerprint(type, checker);
   if (primitive !== null) return primitive;
   if (type.isUnionOrIntersection()) {
@@ -114,10 +124,25 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
   if (checker.isTupleType(type)) {
     return `tuple(${checker.getTypeArguments(type as ts.TypeReference).map(item => fingerprint(item, checker, active, depth + 1)).join(",")})`;
   }
-  if (active.has(type)) return "recursive";
   active.add(type);
-  try { return objectFingerprint(type, checker, active, depth); }
-  finally { active.delete(type); }
+  try {
+    if (type.flags & ts.TypeFlags.TypeParameter) {
+      const constraint = checker.getBaseConstraintOfType(type) ?? null;
+      const fallback = checker.getDefaultFromTypeParameter(type) ?? null;
+      const declaration = type.symbol ? declarationOf(type.symbol) : null;
+      const owner = declaration ? declaration.parent : null;
+      const parameters: readonly ts.TypeParameterDeclaration[] = owner && (ts.isInterfaceDeclaration(owner) || ts.isTypeAliasDeclaration(owner) || ts.isClassDeclaration(owner))
+        ? owner.typeParameters ?? [] : [];
+      const position = declaration && ts.isTypeParameterDeclaration(declaration) ? parameters.indexOf(declaration) : -1;
+      const identity = position >= 0 ? String(position) : checker.typeToString(type);
+      return `parameter:${identity}:${constraint ? fingerprint(constraint, checker, active, depth + 1) : "unconstrained"}:${fallback ? fingerprint(fallback, checker, active, depth + 1) : "no-default"}`;
+    }
+    const reference = (type.flags & ts.TypeFlags.Object) && ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference);
+    const args = reference ? checker.getTypeArguments(type as ts.TypeReference) : type.aliasTypeArguments ?? [];
+    const parameters = args.map(argument => fingerprint(argument, checker, active, depth + 1));
+    const shape = objectFingerprint(type, checker, active, depth);
+    return parameters.length ? `generic(${parameters.join(",")}):${shape}` : shape;
+  } finally { active.delete(type); }
 }
 
 function isRecordType(type: ts.Type, checker: ts.TypeChecker): boolean {
@@ -128,8 +153,28 @@ function isRecordType(type: ts.Type, checker: ts.TypeChecker): boolean {
   return Boolean(type.flags & ts.TypeFlags.Object) && !checker.isArrayType(type) && !checker.isTupleType(type);
 }
 
+// A named reference reuses an existing declaration, even when instantiated
+// with different generic arguments. Inline object types remain independent.
+function isNamedAlias(node: ts.TypeAliasDeclaration, checker: ts.TypeChecker): boolean {
+  let target = node.type;
+  while (ts.isParenthesizedTypeNode(target)) target = target.type;
+  if (!ts.isTypeReferenceNode(target)) return false;
+  const symbol = checker.getSymbolAtLocation(target.typeName) ?? null;
+  if (!symbol) return false;
+  const canonical = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  return Boolean(canonical.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.Class | ts.SymbolFlags.TypeAlias));
+}
+
+function isModuleAugmentationMember(node: ts.Node): boolean {
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (ts.isModuleDeclaration(parent) && ts.isStringLiteral(parent.name) && ts.isExternalModule(parent.getSourceFile())) return true;
+  }
+  return false;
+}
+
 function getDefinitions(project: Project, includeTests: boolean): Definition[] {
   const definitions: Definition[] = [];
+  const seen = new Set<ts.Symbol>();
   for (const file of project.files) {
     if (!includeTests && /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/.test(file.fileName)) continue;
     const visit = (node: ts.Node): void => {
@@ -139,6 +184,17 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
       const identifier = node.name ?? null;
       if (!identifier) { ts.forEachChild(node, visit); return; }
 
+      const symbol = project.checker.getSymbolAtLocation(identifier) ?? null;
+      if (!symbol || seen.has(symbol)) { ts.forEachChild(node, visit); return; }
+      // Prefer the original declaration over an augmentation when both occur
+      // in the project, regardless of source file traversal order.
+      if (isModuleAugmentationMember(node) && (symbol.declarations ?? []).some(declaration => !isModuleAugmentationMember(declaration))) {
+        ts.forEachChild(node, visit); return;
+      }
+      seen.add(symbol);
+      if (ts.isTypeAliasDeclaration(node) && isNamedAlias(node, project.checker)) {
+        ts.forEachChild(node, visit); return;
+      }
       const type = project.checker.getTypeAtLocation(identifier);
       if (!isRecordType(type, project.checker)) { ts.forEachChild(node, visit); return; }
       const properties = project.checker.getPropertiesOfType(type).map(property => {
@@ -150,7 +206,10 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
       });
       // Primitive aliases, utility aliases and one-field records are too noisy.
       if (properties.length >= 2) {
-        definitions.push({ name: identifier.text, node, kind, properties, fingerprint: fingerprint(type, project.checker) });
+        const genericSignature = (node.typeParameters ?? []).map(parameter =>
+          fingerprint(project.checker.getTypeAtLocation(parameter.name), project.checker)
+        ).join(";");
+        definitions.push({ name: identifier.text, node, kind, type, genericSignature, properties, fingerprint: fingerprint(type, project.checker) });
       }
       ts.forEachChild(node, visit);
     };
@@ -237,7 +296,15 @@ function reuseAdvice(a: Definition, b: Definition, exact: boolean): string {
 async function compareDefinitions(project: Project, a: Definition, b: Definition, score: SemanticScorer): Promise<Finding | null> {
   if (a.node.getSourceFile() === b.node.getSourceFile()) return null;
   const isClass = a.kind === "class" || b.kind === "class";
-  const exactMatch = a.fingerprint === b.fingerprint && !isClass;
+  const commonShape = a.fingerprint === b.fingerprint && a.genericSignature === b.genericSignature && !isClass;
+  // Independent generic declarations have distinct formal parameter symbols.
+  // Compare their position-normalised constraints and full structural shape;
+  // do not claim exact generic equivalence from a bounded expansion alone.
+  const generic = a.genericSignature.length > 0;
+  const equivalent = generic
+    ? !a.fingerprint.includes("complex:") && !a.genericSignature.includes("complex:")
+    : project.checker.isTypeAssignableTo(a.type, b.type) && project.checker.isTypeAssignableTo(b.type, a.type);
+  const exactMatch = commonShape && equivalent;
   const commonFields = fieldSimilarity(a, b, false);
   const semanticFields = fieldSimilarity(a, b, true);
   const nearMatch = commonFields >= 0.7 && !exactMatch && !isClass;
@@ -282,15 +349,16 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
 
 export async function typeReuse(project: Project, includeTests = false, score: SemanticScorer = zeroShot): Promise<Finding[]> {
   const definitions = getDefinitions(project, includeTests);
-  const findings: Finding[] = [];
-  for (const pair of [...candidatesWithExactMatches(definitions)].sort()) {
+  const candidatePairs = [...candidatesWithExactMatches(definitions)].sort();
+  // Preserve the previous candidate order while allowing independent NLI
+  // questions to execute concurrently. Each worker has one in-flight task.
+  const results = await orderedConcurrentMap(candidatePairs, semanticConcurrency(), async pair => {
     const [first = -1, second = -1] = pair.split(":").map(Number);
     const a = definitions[first] ?? null;
     const b = definitions[second] ?? null;
-    if (!a || !b) continue;
-    const finding = await compareDefinitions(project, a, b, score);
-    if (finding) findings.push(finding);
-  }
+    return a && b ? compareDefinitions(project, a, b, score) : null;
+  });
+  const findings = results.filter((finding): finding is Finding => finding !== null);
   return withoutIgnored(project.root, findings).sort((a, b) =>
     a.location.file.localeCompare(b.location.file) || a.location.line - b.location.line || a.code.localeCompare(b.code)
   );

@@ -1,0 +1,41 @@
+name: Inference Preflight CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install with Bun
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Check TypeScript
+        run: bun run typecheck
+      - name: Build
+        run: bun run build
+      - name: Run complete Bun unit test suite
+        run: bun test --timeout 30000 ./test/*.test.ts
+      - name: Compile native GPU worker and cache module without GPU dependencies
+        run: python3 -m py_compile scripts/native-webgpu-worker.py scripts/inference_cache_store.py
+      - name: Validate persistent cache, window reuse and snapshot roundtrip without GPU
+        run: python3 -m unittest discover -s test -p 'test_*cache*.py'
+      - name: Verify actual model tokenizer without loading neural weights
+        run: |
+          bun src/cli.ts type-reuse --project examples/semantic/tsconfig.json --preflight --format json > preflight-smoke.json
+          bun -e 'import {readFileSync} from "node:fs"; const result = JSON.parse(readFileSync("preflight-smoke.json", "utf8")); if (result.mode !== "preflight" || !result.exactQuestionCount || result.model !== "Xenova/mobilebert-uncased-mnli") process.exit(1); console.log("Tokenizer-only preflight:", result.maximum.questions, "questions,", result.maximum.windows, "windows");'
+      - name: Confirm no model weight files were downloaded
+        run: |
+          if find .cache "$HOME/.cache" node_modules/.cache -type f \( -name "*.onnx" -o -name "*.safetensors" -o -name "*.bin" \) 2>/dev/null | grep -q .; then
+            echo "Preflight downloaded or created unexpected model weights"
+            exit 1
+          fi

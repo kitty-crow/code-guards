@@ -5,12 +5,19 @@ Code Guards runs locally; the source entry point is `src/cli.ts`. These pages de
 ## Core
 
 - [Command-line interface](modules/cli.md)
+- [Selectable inference acceleration](modules/acceleration.md)
+- [Ordered inference scheduler](modules/inference-scheduler.md)
+- [CUDA inference worker pool](modules/inference-workers.md)
+- [Dedicated model worker entry point](modules/inference-worker.md)
 - [Terminal and machine-readable reporting](modules/diagnostics.md)
 - [Guard orchestration](modules/engine.md)
 - [Shared diagnostics contract](modules/model.md)
 - [TypeScript project loader](modules/project.md)
 - [Package commands](modules/scripts.md)
 - [Local entailment scoring](modules/semantic.md)
+- [Read-only inference preflight](modules/preflight.md)
+- [Git-backed persistent inference cache](modules/inference-cache-git.md)
+- [Hard-stop throughput benchmark](modules/throughput.md)
 
 ## Guards
 
@@ -29,3 +36,5 @@ Code Guards runs locally; the source entry point is `src/cli.ts`. These pages de
 - [Cross-module type reuse](modules/guards/type-reuse.md)
 
 The scripts in `package.json` are the authoritative build, test and demonstration commands. Individual script files do not require separate documentation pages.
+
+- [JSON IPC](modules/json.md)

@@ -33,6 +33,20 @@ test("overdescriptive function names suggest a concise abbreviation", () => {
   assert.ok(findings.every(finding => finding.location.file === "src/index.ts"));
 });
 
+test("long names containing constructor never resolve inherited Object prototype properties", () => {
+  // Object.prototype.constructor used to leak out of the abbreviation lookup.
+  // Calling charAt on the inherited Function aborted large project scans.
+  const project = fixture({
+    "src/index.ts": "export function customerConstructorServiceHandlerManagerImplementation(): void {}",
+    [["src/a", "very", "long", "constructor", "service", "manager", "implementation.ts"].join("-")]: "export const short = true;"
+  });
+  const findings = enterpriseLookingNaming(project);
+  assert.ok(findings.some(item => item.code === "CG316" && item.subject.includes("Constructor")));
+  assert.ok(findings.some(item => item.code === "CG318" && item.subject.includes("constructor")));
+  assert.ok(findings.every(item => item.suggestion.includes("Consider")));
+  assert.ok(findings.some(item => item.suggestion.includes("`custConst`")));
+});
+
 test("naming guard covers classes, methods, variables, parameters, properties, types, namespaces and aliases", () => {
   const project = fixture({
     "src/source.ts": "export const veryLongAndUnnecessarilySpecificCustomerInformationStorageProvider = 1;",
