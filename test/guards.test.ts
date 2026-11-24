@@ -96,6 +96,24 @@ test("CG101 retains genuine independent duplicates after declaration merging", a
   assert.equal(findings[0]?.location.file, "copy.ts");
 });
 
+test("CG101 recognises independent generic contracts with renamed formal parameters", async () => {
+  const sample = project({
+    "one.ts": "export interface One<T extends string> { value: T; id: number }",
+    "two.ts": "export interface Two<U extends string> { value: U; id: number }"
+  });
+  const forbidden: SemanticScorer = async () => { throw new Error("Equivalent generic shapes must not reach NLP"); };
+  assert.deepEqual((await typeReuse(sample, false, forbidden)).map(item => item.code), ["CG101"]);
+});
+
+test("CG101 preserves constraints and defaults of otherwise identical generic contracts", async () => {
+  const sample = project({
+    "one.ts": "export interface One<T extends string = 'a'> { value: T; id: number }",
+    "two.ts": "export interface Two<T extends string = 'b'> { value: T; id: number }",
+    "three.ts": "export interface Three<T extends number = 1> { value: T; id: number }"
+  });
+  assert.ok((await typeReuse(sample, false, endorse)).every(item => item.code !== "CG101"));
+});
+
 test("CG101 preserves nested generic arguments even for large phantom types", async () => {
   const fields = Array.from({ length: 35 }, (_, index) => `field${index}: string;`).join(" ");
   const sample = project({
