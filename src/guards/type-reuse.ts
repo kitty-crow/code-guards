@@ -130,7 +130,7 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
       const fallback = checker.getDefaultFromTypeParameter(type);
       const declaration = type.symbol ? declarationOf(type.symbol) : null;
       const owner = declaration?.parent ?? null;
-      const parameters = owner && (ts.isInterfaceDeclaration(owner) || ts.isTypeAliasDeclaration(owner) || ts.isClassDeclaration(owner))
+      const parameters: readonly ts.TypeParameterDeclaration[] = owner && (ts.isInterfaceDeclaration(owner) || ts.isTypeAliasDeclaration(owner) || ts.isClassDeclaration(owner))
         ? owner.typeParameters ?? [] : [];
       const position = declaration && ts.isTypeParameterDeclaration(declaration) ? parameters.indexOf(declaration) : -1;
       const identity = position >= 0 ? String(position) : checker.typeToString(type);
