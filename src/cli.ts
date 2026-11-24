@@ -146,7 +146,11 @@ export async function run(argv: string[]): Promise<number> {
           ? event => console.error("CG_BENCH_EVENT " + JSON.stringify(event))
           : () => {}
       );
-      console.log(renderFindings(findings, { format: config.format, colour: config.colour, root }));
+      // Strict diagnostics must be reported as errors, not warning annotations.
+      const reported = config.strict ? findings.map(finding =>
+        finding.severity === "warning" ? {...finding, severity: "error" as const} : finding
+      ) : findings;
+      console.log(renderFindings(reported, { format: config.format, colour: config.colour, root }));
       return failed(findings, config.strict) ? 1 : 0;
     } finally {
       restoreRemote();

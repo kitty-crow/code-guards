@@ -230,6 +230,8 @@ Progress includes the number of files, each scan stage, elapsed time, findings a
 
 Vendored dependencies are excluded from both TypeScript findings and documentation checks. This covers `vendor/`, `third_party/`, `third-party/` and all submodule paths declared in the target repository's `.gitmodules`, including submodules located outside those conventional directories. The target's own source and tests remain subject to the configured checks.
 
+Strict mode reports warning-level findings as errors; advisory mode retains warning severity. Checks and suggested fixes are unchanged.
+
 ## Optional MobileBERT acceleration
 
 By default Code Guards uses CPU/q8 inference, exactly as before. Use explicit,
