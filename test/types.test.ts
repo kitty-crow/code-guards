@@ -123,6 +123,8 @@ test("CG305 accepts bounded dense literal and typed array reads", () => {
 test("CG305 retains checks for sparse, unbounded, or invalidated reads", () => {
   const cases = [
     "const x = [1, , 3][1];",
+    "const x = [undefined, 1][0];",
+    "function f(a: Float32Array, effect: { value: number }): number { let sum = 0; for (let i = 0; i < a.length; i++) { sum += effect.value; sum += a[i]; } return sum; }",
     "const x = [1, 2][3];",
     "function f(a: number[]): number { let sum = 0; for (let i = 0; i < a.length; i++) { sum += a[i]; } return sum; }",
     "function f(a: Float32Array): number { let sum = 0; for (let i = 0; i <= a.length; i++) { sum += a[i]; } return sum; }",

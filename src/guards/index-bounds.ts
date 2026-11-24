@@ -11,13 +11,18 @@ function sameBinding(left: ts.Node, right: ts.Node, checker: ts.TypeChecker): bo
   return symbol !== null && symbol === (checker.getSymbolAtLocation(right) ?? null);
 }
 
-function denseLiteral(node: ts.ElementAccessExpression): boolean {
+function denseLiteral(node: ts.ElementAccessExpression, checker: ts.TypeChecker): boolean {
   const array = node.expression;
   const index = node.argumentExpression;
   if (!ts.isArrayLiteralExpression(array) || !ts.isNumericLiteral(index)) return false;
   const position = Number(index.text);
-  return Number.isSafeInteger(position) && position >= 0 && position < array.elements.length &&
-    array.elements.every(element => !ts.isOmittedExpression(element) && !ts.isSpreadElement(element));
+  if (!Number.isSafeInteger(position) || position < 0 || position >= array.elements.length) return false;
+  if (array.elements.some(element => ts.isOmittedExpression(element) || ts.isSpreadElement(element))) return false;
+  const element = array.elements[position] ?? null;
+  if (!element) return false;
+  const type = checker.getTypeAtLocation(element);
+  const parts = type.isUnion() ? type.types : [type];
+  return parts.every(part => !(part.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Any | ts.TypeFlags.Unknown)));
 }
 
 function standardTypedArray(node: ts.Expression, checker: ts.TypeChecker): boolean {
@@ -83,12 +88,14 @@ function stableBody(node: ts.Node, access: ts.ElementAccessExpression, checker: 
       ts.isYieldExpression(node) || ts.isFunctionLike(node) || ts.isTaggedTemplateExpression(node) ||
       ts.isForInStatement(node) || ts.isForOfStatement(node)) return false;
   if (changesBinding(node, access, checker)) return false;
-  return !ts.forEachChild(node, child => stableBody(child, access, checker) ? null : true);
+  if (ts.isPropertyAccessExpression(node) && !(node.name.text === "length" && sameBinding(node.expression, access.expression, checker))) return false;
+  if (ts.isElementAccessExpression(node) && !sameBinding(node.expression, access.expression, checker)) return false;
+  return !(ts.forEachChild(node, child => stableBody(child, access, checker) ? null : true) ?? false);
 }
 
 /** Prove dense literal reads and a restricted, stable typed-array iteration. */
 export function provenIndex(node: ts.ElementAccessExpression, checker: ts.TypeChecker): boolean {
-  if (denseLiteral(node)) return true;
+  if (denseLiteral(node, checker)) return true;
   const index = node.argumentExpression;
   if (!ts.isIdentifier(index) || !ts.isIdentifier(node.expression) || !standardTypedArray(node.expression, checker)) return false;
   const loop = enclosingLoop(node);

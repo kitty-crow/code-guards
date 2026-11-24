@@ -137,7 +137,10 @@ function repeatedInference(node: ts.Node, checker: ts.TypeChecker, message: stri
   if ((ts.isElementAccessExpression(node) || ts.isPropertyAccessExpression(node)) &&
       flags === ts.TypeFlags.Undefined) return false;
   if (flags === ts.TypeFlags.Undefined && ts.isElementAccessExpression(child) && provenIndex(child, checker)) return true;
-  return describe(child, checker).startsWith("Value or type is not deterministic:");
+  const source = node.getSourceFile();
+  const parentLine = source.getLineAndCharacterOfPosition(node.getStart(source)).line;
+  const childLine = source.getLineAndCharacterOfPosition(child.getStart(source)).line;
+  return parentLine === childLine && describe(child, checker).startsWith("Value or type is not deterministic:");
 }
 
 function checkTree(node: ts.Node, checker: ts.TypeChecker, report: EmitIssue): void {
