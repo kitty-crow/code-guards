@@ -108,3 +108,7 @@ their assigned questions independently; no NVLink communication occurs.
 ## Worker pool TypeScript API
 
 `createGpuWorkerPool(ids, config, event)` launches an explicitly requested set of device-affined worker processes and returns a `GpuWorkerPool` with `score(question)` and `close()` methods. `leastPendingWorkerIndex(counts, start)` chooses a pending-queue minimum using rotating ties, without loading a model itself. These exports are used by ordinary scans and benchmark supervision; preflight never calls `createGpuWorkerPool`.
+
+## Hosted CPU worker
+
+`createNativeCpuWorkerPool(config, event)` starts one native FP32 CPU worker. It accepts semantic questions through the same JSON-lines protocol, without requiring GPU adapters. Use `--native-cpu` on a runner without a GPU. Install ONNX Runtime, Hugging Face Hub, tokenizers and NumPy in the environment selected by `CODE_GUARDS_WEBGPU_PYTHON`. The worker reads matching WebGPU cache entries first; CPU misses are stored under distinct provider-versioned keys. It reports CPU execution, never GPU execution.

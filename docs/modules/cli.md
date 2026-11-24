@@ -36,3 +36,7 @@ silently fall back to CPU. The same flags are available to the Bun benchmark.
 separate, hard-stop throughput supervisor. It emits prefixed JSON
 on standard error for the scanner's project, stages and inference,
 without changing the normal findings on standard output.
+
+## Hosted runners with a persistent inference cache
+
+Use `--native-cpu --accelerate batch,parallel --concurrency 4 --batch-size 4` to run the native FP32 model without GPU selection. With `--inference-cache-dir`, existing matching WebGPU window scores are reused. CPU-computed misses have distinct keys and cannot overwrite GPU scores. `--sync-inference-cache --cache-remote <url>` exchanges both types of completed windows on the dedicated cache branch. Install the native Python dependencies described in the worker documentation. Do not combine this mode with GPU selection.
