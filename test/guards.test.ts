@@ -67,7 +67,7 @@ test("CG101 treats module augmentations as a single canonical declaration", asyn
 });
 
 test("CG101 does not report aliases or rank specialisations of a canonical type", async () => {
-  const fields = Array.from({ length: 35 }, (_, index) => `field${index}: string;`).join(" ");
+  const fields = Array.from(Array<number>(35).keys(), index => `field${index}: string;`).join(" ");
   const sample = project({
     "tensor.ts": `export enum Rank { R0, R1 } export interface Tensor<R extends Rank = Rank> { rank: R; ${fields} }`,
     "scalar.ts": "import { Tensor, Rank } from './tensor'; export type Scalar = Tensor<Rank.R0>;",
@@ -93,7 +93,7 @@ test("CG101 retains genuine independent duplicates after declaration merging", a
   const finding = findings[0] ?? null;
   assert.ok(finding && "related" in finding);
   assert.equal(finding.related.file, "base.ts");
-  assert.equal(findings[0]?.location.file, "copy.ts");
+  assert.equal(finding.location.file, "copy.ts");
 });
 
 test("CG101 recognises independent generic contracts with renamed formal parameters", async () => {
@@ -115,7 +115,7 @@ test("CG101 preserves constraints and defaults of otherwise identical generic co
 });
 
 test("CG101 preserves nested generic arguments even for large phantom types", async () => {
-  const fields = Array.from({ length: 35 }, (_, index) => `field${index}: string;`).join(" ");
+  const fields = Array.from(Array<number>(35).keys(), index => `field${index}: string;`).join(" ");
   const sample = project({
     "base.ts": `export interface Payload<T> { ${fields} }`,
     "one.ts": "import { Payload } from './base'; export interface One { value: Payload<0>; id: string }",
@@ -125,7 +125,7 @@ test("CG101 preserves nested generic arguments even for large phantom types", as
 });
 
 test("CG101 distinguishes large records with incompatible literal discriminants", async () => {
-  const fields = Array.from({ length: 35 }, (_, index) => `field${index}: string;`).join(" ");
+  const fields = Array.from(Array<number>(35).keys(), index => `field${index}: string;`).join(" ");
   const sample = project({
     "one.ts": `export interface Event { kind: 'open'; ${fields} }`,
     "two.ts": `export interface Event { kind: 'closed'; ${fields} }`

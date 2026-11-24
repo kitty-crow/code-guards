@@ -65,7 +65,7 @@ function declarationOf(symbol: ts.Symbol): ts.Declaration | null {
 }
 
 function qualifiedTypeName(type: ts.Type, checker: ts.TypeChecker): string {
-  const symbol = type.symbol ?? type.aliasSymbol ?? null;
+  const symbol = type.symbol ?? (type.aliasSymbol ?? null);
   const declaration = symbol ? declarationOf(symbol) : null;
   return declaration ? checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType) : checker.typeToString(type);
 }
@@ -126,10 +126,10 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
   active.add(type);
   try {
     if (type.flags & ts.TypeFlags.TypeParameter) {
-      const constraint = checker.getBaseConstraintOfType(type);
-      const fallback = checker.getDefaultFromTypeParameter(type);
+      const constraint = checker.getBaseConstraintOfType(type) ?? null;
+      const fallback = checker.getDefaultFromTypeParameter(type) ?? null;
       const declaration = type.symbol ? declarationOf(type.symbol) : null;
-      const owner = declaration?.parent ?? null;
+      const owner = declaration ? declaration.parent : null;
       const parameters: readonly ts.TypeParameterDeclaration[] = owner && (ts.isInterfaceDeclaration(owner) || ts.isTypeAliasDeclaration(owner) || ts.isClassDeclaration(owner))
         ? owner.typeParameters ?? [] : [];
       const position = declaration && ts.isTypeParameterDeclaration(declaration) ? parameters.indexOf(declaration) : -1;
@@ -158,7 +158,7 @@ function isNamedAlias(node: ts.TypeAliasDeclaration, checker: ts.TypeChecker): b
   let target = node.type;
   while (ts.isParenthesizedTypeNode(target)) target = target.type;
   if (!ts.isTypeReferenceNode(target)) return false;
-  const symbol = checker.getSymbolAtLocation(target.typeName);
+  const symbol = checker.getSymbolAtLocation(target.typeName) ?? null;
   if (!symbol) return false;
   const canonical = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
   return Boolean(canonical.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.Class | ts.SymbolFlags.TypeAlias));
@@ -183,11 +183,11 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
       const identifier = node.name ?? null;
       if (!identifier) { ts.forEachChild(node, visit); return; }
 
-      const symbol = project.checker.getSymbolAtLocation(identifier);
+      const symbol = project.checker.getSymbolAtLocation(identifier) ?? null;
       if (!symbol || seen.has(symbol)) { ts.forEachChild(node, visit); return; }
       // Prefer the original declaration over an augmentation when both occur
       // in the project, regardless of source file traversal order.
-      if (isModuleAugmentationMember(node) && symbol.declarations?.some(declaration => !isModuleAugmentationMember(declaration))) {
+      if (isModuleAugmentationMember(node) && (symbol.declarations ?? []).some(declaration => !isModuleAugmentationMember(declaration))) {
         ts.forEachChild(node, visit); return;
       }
       seen.add(symbol);
