@@ -63,12 +63,18 @@ function declarationOf(symbol: ts.Symbol): ts.Declaration | null {
   return symbol.valueDeclaration ?? (declarations[0] ?? null);
 }
 
+function qualifiedTypeName(type: ts.Type, checker: ts.TypeChecker): string {
+  const symbol = type.symbol ?? type.aliasSymbol ?? null;
+  const declaration = symbol ? declarationOf(symbol) : null;
+  return declaration ? checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType) : checker.typeToString(type);
+}
+
 function objectFingerprint(type: ts.Type, checker: ts.TypeChecker, active: Set<ts.Type>, depth: number): string {
   // Large structural types are too costly to expand here. For smaller ones,
   // resolve members at their declarations so aliases retain their context.
   const properties = checker.getPropertiesOfType(type);
   const symbol = type.symbol ?? null;
-  if (depth > 0 && properties.length > 32) return `complex:${checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType)}`;
+  if (depth > 0 && properties.length > 32) return `complex:${qualifiedTypeName(type, checker)}`;
   const members = properties.map(property => {
     const declaration = declarationOf(property);
     const memberType = declaration ? checker.getTypeOfSymbolAtLocation(property, declaration) : null;
@@ -102,7 +108,7 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
   if (declaration && (source.includes("node_modules") || /(?:^|[\\/])lib\.[^\\/]+\.d\.ts$/.test(source))) {
     return `external:${checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation)}`;
   }
-  if (depth >= 5 || active.has(type)) return `complex:${checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType)}`;
+  if (depth >= 5 || active.has(type)) return `complex:${qualifiedTypeName(type, checker)}`;
   const primitive = primitiveFingerprint(type, checker);
   if (primitive !== null) return primitive;
   if (type.isUnionOrIntersection()) {
@@ -152,7 +158,7 @@ function isNamedAlias(node: ts.TypeAliasDeclaration, checker: ts.TypeChecker): b
 
 function isModuleAugmentationMember(node: ts.Node): boolean {
   for (let parent = node.parent; parent; parent = parent.parent) {
-    if (ts.isModuleDeclaration(parent) && ts.isExternalModuleAugmentation(parent)) return true;
+    if (ts.isModuleDeclaration(parent) && ts.isStringLiteral(parent.name) && ts.isExternalModule(parent.getSourceFile())) return true;
   }
   return false;
 }
