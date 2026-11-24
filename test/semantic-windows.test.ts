@@ -1,14 +1,12 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { assessWindows, MAX_MODEL_TOKENS, observeSemanticTimings, premiseWindows, supportsReuse, type SemanticQuestion, type SemanticTimingEvent } from "../src/semantic.ts";
-
-type Runtime = Parameters<typeof assessWindows>[1];
+import { assessWindows, MAX_MODEL_TOKENS, observeSemanticTimings, premiseWindows, supportsReuse, type SemanticQuestion, type SemanticTimingEvent, type Classifier } from "../src/semantic.ts";
 
 function fakeRuntime(assess: (window: string) => { same: number; different: number }) {
   const dictionary = new Map<string, number>();
   const reverse = new Map<number, string>();
   const tokenize = (text: string): string[] => text.trim().split(/\s+/).filter(Boolean);
-  const tokenizer: Runtime["tokenizer"] = {
+  const tokenizer: Classifier["tokenizer"] = {
     encode: text => tokenize(text).map(word => {
       const known = dictionary.get(word) ?? null;
       if (known !== null) return known;
@@ -20,7 +18,7 @@ function fakeRuntime(assess: (window: string) => { same: number; different: numb
     decode: ids => ids.map(id => reverse.get(id) ?? "").join(" ")
   };
   const calls: string[] = [];
-  const classify: Runtime = Object.assign(async (premise: string, labels: string[]) => {
+  const classify: Classifier = Object.assign(async (premise: string, labels: string[]) => {
     calls.push(premise);
     const verdict = assess(premise);
     return { labels, scores: [verdict.same, verdict.different] };
@@ -87,8 +85,10 @@ test("timing observations measure preparation and each inference without changin
     assert.equal(verdict.differentConcept, 0.04);
     assert.deepEqual(observed.map(event => event.phase), ["windowing", "inference", "verdict"]);
     assert.ok(observed.every(event => Number.isFinite(event.milliseconds) && event.milliseconds >= 0));
-    assert.equal(observed[0]?.phase === "windowing" ? observed[0].windows : -1, 1);
-    assert.equal(observed[1]?.phase === "inference" ? observed[1].window : -1, 1);
+    const first = observed[0] ?? null;
+    assert.equal(first && first.phase === "windowing" ? first.windows : -1, 1);
+    const second = observed[1] ?? null;
+    assert.equal(second && second.phase === "inference" ? second.window : -1, 1);
   } finally {
     restore();
   }

@@ -5,7 +5,7 @@ import { configureSemanticAcceleration, semanticConcurrency } from "../src/seman
 import { parseAccelerationFlags } from "../src/acceleration.ts";
 
 test("parallel worker pool preserves input order and bounds in-flight work", async () => {
-  const input = Array.from({ length: 12 }, (_, index) => index);
+  const input = Array.from(Array<number>(12).keys(), index => index);
   let active = 0;
   let peak = 0;
   const output = await orderedConcurrentMap(input, 3, async value => {

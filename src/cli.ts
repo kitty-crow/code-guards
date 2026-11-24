@@ -100,7 +100,7 @@ export function options(argv: string[]): Options {
   if (syncInferenceCache && (!inferenceCacheDir || !cacheRemote)) {
     throw new Error("--sync-inference-cache requires --inference-cache-dir and --cache-remote.");
   }
-  if (inferenceCacheDir && (!acceleration.gpuIds?.length || !acceleration.features.has("webgpu")) &&
+  if (inferenceCacheDir && (!acceleration.gpuIds.length || !acceleration.features.has("webgpu")) &&
       !preflight) {
     throw new Error("Persistent window cache currently requires explicit native WebGPU GPU IDs.");
   }
@@ -114,7 +114,7 @@ export async function run(argv: string[]): Promise<number> {
     if (config.offline) process.env.CODE_GUARDS_OFFLINE = "1";
     if (config.preflight) {
       const result = await estimateInference(
-        config, config.acceleration, undefined,
+        config, config.acceleration, null,
         config.progress ? message => console.error(message) : () => {}
       );
       console.log(config.format === "json"
@@ -134,7 +134,7 @@ export async function run(argv: string[]): Promise<number> {
     let restoreRemote: () => void = () => {};
     try {
       const gpuIds = config.acceleration.gpuIds;
-      if (gpuIds) {
+      if (gpuIds.length) {
         pool = createGpuWorkerPool(gpuIds, config.acceleration, relaySemanticWorkerEvent);
         const workerPool = pool;
         restoreRemote = useRemoteSemanticScorer(question => workerPool.score(question));
@@ -154,7 +154,7 @@ export async function run(argv: string[]): Promise<number> {
       return failed(findings, config.strict) ? 1 : 0;
     } finally {
       restoreRemote();
-      pool?.close();
+      if (pool) pool.close();
       restore();
       if (config.syncInferenceCache) {
         synchroniseInferenceCache("push", config.inferenceCacheDir ?? "", config.cacheRemote ?? "",

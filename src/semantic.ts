@@ -32,14 +32,14 @@ export type Tokenizer = {
   encode: (text: string, options: { add_special_tokens: false }) => number[];
   decode: (ids: number[], options: { skip_special_tokens: true }) => string;
 };
-type Classifier = ((premise: string, labels: string[], options: ClassifierOptions) => Promise<Classification>) & {
+export type Classifier = ((premise: string, labels: string[], options: ClassifierOptions) => Promise<Classification>) & {
   tokenizer: Tokenizer;
   classifyBatch?: (premises: string[], labels: string[], options: ClassifierOptions) => Promise<Classification[]>;
 };
 
 export type SemanticProgressEvent = "loading" | "ready" | "inference";
 let progressObserver: (event: SemanticProgressEvent) => void = () => {};
-let timingObserver: ((event: SemanticTimingEvent) => void) | null = null;
+let timingObserver: (event: SemanticTimingEvent) => void = () => {};
 let classifierPromise: Promise<Classifier> | null = null;
 let questionBatcher: ReturnType<typeof createQuestionBatcher> | null = null;
 let acceleration: AccelerationConfig = NO_ACCELERATION;
@@ -67,10 +67,10 @@ export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpu
   if (event.type === "timing") {
     const timing = event.timing.phase === "inference" || event.timing.phase === "provider-proof"
       ? { ...event.timing, gpuId: event.gpuId } : event.timing;
-    timingObserver?.(timing);
-    if (event.timing.phase === "inference") {
-      for (let index = 0; index < event.timing.batchSize; index += 1) progressObserver("inference");
-    }
+    timingObserver(timing);
+  }
+  if (event.type === "timing" && event.timing.phase === "inference") {
+    for (let index = 0; index < event.timing.batchSize; index += 1) progressObserver("inference");
   }
 }
 
@@ -93,7 +93,7 @@ export function configureSemanticAcceleration(config: AccelerationConfig): () =>
 
 /** Maximum number of independent semantic questions allowed in flight. */
 export function semanticConcurrency(): number {
-  return acceleration.features.has("parallel") ? acceleration.concurrency ?? 1 : 1;
+  return acceleration.features.has("parallel") ? acceleration.concurrency : 1;
 }
 
 export function semanticExecutionProvider(): { device: "cpu" | "cuda" | "webgpu" | "dml"; precision: "q8" | "fp32" } {
@@ -139,12 +139,12 @@ async function loadClassifier(): Promise<Classifier> {
     try {
       // DirectML exposes physical adapter affinity through ONNX Runtime's
       // deviceId session option. Never silently fall back to another adapter.
-      const adapterId = process.env.CODE_GUARDS_GPU_WORKER_ID;
+      const adapterId = process.env.CODE_GUARDS_GPU_WORKER_ID ?? null;
       const sessionOptions = device === "dml"
         ? {
             executionProviders: [{
               name: "dml" as const,
-              ...(adapterId === undefined ? {} : { deviceId: Number(adapterId) })
+              ...(adapterId === null ? {} : { deviceId: Number(adapterId) })
             }],
             // DirectML forbids memory-pattern optimisation and parallel
             // execution within one session. Separate model workers may run
@@ -152,7 +152,7 @@ async function loadClassifier(): Promise<Classifier> {
             enableMemPattern: false,
             executionMode: "sequential" as const
           }
-        : undefined;
+        : null;
       const classifier = await pipeline("zero-shot-classification", MODEL, {
         device, dtype: device === "cpu" ? "q8" : "fp32",
         ...(sessionOptions ? { session_options: sessionOptions } : {})
@@ -170,11 +170,11 @@ async function loadClassifier(): Promise<Classifier> {
         return results;
       };
       activeDevice = device;
-      timingObserver?.({ phase: "model-load", milliseconds: performance.now() - started });
+      timingObserver({ phase: "model-load", milliseconds: performance.now() - started });
       progressObserver("ready");
       return Object.assign(single, { tokenizer: classifier.tokenizer, classifyBatch });
     } catch (error) {
-      failures.push(device + ": " + (error instanceof Error ? error.message : String(error)));
+      failures.push(device + ": " + (error instanceof Error ? error.message : typeof error === "string" ? error : "Provider initialisation failed"));
     }
   }
   throw new Error("No requested MobileBERT provider could initialise. " + failures.join("; "));
@@ -232,7 +232,7 @@ export async function assessWindows(question: SemanticQuestion, classifier: Clas
   const questionStarted = performance.now();
   const windowingStarted = performance.now();
   const windows = premiseWindows(question, classifier.tokenizer);
-  timingObserver?.({ phase: "windowing", milliseconds: performance.now() - windowingStarted, windows: windows.length });
+  timingObserver({ phase: "windowing", milliseconds: performance.now() - windowingStarted, windows: windows.length });
   let sameConcept = 0;
   let differentConcept = 0;
   let supportWindow = 0;
@@ -245,7 +245,7 @@ export async function assessWindows(question: SemanticQuestion, classifier: Clas
     const results = group.length === 1
       ? [await classifier(group[0] ?? "", labels, options)]
       : await classifyGroup(classifier, group, labels, options);
-    timingObserver?.({
+    timingObserver({
       phase: "inference", milliseconds: performance.now() - started,
       window: offset + 1, windows: windows.length, batchSize: group.length
     });
@@ -262,7 +262,7 @@ export async function assessWindows(question: SemanticQuestion, classifier: Clas
       }
     }
   }
-  timingObserver?.({ phase: "verdict", milliseconds: performance.now() - questionStarted, windows: windows.length });
+  timingObserver({ phase: "verdict", milliseconds: performance.now() - questionStarted, windows: windows.length });
   return {
     sameConcept,
     differentConcept,
@@ -289,7 +289,7 @@ type QuestionWork = {
   supportWindow: number;
   oppositionWindow: number;
   resolve: (value: WindowVerdict) => void;
-  reject: (error: unknown) => void;
+  reject: (error: Error) => void;
 };
 type WindowWork = { request: QuestionWork; premise: string; index: number };
 
@@ -309,12 +309,12 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
   let running = false;
   let scheduled = false;
   let failed = false;
-  let failure: unknown;
+  let failure: Error | null = null;
 
   function take(request: QuestionWork): WindowWork {
     const index = request.next++;
-    const premise = request.windows[index];
-    if (premise === undefined) throw new Error("Semantic window queue is inconsistent.");
+    const premise = request.windows[index] ?? null;
+    if (premise === null) throw new Error("Semantic window queue is inconsistent.");
     if (request.next < request.windows.length) queue.push(request);
     return { request, premise, index };
   }
@@ -324,7 +324,13 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
     scheduled = true;
     setImmediate(() => {
       scheduled = false;
-      void drain();
+      drain().catch(error => {
+        const problem = error instanceof Error ? error : new Error("Semantic queue failed.");
+        failed = true;
+        failure = problem;
+        for (const request of pending) request.reject(problem);
+        pending.clear();
+      });
     });
   }
 
@@ -333,9 +339,10 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
     running = true;
     try {
       while (queue.length) {
-        const first = queue.shift();
+        const first = queue.shift() ?? null;
         if (!first) throw new Error("Empty semantic work item.");
-        const batch: WindowWork[] = [take(first)];
+        const firstWindow = take(first);
+        const batch: WindowWork[] = [firstWindow];
         // The pipeline requires one shared pair of candidate hypotheses per
         // call. Round-robin equivalent questions and leave other groups queued.
         while (batch.length < batchSize) {
@@ -344,7 +351,7 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
             request.question.different === first.question.different
           );
           if (index < 0) break;
-          const request = queue.splice(index, 1)[0];
+          const request = queue.splice(index, 1)[0] ?? null;
           if (!request) throw new Error("Semantic work queue lost an item.");
           batch.push(take(request));
         }
@@ -353,16 +360,16 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
         const options: ClassifierOptions = { multi_label: true, hypothesis_template: TEMPLATE };
         const started = performance.now();
         const results = batch.length === 1
-          ? [await classifier(batch[0]?.premise ?? "", labels, options)]
+          ? [await classifier(firstWindow.premise, labels, options)]
           : await classifyGroup(classifier, batch.map(item => item.premise), labels, options);
-        timingObserver?.({
+        timingObserver({
           phase: "inference", milliseconds: performance.now() - started,
-          window: batch[0]?.index === undefined ? 1 : batch[0].index + 1,
+          window: firstWindow.index + 1,
           windows: first.windows.length, batchSize: batch.length,
           distinctQuestions: new Set(batch.map(item => item.request)).size
         });
         for (const [offset, work] of batch.entries()) {
-          const classification = results[offset];
+          const classification = results[offset] ?? null;
           if (!classification) throw new Error("MobileBERT returned fewer classifications than requested.");
           const verdict = scores(classification, work.request.question);
           progressObserver("inference");
@@ -378,7 +385,7 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
           if (work.request.completed === work.request.windows.length) {
             const request = work.request;
             pending.delete(request);
-            timingObserver?.({
+            timingObserver({
               phase: "verdict", milliseconds: performance.now() - request.started,
               windows: request.windows.length
             });
@@ -396,9 +403,10 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
       }
     } catch (error) {
       failed = true;
-      failure = error;
+      const problem = error instanceof Error ? error : new Error("Semantic inference failed.");
+      failure = problem;
       queue.length = 0;
-      for (const request of pending) request.reject(error);
+      for (const request of pending) request.reject(problem);
       pending.clear();
     } finally {
       running = false;
@@ -408,16 +416,16 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
 
   return {
     score(question): Promise<WindowVerdict> {
-      if (failed) return Promise.reject(failure);
+      if (failed) return Promise.reject(failure ?? new Error("Semantic inference failed."));
       const started = performance.now();
       const windowingStarted = performance.now();
       let windows: string[];
       try {
         windows = premiseWindows(question, classifier.tokenizer);
       } catch (error) {
-        return Promise.reject(error);
+        return Promise.reject(error instanceof Error ? error : new Error("Semantic window preparation failed."));
       }
-      timingObserver?.({
+      timingObserver({
         phase: "windowing", milliseconds: performance.now() - windowingStarted,
         windows: windows.length
       });
@@ -439,9 +447,9 @@ export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdic
   if (remoteScorer) return remoteScorer(question);
   const enabled = acceleration.features.has("cache");
   const key = enabled ? JSON.stringify([MODEL, question.premise, question.same, question.different]) : "";
-  const previous = enabled ? cache.get(key) : undefined;
+  const previous = enabled ? (cache.get(key) ?? null) : null;
   if (previous) {
-    timingObserver?.({ phase: "cache-hit", milliseconds: 0 });
+    timingObserver({ phase: "cache-hit", milliseconds: 0 });
     return previous;
   }
   const compute = async (): Promise<WindowVerdict> => {
@@ -456,14 +464,14 @@ export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdic
   const promise = compute();
   if (!enabled) return promise;
   if (cache.size >= 512) {
-    const oldest = cache.keys().next().value;
-    if (oldest !== undefined) cache.delete(oldest);
+    const oldest = [...cache.keys()][0] ?? null;
+    cache.delete(oldest ?? "");
   }
   cache.set(key, promise);
   try { return await promise; }
   catch (error) {
-    if (cache.get(key) === promise) cache.delete(key);
-    throw error;
+    if ((cache.get(key) ?? null) === promise) cache.delete(key);
+    throw error instanceof Error ? error : new Error("Semantic inference failed.");
   }
 }
 

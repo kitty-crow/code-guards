@@ -18,8 +18,8 @@ function testTokenizer(): Tokenizer {
   const reverse = new Map<number, string>();
   return {
     encode: (value: string) => value.split(/\s+/).filter(Boolean).map(word => {
-      const known = tokens.get(word);
-      if (known !== undefined) return known;
+      const known = tokens.get(word) ?? null;
+      if (known !== null) return known;
       const id = tokens.size + 1;
       tokens.set(word, id);
       reverse.set(id, word);
@@ -61,7 +61,7 @@ test("preflight CLI accepts user acceleration syntax without starting inference"
 test("preflight exact token windows share the real inference window plan", () => {
   const tokenizer = testTokenizer();
   for (const length of [0, 1, 20, 450, 500, 512, 695, 1200]) {
-    const premise = Array.from({length}, (_, i) => "word" + i).join(" ");
+    const premise = Array.from(Array<number>(length).keys(), i => "word" + i).join(" ");
     const item = question(premise);
     assert.equal(premiseWindowCount(item, tokenizer), premiseWindows(item, tokenizer).length);
   }
@@ -127,7 +127,7 @@ test("documentation bounds account for handover-dependent README style questions
   assert.ok(result.maximum.questions > result.minimum.questions);
   assert.equal(result.exactQuestionCount, false);
   assert.ok(result.maximum.windows >= result.minimum.windows);
-  assert.equal(result.calibration?.includes("3,372"), true);
+  assert.equal((result.calibration ?? "").includes("3,372"), true);
   assert.equal(result.gpuIds.length, 2);
   assert.equal(result.estimatedWarmInferenceSeconds !== null, true);
 });

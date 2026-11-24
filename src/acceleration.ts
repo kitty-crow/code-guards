@@ -3,11 +3,29 @@ export type Acceleration = "cache" | "batch" | "parallel" | "cuda" | "dml" | "we
 export type AccelerationConfig = {
   features: ReadonlySet<Acceleration>;
   batchSize: number;
-  concurrency?: number;
-  gpuIds?: readonly number[];
+  concurrency: number;
+  gpuIds: readonly number[];
 };
-export const NO_ACCELERATION: AccelerationConfig = { features: new Set<Acceleration>(), batchSize: 4 };
+export const NO_ACCELERATION: AccelerationConfig = { features: new Set<Acceleration>(), batchSize: 4, concurrency: 1, gpuIds: [] };
 
+function parseGpuIds(value: string): number[] {
+  const ids = value.split(",").map(part => part.trim() ? Number(part) : NaN);
+  if (ids.length < 1 || ids.length > 16 || new Set(ids).size !== ids.length ||
+      ids.some(id => !Number.isSafeInteger(id) || id < 0 || id > 15)) {
+    throw new Error("--gpu-ids requires 1 to 16 unique GPU indices from 0 to 15.");
+  }
+  return ids;
+}
+
+function parseSize(value: string, flag: string): number {
+  const size = Number(value);
+  if (!Number.isSafeInteger(size) || size < 2 || size > 16) {
+    throw new Error(flag + " must be an integer from 2 to 16.");
+  }
+  return size;
+}
+
+// Read each accelerator option once; preserve the order of other CLI flags.
 export function parseAccelerationFlags(argv: readonly string[]): {
   remaining: string[];
   acceleration: AccelerationConfig;
@@ -18,7 +36,7 @@ export function parseAccelerationFlags(argv: readonly string[]): {
   let concurrency = 1;
   let explicitBatch = false;
   let explicitConcurrency = false;
-  let gpuIds: number[] | undefined;
+  let gpuIds: number[] = [];
   let none = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? "";
@@ -28,30 +46,19 @@ export function parseAccelerationFlags(argv: readonly string[]): {
     const gpu = arg === "--gpu-ids" || arg.startsWith("--gpu-ids=");
     if (!accel && !size && !workers && !gpu) { remaining.push(arg); continue; }
     const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[++i] ?? "";
-    if (!value || value.startsWith("--")) throw new Error("Missing value for " + arg.split("=")[0]);
+    if (!value || value.startsWith("--")) throw new Error("Missing value for " + (arg.split("=")[0] ?? arg));
     if (gpu) {
-      const parts = value.split(",");
-      gpuIds = parts.map(part => Number(part));
-      if (gpuIds.length < 1 || gpuIds.length > 16 || new Set(gpuIds).size !== gpuIds.length ||
-          gpuIds.some(id => !Number.isSafeInteger(id) || id < 0 || id > 15)) {
-        throw new Error("--gpu-ids requires 1 to 16 unique GPU indices from 0 to 15.");
-      }
+      gpuIds = parseGpuIds(value);
       continue;
     }
     if (workers) {
-      concurrency = Number(value);
+      concurrency = parseSize(value, "--concurrency");
       explicitConcurrency = true;
-      if (!Number.isSafeInteger(concurrency) || concurrency < 2 || concurrency > 16) {
-        throw new Error("--concurrency must be an integer from 2 to 16.");
-      }
       continue;
     }
     if (size) {
-      batchSize = Number(value);
+      batchSize = parseSize(value, "--batch-size");
       explicitBatch = true;
-      if (!Number.isSafeInteger(batchSize) || batchSize < 2 || batchSize > 16) {
-        throw new Error("--batch-size must be an integer from 2 to 16.");
-      }
       continue;
     }
     for (const item of value.split(",")) {
@@ -69,14 +76,14 @@ export function parseAccelerationFlags(argv: readonly string[]): {
   if (explicitConcurrency && !features.has("parallel")) {
     throw new Error("--concurrency requires --accelerate parallel.");
   }
-  if (gpuIds && (!features.has("parallel") ||
+  if (gpuIds.length && (!features.has("parallel") ||
       Number(features.has("cuda")) + Number(features.has("dml")) + Number(features.has("webgpu")) !== 1)) {
     throw new Error("--gpu-ids requires parallel plus exactly one GPU backend: cuda, dml or webgpu.");
   }
-  if (gpuIds && concurrency < gpuIds.length) {
+  if (gpuIds.length && concurrency < gpuIds.length) {
     throw new Error("--concurrency must be at least the number of selected GPUs.");
   }
-  return { remaining, acceleration: { features, batchSize, concurrency, ...(gpuIds ? { gpuIds } : {}) } };
+  return { remaining, acceleration: { features, batchSize, concurrency, gpuIds } };
 }
 
 export function accelerationNames(settings: AccelerationConfig): string[] {

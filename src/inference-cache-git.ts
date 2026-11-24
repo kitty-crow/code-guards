@@ -13,10 +13,11 @@ function command(exe: string, args: string[], cwd: string, mayFail = false): boo
   const run = spawnSync(exe, args, {
     cwd, encoding: "utf8", windowsHide: true, timeout: 180_000, maxBuffer: 8 * 1024 * 1024
   });
-  if (run.error) throw new Error(exe + " could not run: " + run.error.message);
+  const error = run.error ?? null;
+  if (error) throw new Error(exe + " could not run: " + error.message);
   if (run.status === 0) return true;
   if (mayFail && (run.status === 1 || run.status === 2)) return false;
-  throw new Error(exe + " " + args[0] + " failed (exit " + String(run.status) +
+  throw new Error(exe + " " + (args[0] ?? "") + " failed (exit " + String(run.status) +
     "): " + (run.stderr || run.stdout || "no diagnostics").trim());
 }
 
@@ -26,7 +27,7 @@ function cacheScript(): string {
     path.resolve(src, "..", "scripts", "inference_cache_store.py"),
     path.resolve(src, "..", "..", "scripts", "inference_cache_store.py")
   ];
-  const script = candidates.find(item => existsSync(item));
+  const script = candidates.find(item => existsSync(item)) ?? null;
   if (!script) throw new Error("Inference cache snapshot script is missing.");
   return script;
 }

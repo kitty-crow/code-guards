@@ -2,17 +2,15 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
   assessWindows, createQuestionBatcher, observeSemanticTimings,
-  supportsReuse, type SemanticQuestion, type SemanticTimingEvent
+  supportsReuse, type SemanticQuestion, type SemanticTimingEvent, type Classifier, type WindowVerdict
 } from "../src/semantic.ts";
 
-type Runtime = Parameters<typeof createQuestionBatcher>[0];
-
-function runtime(): { classifier: Runtime; calls: string[][] } {
+function runtime(): { classifier: Classifier; calls: string[][] } {
   const ids = new Map<string, number>();
   const words = new Map<number, string>();
   const tokens = (text: string): number[] => text.trim().split(/\s+/).filter(Boolean).map(word => {
-    const previous = ids.get(word);
-    if (previous !== undefined) return previous;
+    const previous = ids.get(word) ?? null;
+    if (previous !== null) return previous;
     const number = ids.size + 1;
     ids.set(word, number);
     words.set(number, word);
@@ -23,7 +21,7 @@ function runtime(): { classifier: Runtime; calls: string[][] } {
     labels,
     scores: text.includes("opposition") ? [0.03, 0.98] : [0.93, 0.02]
   });
-  const classifier: Runtime = Object.assign(
+  const classifier: Classifier = Object.assign(
     async (premise: string, labels: string[]) => evaluate(premise, labels),
     {
       tokenizer: {
@@ -41,7 +39,7 @@ function runtime(): { classifier: Runtime; calls: string[][] } {
 
 function question(id: string, opposite = false): SemanticQuestion {
   return {
-    premise: Array.from({ length: 600 }, (_, index) =>
+    premise: Array.from(Array<number>(600).keys(), index =>
       id + " evidence" + index + (opposite && index === 599 ? " opposition" : "")
     ).join(" "),
     same: "these are equivalent interfaces",
@@ -56,7 +54,7 @@ test("batcher interleaves independent questions in one model invocation", async 
   const baseline = await Promise.all(questions.map(item => assessWindows(item, classifier, 1)));
   const observed: SemanticTimingEvent[] = [];
   const restore = observeSemanticTimings(event => { observed.push(event); });
-  let results;
+  let results: WindowVerdict[] = [];
   try {
     results = await Promise.all(questions.map(item => scheduler.score(item)));
   } finally {
@@ -87,7 +85,7 @@ test("batcher never mixes differing hypothesis labels in one invocation", async 
 
 test("batcher propagates inference failure without leaving work pending", async () => {
   const { classifier } = runtime();
-  const broken: Runtime = Object.assign(async () => { throw new Error("model failed"); }, {
+  const broken: Classifier = Object.assign(async () => { throw new Error("model failed"); }, {
     tokenizer: classifier.tokenizer,
     classifyBatch: async () => { throw new Error("model failed"); }
   });

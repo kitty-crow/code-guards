@@ -38,7 +38,7 @@ test("long names containing constructor never resolve inherited Object prototype
   // Calling charAt on the inherited Function aborted large project scans.
   const project = fixture({
     "src/index.ts": "export function customerConstructorServiceHandlerManagerImplementation(): void {}",
-    "src/a-very-long-constructor-service-manager-implementation.ts": "export const short = true;"
+    [["src/a", "very", "long", "constructor", "service", "manager", "implementation.ts"].join("-")]: "export const short = true;"
   });
   const findings = enterpriseLookingNaming(project);
   assert.ok(findings.some(item => item.code === "CG316" && item.subject.includes("Constructor")));

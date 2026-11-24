@@ -33,7 +33,7 @@ function positiveIterations(): number {
 
 function benchmarkQuestion(long: boolean): SemanticQuestion {
   const count = long ? 110 : 5;
-  const fields = Array.from({ length: count }, (_, index) =>
+  const fields = Array.from(Array<number>(count).keys(), index =>
     "Customer profile " + index + " has an identifier, display name, contact address and preferences. " +
     "The corresponding customer record holds equivalent fields with matching TypeScript types."
   ).join(" ");
@@ -53,10 +53,10 @@ function rounded(milliseconds: number): number {
 }
 
 const parsed = parseAccelerationFlags(process.argv.slice(2));
-if (parsed.remaining.length) throw new Error("Unknown benchmark argument: " + parsed.remaining[0]);
+if (parsed.remaining.length) throw new Error("Unknown benchmark argument: " + (parsed.remaining[0] ?? ""));
 const restoreAcceleration = configureSemanticAcceleration(parsed.acceleration);
 const repetitions = positiveIterations();
-const long = process.env.CODE_GUARDS_BENCHMARK_LONG === "1";
+const long = (process.env.CODE_GUARDS_BENCHMARK_LONG ?? "") === "1";
 const question = benchmarkQuestion(long);
 const events: SemanticTimingEvent[] = [];
 const samples: Sample[] = [];
@@ -117,7 +117,7 @@ console.log(JSON.stringify({
   platform: process.platform,
   architecture: process.arch,
   longPremise: long,
-  offline: process.env.CODE_GUARDS_OFFLINE === "1",
+  offline: (process.env.CODE_GUARDS_OFFLINE ?? "") === "1",
   iterations: repetitions,
   meanWarmMs,
   samples

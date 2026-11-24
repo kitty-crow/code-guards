@@ -10,12 +10,12 @@ type Request = { id: number; question: SemanticQuestion };
 const gpuId = Number(process.env.CODE_GUARDS_GPU_WORKER_ID ?? "-1");
 if (!Number.isSafeInteger(gpuId) || gpuId < 0) throw new Error("Worker requires a valid GPU identifier.");
 const batchSize = Number(process.env.CODE_GUARDS_GPU_BATCH_SIZE ?? "4");
-const backend = process.env.CODE_GUARDS_GPU_BACKEND;
+const backend = process.env.CODE_GUARDS_GPU_BACKEND ?? "";
 if (backend !== "dml" && backend !== "cuda") throw new Error("Worker requires dml or cuda backend.");
 const features = new Set<Acceleration>([backend]);
-if (process.env.CODE_GUARDS_GPU_BATCH === "1") features.add("batch");
-if (process.env.CODE_GUARDS_GPU_CACHE === "1") features.add("cache");
-configureSemanticAcceleration({ features, batchSize });
+if ((process.env.CODE_GUARDS_GPU_BATCH ?? "") === "1") features.add("batch");
+if ((process.env.CODE_GUARDS_GPU_CACHE ?? "") === "1") features.add("cache");
+configureSemanticAcceleration({ features, batchSize, concurrency: 1, gpuIds: [] });
 
 function send(data: object): void {
   process.stdout.write(JSON.stringify(data) + "\n");
@@ -46,7 +46,7 @@ for await (const line of lines) {
     const verdict = await zeroShot(question as SemanticQuestion);
     send({ type: "result", id: request.id, gpuId, verdict });
   } catch (error) {
-    send({ type: "fatal", gpuId, message: error instanceof Error ? error.message : String(error) });
+    send({ type: "fatal", gpuId, message: error instanceof Error ? error.message : typeof error === "string" ? error : "Worker failed" });
     process.exitCode = 1;
     break;
   }

@@ -89,7 +89,7 @@ export class InferenceCounter {
     // Physical workers batch each question in isolation. In-process batching
     // can coalesce only questions with identical hypothesis labels.
     this.crossQuestionBatching = config.features.has("batch") &&
-      config.features.has("parallel") && !config.gpuIds?.length;
+      config.features.has("parallel") && !config.gpuIds.length;
     this.cacheEnabled = config.features.has("cache");
   }
 
@@ -112,19 +112,20 @@ export class InferenceCounter {
       group.windows += windows;
       group.separateCalls += Math.ceil(windows / this.batchSize);
       this.groups.set(pair, group);
-      if (this.cacheEnabled) {
-        if (this.cache.size >= 512) {
-          const oldest = this.cache.values().next().value;
-          if (oldest !== undefined) this.cache.delete(oldest);
-        }
-        this.cache.add(key);
-      }
+      this.remember(key);
     }
     // These are NOT model predictions. The two deterministic outcomes allow
     // us to bound README style checks dependent on the handover verdict.
     return accepted
       ? { sameConcept: 1, differentConcept: 0 }
       : { sameConcept: 0, differentConcept: 1 };
+  }
+
+  private remember(key: string): void {
+    if (!this.cacheEnabled) return;
+    const oldest = this.cache.size >= 512 ? ([...this.cache][0] ?? null) : null;
+    if (oldest !== null) this.cache.delete(oldest);
+    this.cache.add(key);
   }
 
   snapshot(): InferenceWork {
@@ -149,17 +150,20 @@ export class InferenceCounter {
  */
 export async function loadPreflightTokenizer(): Promise<Tokenizer> {
   const { AutoTokenizer, env } = await import("@huggingface/transformers");
-  if (process.env.CODE_GUARDS_OFFLINE === "1") env.allowRemoteModels = false;
+  if ((process.env.CODE_GUARDS_OFFLINE ?? "") === "1") env.allowRemoteModels = false;
   const cache = process.env.CODE_GUARDS_MODEL_CACHE ?? "";
   if (cache) env.cacheDir = cache;
   const tokenizer = await AutoTokenizer.from_pretrained(MODEL);
-  return tokenizer as unknown as Tokenizer;
+  return {
+    encode: (text, options) => tokenizer.encode(text, options),
+    decode: (ids, options) => tokenizer.decode(ids, options)
+  };
 }
 
 function gpuReferenceRate(config: AccelerationConfig): number | null {
   if (!config.features.has("webgpu")) return null;
-  if (config.gpuIds?.length === 1) return 1569 / 60;
-  if (config.gpuIds?.length === 2) return 3372 / 60;
+  if (config.gpuIds.length === 1) return 1569 / 60;
+  if (config.gpuIds.length === 2) return 3372 / 60;
   return null;
 }
 
@@ -172,7 +176,7 @@ function gpuReferenceRate(config: AccelerationConfig): number | null {
  */
 export async function estimateInference(
   config: AnalysisOptions, acceleration: AccelerationConfig,
-  tokenizer?: Tokenizer, progress: (message: string) => void = () => {}
+  tokenizer: Tokenizer | null = null, progress: (message: string) => void = () => {}
 ): Promise<InferencePreflight> {
   const started = performance.now();
   progress("[Code Guards] Preflight: loading TypeScript project");
@@ -241,13 +245,13 @@ export async function estimateInference(
     tokenizer: "MobileBERT model tokenizer (no model weights)",
     acceleration: accelerationNames(acceleration),
     batchSize: acceleration.features.has("batch") ? acceleration.batchSize : 1,
-    concurrency: acceleration.features.has("parallel") ? acceleration.concurrency ?? 1 : 1,
-    gpuIds: [...(acceleration.gpuIds ?? [])],
+    concurrency: acceleration.features.has("parallel") ? acceleration.concurrency : 1,
+    gpuIds: [...acceleration.gpuIds],
     stages, minimum, maximum,
     exactQuestionCount: !conditional,
     estimatedWarmInferenceSeconds: projected,
     calibration: rate === null ? null :
-      (acceleration.gpuIds?.length === 2
+      (acceleration.gpuIds.length === 2
         ? "3,372 windows / 60 s; two RTX 2080 Ti, native WebGPU"
         : "1,569 windows / 60 s; one RTX 2080 Ti, native WebGPU"),
     limitations,

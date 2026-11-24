@@ -9,7 +9,7 @@ import { synchroniseInferenceCache } from "../src/inference-cache-git.ts";
 function command(exe: string, args: string[]): string {
   const run = spawnSync(exe, args, {encoding: "utf8", windowsHide: true, timeout: 60_000});
   if (run.status !== 0) {
-    throw new Error(exe + " failed: " + (run.stderr || run.error?.message || String(run.status)));
+    throw new Error(exe + " failed: " + (run.stderr || ((run.error ?? null) instanceof Error ? (run.error ?? new Error("Git command failed")).message : String(run.status))));
   }
   return run.stdout.trim();
 }

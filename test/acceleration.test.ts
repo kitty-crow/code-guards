@@ -43,8 +43,8 @@ test("batch execution preserves contradictory evidence across multiple windows",
   const dictionary = new Map<string, number>();
   const reverse = new Map<number, string>();
   const tokenize = (text: string): number[] => text.split(/\s+/).filter(Boolean).map(word => {
-    let id = dictionary.get(word);
-    if (id === undefined) {
+    let id = dictionary.get(word) ?? null;
+    if (id === null) {
       id = dictionary.size + 1;
       dictionary.set(word, id);
       reverse.set(id, word);
@@ -65,7 +65,7 @@ test("batch execution preserves contradictory evidence across multiple windows",
       return texts.map(text => classify(text, labels));
     }
   });
-  const premise = [...Array.from({ length: 600 }, (_, index) => "text" + index), "counterexample"].join(" ");
+  const premise = [...Array.from(Array<number>(600).keys(), index => "text" + index), "counterexample"].join(" ");
   const verdict = await assessWindows({ premise, same: "same concept", different: "different concept" }, runtime, 2);
   assert.ok(batches.length > 0);
   assert.ok(verdict.evidence.windows > 1);
