@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { AccelerationConfig } from "./acceleration.ts";
+import { parseRecord, type JsonRecord } from "./json.ts";
 import type { SemanticQuestion, SemanticTimingEvent, WindowVerdict } from "./semantic.ts";
 
 type WorkerEvent = { type: "loading" | "ready"; gpuId: number; backend: "cuda" | "dml" | "webgpu" } |
@@ -46,6 +47,40 @@ export function leastPendingWorkerIndex(counts: readonly number[], start: number
     }
   }
   return selected;
+}
+
+function decodeTiming(data: JsonRecord, gpuId: number): SemanticTimingEvent {
+  const phase = data.text("phase");
+  const milliseconds = data.number("milliseconds");
+  switch (phase) {
+    case "model-load": return { phase, milliseconds };
+    case "cache-hit": return { phase, milliseconds };
+    case "windowing": return { phase, milliseconds, windows: data.number("windows") };
+    case "verdict": return { phase, milliseconds, windows: data.number("windows") };
+    case "inference": {
+      const questions = data.get("distinctQuestions");
+      return { phase, milliseconds, gpuId, window: data.number("window"),
+        windows: data.number("windows"), batchSize: data.number("batchSize"),
+        distinctQuestions: typeof questions === "number" ? questions : 1 };
+    }
+    case "provider-proof": return { phase, milliseconds, gpuId,
+      gpuNodes: data.number("gpuNodes"), cpuNodes: data.number("cpuNodes"),
+      gpuOps: data.strings("gpuOps"), gpuTimeMs: data.number("gpuTimeMs"), cpuTimeMs: data.number("cpuTimeMs") };
+    default: throw new Error("Invalid GPU timing phase: " + phase);
+  }
+}
+
+function decodeVerdict(data: JsonRecord): WindowVerdict {
+  const evidence = data.record("evidence");
+  const sameConcept = data.number("sameConcept");
+  const differentConcept = data.number("differentConcept");
+  if (sameConcept < 0 || sameConcept > 1 || differentConcept < 0 || differentConcept > 1) {
+    throw new Error("GPU worker returned an invalid semantic score.");
+  }
+  return { sameConcept, differentConcept, evidence: {
+    windows: evidence.number("windows"), supportWindow: evidence.number("supportWindow"),
+    oppositionWindow: evidence.number("oppositionWindow")
+  } };
 }
 
 /** Bind each worker to a selected GPU adapter through native execution providers. */
@@ -132,31 +167,43 @@ export function createGpuWorkerPool(
     if (!output) throw new Error("Could not read GPU worker output.");
     const lines = createInterface({ input: output, crlfDelay: Infinity });
     lines.on("line", line => {
-      let message: unknown;
-      try { message = JSON.parse(line); }
+      let message: JsonRecord;
+      try { message = parseRecord(line); }
       catch {
-        // Native runtimes sometimes print errors directly to stdout.
-        // Preserve them so the parent can report a useful failure.
+        // Native runtimes sometimes print diagnostics to stdout.
         if (line.trim()) worker.diagnostics.push(line.trim());
         if (worker.diagnostics.length > 32) worker.diagnostics.splice(0, worker.diagnostics.length - 32);
         return;
       }
-      if (!message || typeof message !== "object" || !("type" in message) ||
-          !("gpuId" in message) || message.gpuId !== id) return;
-      if (message.type === "ready" || message.type === "loading") {
-        event({ type: message.type, gpuId: id, backend });
-      } else if (message.type === "timing" && "timing" in message &&
-                 typeof message.timing === "object" && message.timing !== null) {
-        event({ type: "timing", gpuId: id, timing: message.timing as SemanticTimingEvent });
-      } else if (message.type === "result" && "id" in message && typeof message.id === "number" &&
-                 "verdict" in message && message.verdict && typeof message.verdict === "object") {
-        const request = worker.requests.get(message.id) ?? null;
-        if (!request) return;
-        worker.requests.delete(message.id);
-        request.resolve(message.verdict as WindowVerdict);
-      } else if (message.type === "fatal") {
-        const explanation = "message" in message ? String(message.message) : "unknown failure";
-        rejectWorker(worker, new Error("GPU " + id + " worker failed: " + explanation));
+      try {
+        if (message.get("gpuId") !== id) return;
+        const type = message.text("type");
+        switch (type) {
+          case "ready":
+          case "loading":
+            event({ type, gpuId: id, backend });
+            return;
+          case "timing":
+            event({ type, gpuId: id, timing: decodeTiming(message.record("timing"), id) });
+            return;
+          case "result": {
+            const requestId = message.number("id");
+            const request = worker.requests.get(requestId) ?? null;
+            if (!request) return;
+            const verdict = decodeVerdict(message.record("verdict"));
+            worker.requests.delete(requestId);
+            request.resolve(verdict);
+            return;
+          }
+          case "fatal":
+            rejectWorker(worker, new Error("GPU " + id + " worker failed: " + message.text("message")));
+            child.kill("SIGKILL");
+            return;
+          default:
+            throw new Error("Unrecognised GPU worker message: " + type);
+        }
+      } catch (error) {
+        rejectWorker(worker, error instanceof Error ? error : new Error("Invalid GPU worker response."));
         child.kill("SIGKILL");
       }
     });
@@ -188,7 +235,7 @@ export function createGpuWorkerPool(
         worker.requests.set(id, { resolve, reject });
         try {
           input.write(JSON.stringify({ id, question }) + "\n", error => {
-            if (error ?? null) {
+            if (error instanceof Error) {
               // The subprocess may have emitted a more useful fatal error.
               // Save EPIPE for the close handler rather than masking it.
               worker.diagnostics.push("Worker write: " + error.message);

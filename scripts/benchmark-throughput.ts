@@ -8,6 +8,7 @@ import { performance } from "node:perf_hooks";
 import { accelerationNames, parseAccelerationFlags } from "../src/acceleration.ts";
 import { guards } from "../src/model.ts";
 import type { ScanTelemetry } from "../src/engine.ts";
+import { parseRecord } from "../src/json.ts";
 
 export type ThroughputOptions = {
   project: string;
@@ -108,45 +109,91 @@ export function usefulBenchmarkError(lines: readonly string[]): string | null {
     !line.startsWith("[Code Guards]")) ?? null);
 }
 
-function isTelemetry(value: unknown): value is ScanTelemetry {
-  return typeof value === "object" && value !== null &&
-    "type" in value && typeof value.type === "string";
-}
-
-function consumeEvent(result: ScanResult, event: ScanTelemetry): void {
-  if (event.type === "project") {
-    result.loadedFiles = event.files;
-    result.enabledRules = event.rules;
-  } else if (event.type === "stage-start") {
-    result.stage = event.stage;
-    result.totalStages = event.total;
-  } else if (event.type === "stage-complete") {
-    result.completedStages += 1;
-    result.stageFindings += event.findings;
-  } else if (event.type === "model-ready") {
-    result.provider = event.device;
-  } else if (event.type === "inference") {
-    result.completedInferenceWindows += event.windows;
-    result.completedInferenceCalls += 1;
-    result.maximumBatchSize = Math.max(result.maximumBatchSize, event.windows);
-    if ((event.questions ?? 1) > 1) result.crossQuestionBatches += 1;
-    if (event.gpuId !== null) {
-      const key = String(event.gpuId);
-      result.gpuWindows[key] = (result.gpuWindows[key] ?? 0) + event.windows;
+function decodeEvent(line: string): ScanTelemetry {
+  const data = parseRecord(line);
+  const type = data.text("type");
+  switch (type) {
+    case "project": return { type, files: data.number("files"), rules: data.number("rules") };
+    case "stage-start": return { type, stage: data.text("stage"), index: data.number("index"), total: data.number("total") };
+    case "stage-complete": return { type, stage: data.text("stage"), index: data.number("index"), findings: data.number("findings") };
+    case "model-ready": return { type, device: data.text("device") };
+    case "inference": {
+      const gpu = data.get("gpuId");
+      const questions = data.get("questions");
+      return { type, windows: data.number("windows"), gpuId: typeof gpu === "number" ? gpu : null,
+        questions: typeof questions === "number" ? questions : 1 };
     }
-  } else if (event.type === "verdict") {
-    result.completedSemanticQuestions += 1;
-  } else if (event.type === "provider-proof") {
-    result.gpuProviderProof[String(event.gpuId)] = {
-      gpuNodes: event.gpuNodes, cpuNodes: event.cpuNodes,
-      gpuOps: event.gpuOps, gpuTimeMs: event.gpuTimeMs, cpuTimeMs: event.cpuTimeMs
-    };
-  } else if (event.type === "cache-hit") {
-    result.completedSemanticQuestions += 1;
-    result.cacheHits += 1;
+    case "verdict": return { type, windows: data.number("windows") };
+    case "provider-proof": return { type, gpuId: data.number("gpuId"), gpuNodes: data.number("gpuNodes"),
+      cpuNodes: data.number("cpuNodes"), gpuOps: data.strings("gpuOps"),
+      gpuTimeMs: data.number("gpuTimeMs"), cpuTimeMs: data.number("cpuTimeMs") };
+    case "cache-hit": return { type };
+    default: throw new Error("Invalid benchmark telemetry: " + type);
   }
 }
 
+function consumeEvent(result: ScanResult, event: ScanTelemetry): void {
+  switch (event.type) {
+    case "project":
+      result.loadedFiles = event.files;
+      result.enabledRules = event.rules;
+      return;
+    case "stage-start":
+      result.stage = event.stage;
+      result.totalStages = event.total;
+      return;
+    case "stage-complete":
+      result.completedStages += 1;
+      result.stageFindings += event.findings;
+      return;
+    case "model-ready":
+      result.provider = event.device;
+      return;
+    case "inference":
+      result.completedInferenceWindows += event.windows;
+      result.completedInferenceCalls += 1;
+      result.maximumBatchSize = Math.max(result.maximumBatchSize, event.windows);
+      if (event.questions > 1) result.crossQuestionBatches += 1;
+      if (event.gpuId !== null) {
+        const key = String(event.gpuId);
+        result.gpuWindows[key] = (result.gpuWindows[key] ?? 0) + event.windows;
+      }
+      return;
+    case "verdict":
+      result.completedSemanticQuestions += 1;
+      return;
+    case "provider-proof":
+      result.gpuProviderProof[String(event.gpuId)] = {
+        gpuNodes: event.gpuNodes, cpuNodes: event.cpuNodes, gpuOps: event.gpuOps,
+        gpuTimeMs: event.gpuTimeMs, cpuTimeMs: event.cpuTimeMs
+      };
+      return;
+    case "cache-hit":
+      result.completedSemanticQuestions += 1;
+      result.cacheHits += 1;
+      return;
+  }
+}
+
+function killTree(pid: number): boolean {
+  const killed = spawnSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+    windowsHide: true, stdio: "ignore", timeout: 2500
+  });
+  return (killed.error ?? null) === null && killed.status === 0;
+}
+
+function killGroup(pid: number): boolean {
+  try {
+    process.kill(-pid, "SIGKILL");
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
+    console.error("Could not terminate scan process group; stopping child directly.");
+    return false;
+  }
+}
+
+// A separate deadline kills the scan and its worker tree even if inference stalls.
 async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanResult> {
   const result: ScanResult = {
     mode, secondsLimit: settings.seconds, elapsedSeconds: 0, timedOut: false,
@@ -181,18 +228,16 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
   const handleLine = (line: string): void => {
     if (line.startsWith(eventPrefix)) {
       try {
-        const parsed: unknown = JSON.parse(line.slice(eventPrefix.length));
-        if (isTelemetry(parsed)) consumeEvent(result, parsed);
+        consumeEvent(result, decodeEvent(line.slice(eventPrefix.length)));
       } catch {
         diagnostics.push("Malformed benchmark telemetry");
       }
       return;
     }
     const trimmed = line.trim();
-    if (trimmed) {
-      diagnostics.push(trimmed);
-      if (diagnostics.length > 64) diagnostics.shift();
-    }
+    if (!trimmed) return;
+    diagnostics.push(trimmed);
+    if (diagnostics.length > 64) diagnostics.shift();
   };
   const errorStream = child.stderr;
   if (!errorStream) throw new Error("Unable to capture benchmark telemetry from the child process.");
@@ -207,22 +252,9 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     }
   });
   const terminate = (): void => {
-    if (process.platform === "win32" && child.pid !== undefined) {
-      // taskkill /T terminates the entire scanner process tree, including
-      // DirectML child workers. Terminating only the scanner would orphan GPUs.
-      const killed = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
-        windowsHide: true, stdio: "ignore", timeout: 2500
-      });
-      if (!killed.error && killed.status === 0) return;
-    }
-    if (process.platform !== "win32" && child.pid !== undefined) {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-        return;
-      } catch {
-        // Fall back to terminating the scan itself if its group has exited.
-      }
-    }
+    const pid = child.pid ?? null;
+    if (pid !== null && process.platform === "win32" && killTree(pid)) return;
+    if (pid !== null && process.platform !== "win32" && killGroup(pid)) return;
     child.kill("SIGKILL");
   };
   const deadline = setTimeout(() => {

@@ -5,8 +5,8 @@ import {
   type SemanticQuestion
 } from "./semantic.ts";
 import type { Acceleration } from "./acceleration.ts";
+import { parseRecord } from "./json.ts";
 
-type Request = { id: number; question: SemanticQuestion };
 const gpuId = Number(process.env.CODE_GUARDS_GPU_WORKER_ID ?? "-1");
 if (!Number.isSafeInteger(gpuId) || gpuId < 0) throw new Error("Worker requires a valid GPU identifier.");
 const batchSize = Number(process.env.CODE_GUARDS_GPU_BATCH_SIZE ?? "4");
@@ -31,20 +31,15 @@ observeSemanticTimings(timing => {
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 for await (const line of lines) {
   try {
-    const request: unknown = JSON.parse(line);
-    if (typeof request !== "object" || request === null || !("id" in request) ||
-        !("question" in request) || typeof request.id !== "number") {
-      throw new Error("Malformed GPU worker request");
-    }
-    const question = request.question;
-    if (typeof question !== "object" || question === null || !("premise" in question) ||
-        !("same" in question) || !("different" in question) ||
-        typeof question.premise !== "string" || typeof question.same !== "string" ||
-        typeof question.different !== "string") {
-      throw new Error("Malformed semantic question");
-    }
-    const verdict = await zeroShot(question as SemanticQuestion);
-    send({ type: "result", id: request.id, gpuId, verdict });
+    const request = parseRecord(line);
+    const id = request.number("id");
+    if (!Number.isSafeInteger(id)) throw new Error("Invalid GPU worker request ID.");
+    const payload = request.record("question");
+    const question: SemanticQuestion = {
+      premise: payload.text("premise"), same: payload.text("same"), different: payload.text("different")
+    };
+    const verdict = await zeroShot(question);
+    send({ type: "result", id, gpuId, verdict });
   } catch (error) {
     send({ type: "fatal", gpuId, message: error instanceof Error ? error.message : typeof error === "string" ? error : "Worker failed" });
     process.exitCode = 1;

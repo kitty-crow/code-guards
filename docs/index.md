@@ -36,3 +36,5 @@ Code Guards runs locally; the source entry point is `src/cli.ts`. These pages de
 - [Cross-module type reuse](modules/guards/type-reuse.md)
 
 The scripts in `package.json` are the authoritative build, test and demonstration commands. Individual script files do not require separate documentation pages.
+
+- [JSON IPC](modules/json.md)
