@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
-from inference_cache_store import WindowCache, model_namespace
+from inference_cache_store import PortableCpuWindowCache, WindowCache, model_namespace
 
 MODEL = "Xenova/mobilebert-uncased-mnli"
 TEMPLATE = "The evidence indicates that {}."
@@ -76,6 +76,27 @@ def initialise(adapter_index: int) -> tuple[Any, Any, int, int, str]:
         raise RuntimeError("Native WebGPU provider was not activated.")
     labels = {str(name).lower(): int(index) for name, index in config["label2id"].items()}
     return session, tokenizer, labels["entailment"], labels["contradiction"], model_namespace(model_path, tokenizer_path, (labels["entailment"], labels["contradiction"]))
+
+
+def initialise_cpu() -> tuple[Any, Any, int, int, str]:
+    """Use the same model and tokenizer with the explicit CPU FP32 provider."""
+    import onnxruntime as ort
+    from tokenizers import Tokenizer
+
+    model_path, tokenizer_path, config = model_files()
+    tokenizer = Tokenizer.from_file(tokenizer_path)
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = max(1, min(4, os.cpu_count() or 1))
+    options.inter_op_num_threads = 1
+    session = ort.InferenceSession(model_path, sess_options=options,
+                                   providers=["CPUExecutionProvider"])
+    session.disable_fallback()
+    if session.get_providers() != ["CPUExecutionProvider"]:
+        raise RuntimeError("Native CPU provider was not activated.")
+    labels = {str(name).lower(): int(index) for name, index in config["label2id"].items()}
+    entailment, contradiction = labels["entailment"], labels["contradiction"]
+    return session, tokenizer, entailment, contradiction, model_namespace(
+        model_path, tokenizer_path, (entailment, contradiction))
 
 
 def evidence_windows(question: dict[str, str], tokenizer: Any) -> list[str]:
@@ -213,7 +234,11 @@ def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: 
             logits = run_pairs(session, tokenizer, pairs)
             elapsed = (time.perf_counter() - began) * 1000
             if not hasattr(session, "_code_guards_verified"):
-                verify_webgpu_execution(session, gpu_id)
+                if os.environ.get("CODE_GUARDS_GPU_BACKEND") == "cpu":
+                    if session.get_providers() != ["CPUExecutionProvider"]:
+                        raise RuntimeError("Expected native CPU execution.")
+                else:
+                    verify_webgpu_execution(session, gpu_id)
                 session._code_guards_verified = True
             emit({"type": "timing", "gpuId": gpu_id, "timing": {
                 "phase": "inference", "milliseconds": elapsed, "batchSize": len(positions),
@@ -267,13 +292,21 @@ def main() -> int:
         raise ValueError("Batch size must be 1..16.")
     emit({"type": "loading", "gpuId": gpu_id})
     start = time.perf_counter()
-    session, tokenizer, entailment, contradiction, namespace = initialise(gpu_id)
+    cpu = os.environ.get("CODE_GUARDS_GPU_BACKEND") == "cpu"
+    session, tokenizer, entailment, contradiction, namespace = (
+        initialise_cpu() if cpu else initialise(gpu_id))
     cache_dir = os.environ.get("CODE_GUARDS_INFERENCE_CACHE_DIR")
-    cache = WindowCache(cache_dir, namespace) if cache_dir else None
+    cache = None
+    if cache_dir:
+        if cpu:
+            import onnxruntime as ort
+            cache = PortableCpuWindowCache(cache_dir, namespace, ort.__version__)
+        else:
+            cache = WindowCache(cache_dir, namespace)
     emit({"type": "timing", "gpuId": gpu_id, "timing": {
         "phase": "model-load", "milliseconds": (time.perf_counter() - start) * 1000
     }})
-    emit({"type": "ready", "gpuId": gpu_id, "backend": "webgpu", "adapterIndex": gpu_id})
+    emit({"type": "ready", "gpuId": gpu_id, "backend": "cpu" if cpu else "webgpu"})
     try:
         for line in sys.stdin:
             if not line.strip():

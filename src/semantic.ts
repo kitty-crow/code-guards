@@ -44,6 +44,7 @@ let classifierPromise: Promise<Classifier> | null = null;
 let questionBatcher: ReturnType<typeof createQuestionBatcher> | null = null;
 let acceleration: AccelerationConfig = NO_ACCELERATION;
 let activeDevice: "cpu" | "webgpu" | "cuda" | "dml" = "cpu";
+let nativeCpu = false;
 const cache = new Map<string, Promise<WindowVerdict>>();
 let remoteScorer: ((question: SemanticQuestion) => Promise<WindowVerdict>) | null = null;
 
@@ -57,17 +58,16 @@ export function useRemoteSemanticScorer(
 }
 
 /** Forward real worker telemetry to the existing scan progress observers. */
-export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpuId: number; backend: "cuda" | "dml" | "webgpu" } |
+export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpuId: number; backend: "cuda" | "dml" | "webgpu" | "cpu" } |
   { type: "timing"; gpuId: number; timing: SemanticTimingEvent }): void {
   if (event.type === "loading") progressObserver("loading");
   if (event.type === "ready") {
     activeDevice = event.backend ?? (process.platform === "win32" ? "dml" : "cuda");
+    nativeCpu = event.backend === "cpu";
     progressObserver("ready");
   }
   if (event.type === "timing") {
-    const timing = event.timing.phase === "inference" || event.timing.phase === "provider-proof"
-      ? { ...event.timing, gpuId: event.gpuId } : event.timing;
-    timingObserver(timing);
+    timingObserver(event.timing);
   }
   if (event.type === "timing" && event.timing.phase === "inference") {
     for (let index = 0; index < event.timing.batchSize; index += 1) progressObserver("inference");
@@ -81,12 +81,14 @@ export function configureSemanticAcceleration(config: AccelerationConfig): () =>
   classifierPromise = null;
   questionBatcher = null;
   activeDevice = "cpu";
+  nativeCpu = false;
   cache.clear();
   return () => {
     acceleration = previous;
     classifierPromise = null;
     questionBatcher = null;
     activeDevice = "cpu";
+    nativeCpu = false;
     cache.clear();
   };
 }
@@ -97,7 +99,7 @@ export function semanticConcurrency(): number {
 }
 
 export function semanticExecutionProvider(): { device: "cpu" | "cuda" | "webgpu" | "dml"; precision: "q8" | "fp32" } {
-  return { device: activeDevice, precision: activeDevice === "cpu" ? "q8" : "fp32" };
+  return { device: activeDevice, precision: activeDevice === "cpu" && !nativeCpu ? "q8" : "fp32" };
 }
 
 function isClassification(value: Classification): boolean {

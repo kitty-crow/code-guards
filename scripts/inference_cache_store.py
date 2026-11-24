@@ -83,6 +83,32 @@ class WindowCache:
         self.connection.close()
 
 
+class PortableCpuWindowCache(WindowCache):
+    """Read existing WebGPU FP32 results; isolate newly computed CPU scores."""
+
+    def __init__(self, directory: str | Path, namespace: str, provider: str):
+        super().__init__(directory, namespace)
+        self.provider = provider
+
+    def cpu_key(self, key: str) -> str:
+        return hashlib.sha256(json.dumps(
+            ["code-guards-native-cpu-fp32-v1", self.provider, key],
+            separators=(",", ":")
+        ).encode("utf-8")).hexdigest()
+
+    def get_many(self, keys: Iterable[str]) -> dict[str, tuple[float, float]]:
+        requested = list(keys)
+        result = super().get_many(requested)
+        missing = {self.cpu_key(key): key for key in requested if key not in result}
+        for cpu_key, value in super().get_many(missing).items():
+            result[missing[cpu_key]] = value
+        return result
+
+    def put_many(self, entries: Iterable[tuple[str, float, float]]) -> None:
+        super().put_many((self.cpu_key(key), same, different)
+                         for key, same, different in entries)
+
+
 def shard_name(key: str) -> str:
     if len(key) != 64 or any(char not in "0123456789abcdef" for char in key):
         raise ValueError("Invalid content-addressed window key.")

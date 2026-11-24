@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from inference_cache_store import WindowCache
+from inference_cache_store import PortableCpuWindowCache, WindowCache
 
 spec = importlib.util.spec_from_file_location("native_webgpu_worker", SCRIPTS / "native-webgpu-worker.py")
 assert spec is not None and spec.loader is not None
@@ -112,6 +112,30 @@ class NativeWorkerCacheTest(unittest.TestCase):
             self.assertEqual(second_verdict["sameConcept"], first_verdict["sameConcept"])
             self.assertEqual(second_verdict["differentConcept"], first_verdict["differentConcept"])
             restored.close()
+
+
+class PortableCpuCacheTest(unittest.TestCase):
+    def test_reuses_gpu_scores_and_isolates_cpu_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gpu = WindowCache(directory, "model")
+            first = gpu.key("first", "same", "different")
+            second = gpu.key("second", "same", "different")
+            gpu.put_many([(first, 0.8, 0.2)])
+            cpu = PortableCpuWindowCache(directory, "model", "test-provider")
+            self.assertEqual(cpu.get_many([first, second]), {first: (0.8, 0.2)})
+            cpu.put_many([(second, 0.7, 0.3)])
+            self.assertEqual(cpu.get_many([first, second]),
+                             {first: (0.8, 0.2), second: (0.7, 0.3)})
+            self.assertEqual(gpu.get_many([first, second]), {first: (0.8, 0.2)})
+            gpu.put_many([(second, 0.9, 0.1)])
+            self.assertEqual(cpu.get_many([second]), {second: (0.9, 0.1)})
+            different_provider = PortableCpuWindowCache(directory, "model", "other-provider")
+            third = gpu.key("third", "same", "different")
+            cpu.put_many([(third, 0.6, 0.4)])
+            self.assertEqual(different_provider.get_many([third]), {})
+            different_provider.close()
+            cpu.close()
+            gpu.close()
 
 
 if __name__ == "__main__":
