@@ -2,7 +2,7 @@
 
 Source: [`src/inference-worker.ts`](../../src/inference-worker.ts)
 
-This source module is an executable worker entry point used by the GPU process pool. It deliberately exports no public functions. Importing it directly is not a supported API because it validates adapter environment variables and begins reading newline-delimited requests from standard input.
+The GPU pool launches this module as a child process. It validates adapter settings and reads JSON lines from standard input.
 
 ## Inputs, outputs and failure behaviour
 

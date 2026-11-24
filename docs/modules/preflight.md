@@ -24,7 +24,7 @@ Without cross-question batching, calls equal the sum of the window batches for e
 
 ## What preflight cannot know without inference
 
-Documentation has adaptive selection: a strong README handover verdict can suppress the style questions for that paragraph. Preflight runs the unchanged documentation guard with two opposing synthetic verdicts to calculate possible minimum and maximum workloads. Those synthetic values are not predictions or guard violations. If the bounds differ, the actual semantic question count cannot be known without performing the inference.
+Documentation has adaptive selection: a strong README handover verdict can suppress the style questions for that paragraph. Preflight runs the unchanged documentation guard with two opposing synthetic verdicts to calculate possible minimum and maximum workloads. The real question count depends on the model verdicts.
 
 The only available reference duration estimates use measured native WebGPU throughput of 1,569 windows per 60 seconds on one RTX 2080 Ti and 3,372 windows per 60 seconds on two. They are warm inference-only calibration estimates, not forecasts of total wall-clock time, and exclude model preparation, tokenisation, downloads, GPU contention and scheduling. Other configurations report work counts without unsupported timing estimates.
 

@@ -318,11 +318,7 @@ be measured. It neither activates the second graphics card nor uses NVLink.
 Native Windows can use two separate DirectML GPU adapters with independent
 MobileBERT worker processes. Use `--accelerate parallel,dml --gpu-ids 0,1
 --concurrency 4` and compare `--mode dml` against `--mode parallel,dml`
-in the 60-second throughput benchmark. Windows DirectML adapter IDs need not
-match `nvidia-smi` ordering. This path is independent of WebGPU and does not
-use NVLink; each worker has its own full model and reports its own inference
-window counter. On unsupported DirectML installations the scan fails rather
-than claiming to have used both GPUs.
+in the 60-second throughput benchmark. DirectML uses its own adapter ordering. Each worker holds a model copy and reports its inference window count. A missing provider terminates the scan.
 
 ## Experimental native dual-WebGPU adapters (Windows)
 

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { AccelerationConfig } from "./acceleration.ts";
 import type { SemanticQuestion, SemanticTimingEvent, WindowVerdict } from "./semantic.ts";
 
-type WorkerEvent = { type: "loading" | "ready"; gpuId: number; backend?: "cuda" | "dml" | "webgpu" } |
+type WorkerEvent = { type: "loading" | "ready"; gpuId: number; backend: "cuda" | "dml" | "webgpu" } |
   { type: "timing"; gpuId: number; timing: SemanticTimingEvent };
 type Pending = { resolve: (value: WindowVerdict) => void; reject: (reason: Error) => void };
 type Worker = {
@@ -36,8 +36,8 @@ export function leastPendingWorkerIndex(counts: readonly number[], start: number
   let minimum = Infinity;
   for (let offset = 0; offset < counts.length; offset += 1) {
     const index = (start + offset) % counts.length;
-    const count = counts[index];
-    if (count === undefined || !Number.isSafeInteger(count) || count < 0) {
+    const count = counts[index] ?? null;
+    if (count === null || !Number.isSafeInteger(count) || count < 0) {
       throw new Error("Invalid GPU pending request count.");
     }
     if (count < minimum) {
@@ -71,7 +71,7 @@ export function createGpuWorkerPool(
     join(sourceDir, "..", "scripts", "native-webgpu-worker.py"),
     join(sourceDir, "..", "..", "scripts", "native-webgpu-worker.py")
   ];
-  const nativeWorkerFile = nativeWorkerCandidates.find(candidate => existsSync(candidate));
+  const nativeWorkerFile = nativeWorkerCandidates.find(candidate => existsSync(candidate)) ?? null;
   if (backend === "webgpu" && !nativeWorkerFile) {
     throw new Error("Native WebGPU adapter worker script is missing.");
   }
@@ -109,18 +109,21 @@ export function createGpuWorkerPool(
       },
       stdio: ["pipe", "pipe", "pipe"], windowsHide: true
     });
-    const worker: Worker = { child, id, requests: new Map(), failed: null, diagnostics: [] };
+    const worker: Worker = { child, id, requests: new Map<number, Pending>(), failed: null, diagnostics: [] };
     workers.push(worker);
     // The native ONNX model worker can terminate during initialisation.
     // Without a listener, EPIPE on Bun's Writable stdin can become an
     // unhandled process error instead of a useful diagnostic.
-    child.stdin?.on("error", error => {
+    const input = child.stdin;
+    const stderr = child.stderr;
+    if (!input || !stderr) throw new Error("Could not open GPU worker pipes.");
+    input.on("error", error => {
       // A broken pipe is usually secondary to a native worker failure.
       // Keep it as a diagnostic, but let the worker's fatal IPC message
       // or close event report the original exception.
       worker.diagnostics.push("Worker stdin: " + error.message);
     });
-    child.stderr?.on("data", (data: Buffer | string) => {
+    stderr.on("data", (data: Buffer | string) => {
       const lines = String(data).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
       worker.diagnostics.push(...lines);
       if (worker.diagnostics.length > 32) worker.diagnostics.splice(0, worker.diagnostics.length - 32);
@@ -147,7 +150,7 @@ export function createGpuWorkerPool(
         event({ type: "timing", gpuId: id, timing: message.timing as SemanticTimingEvent });
       } else if (message.type === "result" && "id" in message && typeof message.id === "number" &&
                  "verdict" in message && message.verdict && typeof message.verdict === "object") {
-        const request = worker.requests.get(message.id);
+        const request = worker.requests.get(message.id) ?? null;
         if (!request) return;
         worker.requests.delete(message.id);
         request.resolve(message.verdict as WindowVerdict);
@@ -169,13 +172,13 @@ export function createGpuWorkerPool(
   }
 
   return {
-    score(question): Promise<WindowVerdict> {
+    score: (question): Promise<WindowVerdict> => {
       if (closed) return Promise.reject(new Error("GPU worker pool has closed."));
       const index = leastPendingWorkerIndex(
         workers.map(candidate => candidate.requests.size), nextWorker
       );
       nextWorker = (index + 1) % workers.length;
-      const worker = workers[index];
+      const worker = workers[index] ?? null;
       if (!worker) return Promise.reject(new Error("No GPU worker available."));
       if (worker.failed) return Promise.reject(worker.failed);
       const input = worker.child.stdin;
@@ -185,14 +188,14 @@ export function createGpuWorkerPool(
         worker.requests.set(id, { resolve, reject });
         try {
           input.write(JSON.stringify({ id, question }) + "\n", error => {
-            if (error) {
+            if (error ?? null) {
               // The subprocess may have emitted a more useful fatal error.
               // Save EPIPE for the close handler rather than masking it.
               worker.diagnostics.push("Worker write: " + error.message);
             }
           });
         } catch (error) {
-          rejectWorker(worker, error instanceof Error ? error : new Error(String(error)));
+          rejectWorker(worker, error instanceof Error ? error : new Error("GPU worker write failed."));
         }
       });
     },

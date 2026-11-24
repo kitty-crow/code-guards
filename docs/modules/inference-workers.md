@@ -12,9 +12,7 @@ On Linux/WSL2, `--accelerate parallel,cuda --concurrency 4 --gpu-ids 0,1`
 uses `CUDA_VISIBLE_DEVICES` before initialising ONNX Runtime. On native
 Windows, `--accelerate parallel,dml --concurrency 4 --gpu-ids 0,1`
 uses ONNX Runtime DirectML's explicit adapter selection via `deviceId`.
-Windows WebGPU still has no verified physical-adapter selection in this
-integration. Neither approach uses NVLink, because the model is replicated
-and no peer-to-peer tensor exchange is necessary.
+Windows WebGPU uses the separate native worker described below. Each adapter holds its own model weights.
 
 ## Windows DirectML mode
 
@@ -69,10 +67,7 @@ benchmarks, prepopulate the cache before running the timed comparison.
 
 
 The operation is **experimental**: native adapter enumeration, plugin
-installation, the ONNX model's operator support, runtime results and score
-parity must be verified on KittyWin before treating this mode as production
-ready. A missing provider fails loudly and never silently falls back to
-single-GPU WebGPU or CPU. No NVLink communication is required.
+installation, verify ONNX operator support and score parity on KittyWin. A missing provider terminates the scan with an error.
 
 ## Native WebGPU smoke test
 

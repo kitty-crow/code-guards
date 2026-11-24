@@ -14,11 +14,11 @@ export type SemanticScorer = (question: SemanticQuestion) => Promise<SimilarityV
 export type SemanticTimingEvent =
   | { phase: "model-load"; milliseconds: number }
   | { phase: "windowing"; milliseconds: number; windows: number }
-  | { phase: "inference"; milliseconds: number; window: number; windows: number; batchSize: number; gpuId?: number; distinctQuestions?: number }
+  | { phase: "inference"; milliseconds: number; window: number; windows: number; batchSize: number; gpuId: number | null; distinctQuestions: number }
   | { phase: "cache-hit"; milliseconds: number }
   | { phase: "verdict"; milliseconds: number; windows: number }
   | { phase: "provider-proof"; milliseconds: number; gpuNodes: number; cpuNodes: number;
-      gpuOps: string[]; gpuTimeMs: number; cpuTimeMs: number; gpuId?: number };
+      gpuOps: string[]; gpuTimeMs: number; cpuTimeMs: number; gpuId: number | null };
 
 export const MODEL = "Xenova/mobilebert-uncased-mnli";
 export const MAX_MODEL_TOKENS = 512;
@@ -34,7 +34,7 @@ export type Tokenizer = {
 };
 export type Classifier = ((premise: string, labels: string[], options: ClassifierOptions) => Promise<Classification>) & {
   tokenizer: Tokenizer;
-  classifyBatch?: (premises: string[], labels: string[], options: ClassifierOptions) => Promise<Classification[]>;
+  classifyBatch: ((premises: string[], labels: string[], options: ClassifierOptions) => Promise<Classification[]>) | null;
 };
 
 export type SemanticProgressEvent = "loading" | "ready" | "inference";
@@ -57,7 +57,7 @@ export function useRemoteSemanticScorer(
 }
 
 /** Forward real worker telemetry to the existing scan progress observers. */
-export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpuId: number; backend?: "cuda" | "dml" | "webgpu" } |
+export function relaySemanticWorkerEvent(event: { type: "loading" | "ready"; gpuId: number; backend: "cuda" | "dml" | "webgpu" } |
   { type: "timing"; gpuId: number; timing: SemanticTimingEvent }): void {
   if (event.type === "loading") progressObserver("loading");
   if (event.type === "ready") {
@@ -100,11 +100,9 @@ export function semanticExecutionProvider(): { device: "cpu" | "cuda" | "webgpu"
   return { device: activeDevice, precision: activeDevice === "cpu" ? "q8" : "fp32" };
 }
 
-function isClassification(value: unknown): value is Classification {
-  if (typeof value !== "object" || value === null) return false;
-  if (!("labels" in value) || !("scores" in value)) return false;
-  return Array.isArray(value.labels) && value.labels.every(item => typeof item === "string") &&
-    Array.isArray(value.scores) && value.scores.every(item => typeof item === "number");
+function isClassification(value: Classification): boolean {
+  return value.labels.length === value.scores.length && value.labels.every(item => typeof item === "string") &&
+    value.scores.every(item => Number.isFinite(item) && item >= 0 && item <= 1);
 }
 
 /** Temporarily observe timing data without modifying semantic scores or inference order. */
@@ -158,12 +156,12 @@ async function loadClassifier(): Promise<Classifier> {
         ...(sessionOptions ? { session_options: sessionOptions } : {})
       });
       const single = async (premise: string, labels: string[], options: ClassifierOptions): Promise<Classification> => {
-        const result: unknown = await classifier(premise, labels, options);
-        if (!isClassification(result)) throw new Error("Invalid MobileBERT classification.");
+        const result = await classifier(premise, labels, options);
+        if (Array.isArray(result) || !isClassification(result)) throw new Error("Invalid MobileBERT classification.");
         return result;
       };
       const classifyBatch = async (premises: string[], labels: string[], options: ClassifierOptions): Promise<Classification[]> => {
-        const results: unknown = await classifier(premises, labels, options);
+        const results = await classifier(premises, labels, options);
         if (!Array.isArray(results) || results.length !== premises.length || !results.every(isClassification)) {
           throw new Error("Invalid MobileBERT batch result.");
         }
@@ -247,7 +245,7 @@ export async function assessWindows(question: SemanticQuestion, classifier: Clas
       : await classifyGroup(classifier, group, labels, options);
     timingObserver({
       phase: "inference", milliseconds: performance.now() - started,
-      window: offset + 1, windows: windows.length, batchSize: group.length
+      window: offset + 1, windows: windows.length, batchSize: group.length, gpuId: null, distinctQuestions: 1
     });
     for (const [index, classification] of results.entries()) {
       const result = scores(classification, question);
@@ -366,7 +364,7 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
           phase: "inference", milliseconds: performance.now() - started,
           window: firstWindow.index + 1,
           windows: first.windows.length, batchSize: batch.length,
-          distinctQuestions: new Set(batch.map(item => item.request)).size
+          gpuId: null, distinctQuestions: new Set(batch.map(item => item.request)).size
         });
         for (const [offset, work] of batch.entries()) {
           const classification = results[offset] ?? null;
@@ -415,7 +413,7 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
   }
 
   return {
-    score(question): Promise<WindowVerdict> {
+    score: (question): Promise<WindowVerdict> => {
       if (failed) return Promise.reject(failure ?? new Error("Semantic inference failed."));
       const started = performance.now();
       const windowingStarted = performance.now();
@@ -463,10 +461,8 @@ export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdic
   };
   const promise = compute();
   if (!enabled) return promise;
-  if (cache.size >= 512) {
-    const oldest = [...cache.keys()][0] ?? null;
-    cache.delete(oldest ?? "");
-  }
+  const oldest = cache.size >= 512 ? ([...cache.keys()][0] ?? null) : null;
+  if (oldest !== null) cache.delete(oldest);
   cache.set(key, promise);
   try { return await promise; }
   catch (error) {

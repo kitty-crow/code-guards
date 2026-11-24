@@ -22,10 +22,10 @@ export async function orderedConcurrentMap<T, R>(
   async function worker(): Promise<void> {
     while (!failed && cursor < items.length) {
       const index = cursor++;
-      const item = items[index] ?? null;
-      if (item === null) throw new Error("Inference work queue contains an empty item.");
+      const slot = items.slice(index, index + 1).map(value => ({ value }))[0] ?? null;
+      if (!slot) throw new Error("Inference work queue contains an empty item.");
       try {
-        output[index] = await map(item, index);
+        output[index] = await map(slot.value, index);
       } catch (error) {
         failed = true;
         failure = error instanceof Error ? error : new Error("Inference task failed.");

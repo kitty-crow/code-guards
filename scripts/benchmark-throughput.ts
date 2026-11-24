@@ -104,8 +104,8 @@ export function usefulBenchmarkError(lines: readonly string[]): string | null {
     /(?:GPU \d+ worker|Traceback|Error:|error:|Exception:|panic:|EPIPE|WebGPU|ONNX Runtime|adapterIndex)/i.test(line) &&
     !line.startsWith("[Code Guards]") && !/^Bun v\d/i.test(line)
   );
-  return useful.at(0) ?? lines.find(line => !/^Bun v\d/i.test(line) &&
-    !line.startsWith("[Code Guards]")) ?? null;
+  return useful.at(0) ?? (lines.find(line => !/^Bun v\d/i.test(line) &&
+    !line.startsWith("[Code Guards]")) ?? null);
 }
 
 function isTelemetry(value: unknown): value is ScanTelemetry {
@@ -130,7 +130,7 @@ function consumeEvent(result: ScanResult, event: ScanTelemetry): void {
     result.completedInferenceCalls += 1;
     result.maximumBatchSize = Math.max(result.maximumBatchSize, event.windows);
     if ((event.questions ?? 1) > 1) result.crossQuestionBatches += 1;
-    if (event.gpuId !== undefined) {
+    if (event.gpuId !== null) {
       const key = String(event.gpuId);
       result.gpuWindows[key] = (result.gpuWindows[key] ?? 0) + event.windows;
     }
@@ -281,6 +281,6 @@ async function main(): Promise<void> {
   if (results.some(result => result.error)) process.exitCode = 1;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   await main();
 }

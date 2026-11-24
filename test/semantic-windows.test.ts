@@ -22,7 +22,7 @@ function fakeRuntime(assess: (window: string) => { same: number; different: numb
     calls.push(premise);
     const verdict = assess(premise);
     return { labels, scores: [verdict.same, verdict.different] };
-  }, { tokenizer });
+  }, { tokenizer, classifyBatch: null });
   return { classify, tokenizer, calls };
 }
 
