@@ -90,7 +90,9 @@ test("CG101 retains genuine independent duplicates after declaration merging", a
   const forbidden: SemanticScorer = async () => { throw new Error("Identical independent shapes must not reach NLP"); };
   const findings = await typeReuse(sample, false, forbidden);
   assert.deepEqual(findings.map(item => item.code), ["CG101"]);
-  assert.equal(findings[0]?.related?.file, "base.ts");
+  const finding = findings[0] ?? null;
+  assert.ok(finding && "related" in finding);
+  assert.equal(finding.related.file, "base.ts");
   assert.equal(findings[0]?.location.file, "copy.ts");
 });
 
