@@ -96,3 +96,8 @@ export function loadProject(target: string): Project {
   if (/\.[cm]?tsx?$/.test(resolved) && !/\.d\.[cm]?ts$/.test(resolved)) return inferredProject(path.dirname(resolved), resolved);
   throw new Error(`Unsupported target: ${resolved}. Expected a directory, tsconfig*.json, or a .ts/.tsx/.mts/.cts source file.`);
 }
+
+/** Recognise test directories and conventional dot, underscore or hyphen test suffixes. */
+export function isTestFile(filename: string): boolean {
+  return /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|[._-](?:test|spec)\.[cm]?tsx?$/i.test(filename);
+}

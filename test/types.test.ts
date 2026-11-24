@@ -108,3 +108,26 @@ test("expectation directives suppress findings and enforce missing diagnostics i
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("CG305 reports an inferred loose initializer at its origin", () => {
+  assert.equal(findings("const parsed = JSON.parse('{}');").length, 1);
+  assert.equal(findings("const values: number[] = []; const item = values[0];").length, 1);
+  assert.ok(findings("const values: number[][] = []; const item = values[0][1];").length >= 2);
+});
+
+test("CG305 accepts bounded dense literal and typed array reads", () => {
+  assert.deepEqual(findings("const x = [1, 2][1];"), []);
+  assert.deepEqual(findings("function total(values: Float32Array): number { let sum = 0; for (let i = 0; i < values.length; i++) { const value = values[i]; sum += value; } return sum; }"), []);
+});
+
+test("CG305 retains checks for sparse, unbounded, or invalidated reads", () => {
+  const cases = [
+    "const x = [1, , 3][1];",
+    "const x = [1, 2][3];",
+    "function f(a: number[]): number { let sum = 0; for (let i = 0; i < a.length; i++) { sum += a[i]; } return sum; }",
+    "function f(a: Float32Array): number { let sum = 0; for (let i = 0; i <= a.length; i++) { sum += a[i]; } return sum; }",
+    "function f(a: Float32Array): number { let sum = 0; for (let i = 0; i < a.length; i++) { i += 2; sum += a[i]; } return sum; }",
+    "function f(a: Float32Array): number { let sum = 0; for (let i = 0; i < a.length; i++) { a = new Float32Array(0); sum += a[i]; } return sum; }"
+  ];
+  for (const source of cases) assert.ok(findings(source).length > 0, source);
+});

@@ -289,3 +289,15 @@ test("line exceptions do not cross a blank line or match inline comments", () =>
   ].join("\n") });
   assert.deepEqual(noNestedIf(sample).map(item => item.location.line), [7, 9]);
 });
+
+test("underscore and hyphen test filenames follow the include-tests option", async () => {
+  const sample = project({
+    "main.ts": "export interface Original { name: string; id: number }",
+    "tensor_test.ts": "export interface Copy { name: string; id: number }",
+    "tensor-spec.ts": "export const value: any = 1;"
+  });
+  assert.deepEqual(await typeReuse(sample, false, endorse), []);
+  assert.equal((await typeReuse(sample, true, endorse)).length, 1);
+  assert.equal(codeHealth(sample, false).filter(item => item.code === "CG305").length, 0);
+  assert.ok(codeHealth(sample, true).some(item => item.code === "CG305"));
+});

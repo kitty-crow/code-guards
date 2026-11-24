@@ -2,12 +2,11 @@ import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
 import type { EmitIssue } from "./issue.ts";
-import type { Project } from "../project.ts";
+import { isTestFile, type Project } from "../project.ts";
 import { deterministicTypes } from "./types.ts";
 
 // High-confidence compiler-backed candidates. They are warnings, never automatic edits.
 type Report = EmitIssue;
-const testPath = /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/;
 const isBooleanLiteral = (node: ts.Expression, value: boolean): boolean => node.kind === (value ? ts.SyntaxKind.TrueKeyword : ts.SyntaxKind.FalseKeyword);
 function bodyOf(node: ts.Node): ts.ConciseBody | null {
   if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isArrowFunction(node) ||
@@ -21,7 +20,7 @@ function visitAll(node: ts.Node, visit: (node: ts.Node) => void): void {
 }
 
 function testFiles(project: Project): ts.SourceFile[] {
-  return project.files.filter(file => testPath.test(file.fileName));
+  return project.files.filter(file => isTestFile(file.fileName));
 }
 
 function isWritten(identifier: ts.Identifier): boolean {
@@ -227,7 +226,7 @@ export function codeHealth(project: Project, includeTests = false): Finding[] {
     findings.push({ guard, code, severity: "warning", message, location: location(project.root, node), subject: line.slice(0, 120), span: Math.min(100, node.getWidth(source)), reason, suggestion, ...("related" in item ? {related: location(project.root, item.related)} : {}) });
   };
   for (const file of project.files) {
-    const isTest = testPath.test(file.fileName);
+    const isTest = isTestFile(file.fileName);
     if (isTest && !includeTests) continue;
     inspectImports(file, report);
     visitAll(file, node => {

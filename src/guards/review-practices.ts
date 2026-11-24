@@ -1,10 +1,9 @@
 import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
-import type { Project } from "../project.ts";
+import { isTestFile, type Project } from "../project.ts";
 
 /** Conservative AST checks for maintainability, regardless of how code was written. */
-const testPath = /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/;
 type Hit = { code: string; node: ts.Node; title: string; reason: string; fix: string };
 type RelatedHit = Hit & { related: ts.Node };
 type Add = (item: Hit | RelatedHit) => void;
@@ -57,7 +56,7 @@ function diagnosticIssues(project: Project, add: Add, includeTests: boolean): vo
     const file = diagnostic.file ?? null;
     const start = diagnostic.start ?? null;
     if (!file || !relevant.has(diagnostic.code) || start === null) continue;
-    if (file.isDeclarationFile || !project.files.includes(file) || (!includeTests && testPath.test(file.fileName))) continue;
+    if (file.isDeclarationFile || !project.files.includes(file) || (!includeTests && isTestFile(file.fileName))) continue;
     const node = findNode(file, start);
     const detail = ts.flattenDiagnosticMessageText(diagnostic.messageText, " ");
     add({code: "CG320", node, title: titles.CG320 ?? "Unresolved API", reason: `TypeScript TS${diagnostic.code}: ${detail}`, fix: "Check the installed dependency version, available exports and method signatures. Use the supported API or correct the declaration; do not suppress the compiler diagnostic with an unsafe cast."});
@@ -169,7 +168,7 @@ type Segment = { owner: ts.Node; first: ts.Statement; signature: string };
 function repeatedBlocks(project: Project, add: Add): void {
   const seen = new Map<string, Segment>();
   for (const file of project.files) {
-    if (testPath.test(file.fileName)) continue;
+    if (isTestFile(file.fileName)) continue;
     walk(file, node => {
       if (!ts.isFunctionDeclaration(node) && !ts.isMethodDeclaration(node) && !ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return;
       const body = node.body ?? null;
@@ -199,7 +198,7 @@ export function reviewPractices(project: Project, includeTests = false): Finding
   diagnosticIssues(project, add, includeTests);
   repeatedBlocks(project, add);
   for (const file of project.files) {
-    if (testPath.test(file.fileName) && !includeTests) {
+    if (isTestFile(file.fileName) && !includeTests) {
       walk(file, node => weakTest(node, add));
       continue;
     }
@@ -209,7 +208,7 @@ export function reviewPractices(project: Project, includeTests = false): Finding
       narrated(node, file, add);
       redundantCatch(node, add);
       thinClass(node, add);
-      if (testPath.test(file.fileName)) weakTest(node, add);
+      if (isTestFile(file.fileName)) weakTest(node, add);
     });
   }
   return withoutIgnored(project.root, results);

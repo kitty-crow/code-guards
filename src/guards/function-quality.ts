@@ -2,7 +2,7 @@ import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
-import type { Project } from "../project.ts";
+import { isTestFile, type Project } from "../project.ts";
 import { supportsReuse, zeroShot, semanticConcurrency, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
@@ -59,7 +59,7 @@ function branchClause(node: ts.Node): string {
 function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
   const result: FunctionInfo[] = [];
   for (const file of project.files) {
-    if (!includeTests && /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/.test(file.fileName)) continue;
+    if (!includeTests && isTestFile(file.fileName)) continue;
     const visit = (node: ts.Node): void => {
       if (!ts.isFunctionLike(node)) { ts.forEachChild(node, visit); return; }
       const name = functionName(node);

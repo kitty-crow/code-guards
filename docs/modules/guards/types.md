@@ -14,3 +14,5 @@ Source: [`src/guards/types.ts`](../../../src/guards/types.ts)
 
 The guard creates a TypeScript program with strict null checks, unchecked-index
 checks and implicit-any detection. Set `includeTests` to scan test files.
+
+CG305 reports a propagated inferred type at its originating expression when the receiving declaration repeats the same diagnostic. Explicit contracts and separate unchecked indices retain their findings. Bounded reads from dense array literals and canonical typed-array loops use the proof in [index bounds](index-bounds.md).

@@ -1,9 +1,9 @@
 import ts from "typescript";
-import type { Project } from "../project.ts";
+import { isTestFile, type Project } from "../project.ts";
 import type { EmitIssue } from "./issue.ts";
+import { provenIndex } from "./index-bounds.ts";
 
 const forbidden = ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Undefined;
-const tests = /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/;
 
 function argumentsOf(type: ts.Type, checker: ts.TypeChecker): readonly ts.Type[] {
   if (type.isUnionOrIntersection()) return type.types;
@@ -112,12 +112,37 @@ function describe(node: ts.Node, checker: ts.TypeChecker): string {
   const flags = looseFlags(type, checker);
   if (ts.isIdentifier(node) && node.text === "undefined" && flags) return "Explicit undefined value";
   if (!flags || normalised(node, type, checker, flags)) return "";
+  if (flags === ts.TypeFlags.Undefined && ts.isElementAccessExpression(node) && provenIndex(node, checker)) return "";
   return "Value or type is not deterministic: " + checker.typeToString(type);
+}
+
+// A receiving declaration repeats an inferred diagnostic when its initialiser
+// already identifies the same loose type. Keep explicit contracts and separate
+// unchecked index operations; they require independent corrections.
+function origin(node: ts.Node): ts.Node | null {
+  if (ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node) ||
+      ts.isParameter(node) || ts.isPropertyAssignment(node)) return node.initializer ?? null;
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return node.expression;
+  return null;
+}
+
+function repeatedInference(node: ts.Node, checker: ts.TypeChecker, message: string): boolean {
+  if (!message.startsWith("Value or type is not deterministic:")) return false;
+  if ((ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node) || ts.isParameter(node)) &&
+      (node.type ?? null)) return false;
+  const child = origin(node);
+  if (!child) return false;
+  const flags = looseFlags(checker.getTypeAtLocation(node), checker);
+  if (flags !== looseFlags(checker.getTypeAtLocation(child), checker)) return false;
+  if ((ts.isElementAccessExpression(node) || ts.isPropertyAccessExpression(node)) &&
+      flags === ts.TypeFlags.Undefined) return false;
+  if (flags === ts.TypeFlags.Undefined && ts.isElementAccessExpression(child) && provenIndex(child, checker)) return true;
+  return describe(child, checker).startsWith("Value or type is not deterministic:");
 }
 
 function checkTree(node: ts.Node, checker: ts.TypeChecker, report: EmitIssue): void {
   const message = describe(node, checker);
-  if (message) report({
+  if (message && !repeatedInference(node, checker, message)) report({
     guard: "type-assertions", code: "CG305", node, message,
     reason: "Any, unknown and undefined leave the value without a fully specified type or presence contract.",
     suggestion: "Use a concrete type, checked access, an explicit null alternative or a discriminated union. Validate external data at its boundary without asserting away its type."
@@ -134,7 +159,7 @@ export function deterministicTypes(project: Project, includeTests: boolean, repo
   });
   const checker = program.getTypeChecker();
   for (const file of project.files) {
-    if (!includeTests && tests.test(file.fileName)) continue;
+    if (!includeTests && isTestFile(file.fileName)) continue;
     const source = program.getSourceFile(file.fileName) ?? null;
     if (source) checkTree(source, checker, report);
   }

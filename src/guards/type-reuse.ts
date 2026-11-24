@@ -2,7 +2,7 @@ import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
-import type { Project } from "../project.ts";
+import { isTestFile, type Project } from "../project.ts";
 import { zeroShot, supportsReuse, semanticConcurrency, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
@@ -176,7 +176,7 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
   const definitions: Definition[] = [];
   const seen = new Set<ts.Symbol>();
   for (const file of project.files) {
-    if (!includeTests && /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/.test(file.fileName)) continue;
+    if (!includeTests && isTestFile(file.fileName)) continue;
     const visit = (node: ts.Node): void => {
       const isDefinition = ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isClassDeclaration(node);
       if (!isDefinition) { ts.forEachChild(node, visit); return; }

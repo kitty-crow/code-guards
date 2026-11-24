@@ -36,3 +36,5 @@ Choose one selector per command. Remote Git URLs and automatic cloning are unsup
 `vendoredPaths(root)` reads submodule paths declared in the target repository's `.gitmodules` and returns a read-only set of relative path prefixes. It does not clone or initialise those dependencies.
 
 `isVendoredPath(root, filename, submodules)` identifies files inside `vendor/`, `third_party/`, `third-party/` or any declared submodule path, including custom locations outside the conventional vendor directories. `createProject` removes these sources from the TypeScript root names and analysed files, including when a broad `tsconfig` glob would otherwise include them. TypeScript may still resolve imported declarations as supporting type information, but guards do not inspect vendored files.
+
+`isTestFile(filename)` recognises test directories and dot, underscore or hyphen suffixes such as `tensor_test.ts` and `tensor-spec.ts`.

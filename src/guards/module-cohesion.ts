@@ -2,7 +2,7 @@ import { withoutIgnored } from "../model.ts";
 import path from "node:path";
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
-import type { Project } from "../project.ts";
+import { isTestFile, type Project } from "../project.ts";
 import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
 
 type Unit = {
@@ -13,7 +13,6 @@ type Unit = {
   detail: string;
 };
 
-const testFile = /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/;
 
 function inspect(file: ts.SourceFile, name: string, node: ts.Node, body: ts.Node): Unit {
   const operations = new Set<string>();
@@ -137,7 +136,7 @@ export async function moduleCohesion(
   const findings: Finding[] = [];
   for (const file of project.files) {
     const relative = path.relative(project.root, file.fileName).replace(/\\/g, "/");
-    if (!includeTests && testFile.test(relative)) continue;
+    if (!includeTests && isTestFile(relative)) continue;
     const units = operations(file);
     const pairs: {left: Unit; right: Unit}[] = [];
     for (const [index, left] of units.entries()) {

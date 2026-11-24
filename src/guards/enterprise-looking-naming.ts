@@ -2,7 +2,7 @@ import { withoutIgnored } from "../model.ts";
 import path from "node:path";
 import ts from "typescript";
 import { location, type Finding, type Location } from "../model.ts";
-import type { Project } from "../project.ts";
+import { isTestFile, type Project } from "../project.ts";
 
 /** Declaration-based naming review; each declaration is reported once, not at every use. */
 const suffixes = new Set(["manager", "service", "handler", "processor", "coordinator", "provider", "factory", "builder", "implementation", "wrapper", "utility", "helper", "controller", "component"]);
@@ -15,7 +15,6 @@ const abbreviations = new Map<string, string>(Object.entries({
   authentication: "auth", application: "app", response: "resp", request: "req",
   document: "doc", documentation: "docs", transaction: "txn", management: "mgmt"
 }));
-const testPath = /(?:^|[\\/])(?:test|tests|__tests__)[\\/]|\.(?:test|spec)\.[cm]?tsx?$/;
 const generated = /(?:^|[\\/])(?:generated|__generated__|gen|vendor|node_modules|dist)[\\/]|(?:\.generated|\.g|\.d)\.[cm]?tsx?$/i;
 
 function words(name: string): string[] {
@@ -90,12 +89,12 @@ export function enterpriseLookingNaming(project: Project, includeTests = false):
   const findings: Finding[] = [];
   const seenDirectories = new Set<string>();
   for (const file of project.files) {
-    if (generated.test(file.fileName) || (!includeTests && testPath.test(file.fileName))) continue;
+    if (generated.test(file.fileName) || (!includeTests && isTestFile(file.fileName))) continue;
     const relative = path.relative(project.root, file.fileName).split(path.sep).join("/");
     const segments = relative.split("/");
     for (const [index, segment] of segments.entries()) {
       const isFile = index === segments.length - 1;
-      const stem = isFile ? segment.replace(/(?:\.(?:test|spec))?\.[cm]?tsx?$/i, "") : segment;
+      const stem = isFile ? segment.replace(/(?:[._-](?:test|spec))?\.[cm]?tsx?$/i, "") : segment;
       const parts = words(stem);
       const pattern = inflated(parts);
       if (!overlong(stem, parts) && !pattern) continue;
