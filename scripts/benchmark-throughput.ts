@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /** Run real Code Guards scans under an external, fixed wall-clock deadline. */
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,53 +20,57 @@ export type ThroughputOptions = {
   guard: string;
 };
 
-export function throughputOptions(argv: readonly string[]): ThroughputOptions {
-  let project = "";
-  let seconds = 60;
-  let batchSize = 4;
-  let concurrency = 4;
-  let gpuIds: string | null = null;
-  let guard = "all";
-  const modes: string[] = [];
-  for (let i = 0; i < argv.length; i += 1) {
+function modeArgs(settings: ThroughputOptions, mode: string): string[] {
+  const features = mode.split(",");
+  const parallel = features.includes("parallel");
+  const gpu = features.some(feature => ["cuda", "dml", "webgpu"].includes(feature));
+  return [
+    "--accelerate", mode,
+    ...(features.includes("batch") ? ["--batch-size", String(settings.batchSize)] : []),
+    ...(parallel ? ["--concurrency", String(settings.concurrency)] : []),
+    ...(settings.gpuIds && parallel && gpu ? ["--gpu-ids", settings.gpuIds] : [])
+  ];
+}
+
+function readOptions(argv: readonly string[]): ThroughputOptions {
+  const settings: ThroughputOptions = {
+    project: "", seconds: 60, modes: [], batchSize: 4, concurrency: 4, gpuIds: null, guard: "all"
+  };
+  for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i] ?? "";
-    if (flag !== "--project" && flag !== "--seconds" && flag !== "--mode" &&
-        flag !== "--batch-size" && flag !== "--concurrency" && flag !== "--gpu-ids" && flag !== "--guard") {
-      throw new Error("Unknown argument: " + flag);
-    }
-    const value = argv[++i] ?? "";
+    const value = argv[i + 1] ?? "";
     if (!value || value.startsWith("--")) throw new Error("Missing value for " + flag);
-    if (flag === "--project") project = resolve(value);
-    if (flag === "--mode") modes.push(value);
-    if (flag === "--guard") guard = value;
-    if (flag === "--seconds") seconds = Number(value);
-    if (flag === "--batch-size") batchSize = Number(value);
-    if (flag === "--concurrency") concurrency = Number(value);
-    if (flag === "--gpu-ids") gpuIds = value;
-  }
-  if (!project || !existsSync(project)) throw new Error("Supply --project with an existing TensorFlow tsconfig path.");
-  if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 3600) throw new Error("--seconds must be 1..3600.");
-  if (!Number.isSafeInteger(batchSize) || batchSize < 2 || batchSize > 16) throw new Error("--batch-size must be 2..16.");
-  if (!Number.isSafeInteger(concurrency) || concurrency < 2 || concurrency > 16) {
-    throw new Error("--concurrency must be 2..16.");
-  }
-  if (guard !== "all" && !guards.some(name => name === guard)) throw new Error("Unknown guard: " + guard);
-  const selected = modes.length ? modes : ["none", "webgpu", "batch,webgpu"];
-  for (const mode of selected) {
-    const args = ["--accelerate", mode];
-    if (mode.split(",").includes("batch")) args.push("--batch-size", String(batchSize));
-    if (mode.split(",").includes("parallel")) args.push("--concurrency", String(concurrency));
-    if (gpuIds && mode.split(",").includes("parallel") &&
-        (mode.split(",").includes("cuda") || mode.split(",").includes("dml") ||
-         mode.split(",").includes("webgpu"))) {
-      args.push("--gpu-ids", gpuIds);
-    }
-    const parsed = parseAccelerationFlags(args);
-    if (parsed.remaining.length || !accelerationNames(parsed.acceleration).length) {
-      throw new Error("Invalid mode: " + mode);
+    switch (flag) {
+      case "--project": settings.project = resolve(value); break;
+      case "--mode": settings.modes.push(value); break;
+      case "--guard": settings.guard = value; break;
+      case "--seconds": settings.seconds = Number(value); break;
+      case "--batch-size": settings.batchSize = Number(value); break;
+      case "--concurrency": settings.concurrency = Number(value); break;
+      case "--gpu-ids": settings.gpuIds = value; break;
+      default: throw new Error("Unknown argument: " + flag);
     }
   }
-  return { project, seconds, modes: selected, batchSize, concurrency, gpuIds, guard };
+  return settings;
+}
+
+function validateOptions(settings: ThroughputOptions): void {
+  if (!settings.project || !existsSync(settings.project)) throw new Error("Supply --project with an existing TensorFlow tsconfig path.");
+  if (!Number.isSafeInteger(settings.seconds) || settings.seconds < 1 || settings.seconds > 3600) throw new Error("--seconds must be 1..3600.");
+  if (!Number.isSafeInteger(settings.batchSize) || settings.batchSize < 2 || settings.batchSize > 16) throw new Error("--batch-size must be 2..16.");
+  if (!Number.isSafeInteger(settings.concurrency) || settings.concurrency < 2 || settings.concurrency > 16) throw new Error("--concurrency must be 2..16.");
+  if (settings.guard !== "all" && !guards.some(name => name === settings.guard)) throw new Error("Unknown guard: " + settings.guard);
+}
+
+export function throughputOptions(argv: readonly string[]): ThroughputOptions {
+  const settings = readOptions(argv);
+  validateOptions(settings);
+  if (!settings.modes.length) settings.modes = ["none", "webgpu", "batch,webgpu"];
+  for (const mode of settings.modes) {
+    const parsed = parseAccelerationFlags(modeArgs(settings, mode));
+    if (parsed.remaining.length || !accelerationNames(parsed.acceleration).length) throw new Error("Invalid mode: " + mode);
+  }
+  return settings;
 }
 
 type ScanResult = {
@@ -186,16 +190,14 @@ function killGroup(pid: number): boolean {
   try {
     process.kill(-pid, "SIGKILL");
     return true;
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
+  } catch {
     console.error("Could not terminate scan process group; stopping child directly.");
     return false;
   }
 }
 
-// A separate deadline kills the scan and its worker tree even if inference stalls.
-async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanResult> {
-  const result: ScanResult = {
+function emptyResult(settings: ThroughputOptions, mode: string): ScanResult {
+  return {
     mode, secondsLimit: settings.seconds, elapsedSeconds: 0, timedOut: false,
     completed: false, exitCode: null, loadedFiles: 0, enabledRules: 0,
     stage: "starting", completedStages: 0, totalStages: 0, stageFindings: 0,
@@ -203,28 +205,25 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     crossQuestionBatches: 0, maximumBatchSize: 0, completedSemanticQuestions: 0,
     cacheHits: 0, provider: "not initialised", gpuWindows: {}, gpuProviderProof: {}, error: null
   };
+}
+
+function launchScan(settings: ThroughputOptions, mode: string): ChildProcess {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const args = [
     "src/cli.ts", ...(settings.guard === "all" ? [] : [settings.guard]),
-    "--project", settings.project, "--benchmark-telemetry",
-    "--accelerate", mode,
-    ...(mode.split(",").includes("batch") ? ["--batch-size", String(settings.batchSize)] : []),
-    ...(mode.split(",").includes("parallel") ? ["--concurrency", String(settings.concurrency)] : []),
-    ...(settings.gpuIds && mode.split(",").includes("parallel") &&
-      (mode.split(",").includes("cuda") || mode.split(",").includes("dml") ||
-       mode.split(",").includes("webgpu"))
-      ? ["--gpu-ids", settings.gpuIds] : [])
+    "--project", settings.project, "--benchmark-telemetry", ...modeArgs(settings, mode)
   ];
-  const started = performance.now();
-  const child = spawn(process.execPath, args, {
+  return spawn(process.execPath, args, {
     cwd: root, windowsHide: true, stdio: ["ignore", "ignore", "pipe"],
-    // On POSIX, make an independent process group so the deadline can also
-    // terminate any CUDA model workers started by this scan.
     detached: process.platform !== "win32"
   });
+}
+
+function captureTelemetry(child: ChildProcess, result: ScanResult): {
+  diagnostics: string[]; flush: () => void
+} {
   let partial = "";
   const diagnostics: string[] = [];
-
   const handleLine = (line: string): void => {
     if (line.startsWith(eventPrefix)) {
       try {
@@ -239,10 +238,10 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
     diagnostics.push(trimmed);
     if (diagnostics.length > 64) diagnostics.shift();
   };
-  const errorStream = child.stderr;
-  if (!errorStream) throw new Error("Unable to capture benchmark telemetry from the child process.");
-  errorStream.setEncoding("utf8");
-  errorStream.on("data", (chunk: string) => {
+  const stream = child.stderr;
+  if (!stream) throw new Error("Unable to capture benchmark telemetry from the child process.");
+  stream.setEncoding("utf8");
+  stream.on("data", (chunk: string) => {
     partial += chunk;
     let pos = partial.indexOf("\n");
     while (pos >= 0) {
@@ -251,32 +250,48 @@ async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanR
       pos = partial.indexOf("\n");
     }
   });
-  const terminate = (): void => {
-    const pid = child.pid ?? null;
-    if (pid !== null && process.platform === "win32" && killTree(pid)) return;
-    if (pid !== null && process.platform !== "win32" && killGroup(pid)) return;
-    child.kill("SIGKILL");
-  };
-  const deadline = setTimeout(() => {
+  return { diagnostics, flush: () => { if (partial.trim()) handleLine(partial.trim()); } };
+}
+
+function terminateScan(child: ChildProcess): void {
+  const pid = child.pid ?? null;
+  if (pid !== null && process.platform === "win32" && killTree(pid)) return;
+  if (pid !== null && process.platform !== "win32" && killGroup(pid)) return;
+  child.kill("SIGKILL");
+}
+
+function scanDeadline(child: ChildProcess, result: ScanResult): ReturnType<typeof setTimeout> {
+  return setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) {
       result.timedOut = true;
-      terminate();
+      terminateScan(child);
     }
-  }, settings.seconds * 1000);
+  }, result.secondsLimit * 1000);
+}
+
+function waitForClose(child: ChildProcess): Promise<number | null> {
+  return new Promise((accept, reject) => {
+    child.once("error", reject);
+    child.once("close", code => accept(code));
+  });
+}
+
+async function runMode(settings: ThroughputOptions, mode: string): Promise<ScanResult> {
+  const result = emptyResult(settings, mode);
+  const started = performance.now();
+  const child = launchScan(settings, mode);
+  const { diagnostics, flush } = captureTelemetry(child, result);
+  const deadline = scanDeadline(child, result);
   try {
-    const close = await new Promise<{ code: number | null; signal: string | null }>((accept, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => accept({ code, signal }));
-    });
-    result.exitCode = close.code;
-    result.completed = !result.timedOut && close.code === 0;
-    if (partial.trim()) handleLine(partial.trim());
-    if (!result.timedOut && close.code !== 0) {
-      result.error = usefulBenchmarkError(diagnostics) ?? ("Child exited with code " + String(close.code));
+    result.exitCode = await waitForClose(child);
+    result.completed = !result.timedOut && result.exitCode === 0;
+    flush();
+    if (!result.timedOut && result.exitCode !== 0) {
+      result.error = usefulBenchmarkError(diagnostics) ?? ("Child exited with code " + String(result.exitCode));
     }
   } finally {
     clearTimeout(deadline);
-    if (child.exitCode === null && !result.timedOut) terminate();
+    if (child.exitCode === null && !result.timedOut) terminateScan(child);
     result.elapsedSeconds = Number(((performance.now() - started) / 1000).toFixed(3));
   }
   return result;

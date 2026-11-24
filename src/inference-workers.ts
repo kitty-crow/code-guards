@@ -234,7 +234,7 @@ export function createGpuWorkerPool(
       return new Promise((resolve, reject) => {
         worker.requests.set(id, { resolve, reject });
         try {
-          input.write(JSON.stringify({ id, question }) + "\n", error => {
+          input.write(JSON.stringify({ id, question }) + "\n", (error: Error | null = null) => {
             if (error instanceof Error) {
               // The subprocess may have emitted a more useful fatal error.
               // Save EPIPE for the close handler rather than masking it.

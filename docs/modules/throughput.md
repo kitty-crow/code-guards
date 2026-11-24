@@ -21,8 +21,7 @@ deadline for testing. All 23 guards are enabled by default.
 The child uses the private `--benchmark-telemetry` flag to emit
 structured progress events on standard error. The supervisor discards
 normal findings and reports completed guard stages, their findings,
-completed semantic questions and actual inference windows. Loaded
-source-file counts are explicitly *not* presented as coverage.
+completed semantic questions and actual inference windows. The loaded-file count measures parsing.
 A stage in progress at termination is not counted as completed,
 even though completed inference inside it is counted.
 

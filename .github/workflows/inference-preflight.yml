@@ -3,7 +3,7 @@ name: Inference Preflight CI
 on:
   push:
     branches:
-      - optimisation/inference
+      - main
   pull_request:
   workflow_dispatch:
 

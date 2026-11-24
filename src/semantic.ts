@@ -322,8 +322,8 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
     scheduled = true;
     setImmediate(() => {
       scheduled = false;
-      drain().catch(error => {
-        const problem = error instanceof Error ? error : new Error("Semantic queue failed.");
+      drain().catch(() => {
+        const problem = new Error("Semantic queue failed during cleanup.");
         failed = true;
         failure = problem;
         for (const request of pending) request.reject(problem);
