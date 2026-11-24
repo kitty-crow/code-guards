@@ -42,8 +42,22 @@ function tokenSimilarity(left: string, right: string): number {
   return overlap / Math.max(a.size, b.size, 1);
 }
 
-function primitiveFingerprint(type: ts.Type, checker: ts.TypeChecker): string | null {
-  if (type.flags & ts.TypeFlags.EnumLiteral && type.symbol) return `enum:${checker.getFullyQualifiedName(type.symbol)}`;
+// Keep compiler-generated module identities relative to the project. Do not
+// rewrite arbitrary literal values or conflate external modules with local ones.
+function portableModuleName(moduleName: string, root: string): string {
+  if (!path.isAbsolute(moduleName)) return moduleName;
+  const relative = path.relative(root, moduleName);
+  if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) return moduleName;
+  return "./" + relative.replace(/\\/g, "/");
+}
+
+function portableTypeText(value: string, root: string): string {
+  return value.replace(/import\("([^"]+)"\)/g, (_match, moduleName: string) =>
+    `import("${portableModuleName(moduleName, root)}")`);
+}
+
+function primitiveFingerprint(type: ts.Type, checker: ts.TypeChecker, root: string): string | null {
+  if (type.flags & ts.TypeFlags.EnumLiteral && type.symbol) return `enum:${checker.getFullyQualifiedName(type.symbol).replace(/^"([^"]+)"/, (_match, moduleName: string) => `"${portableModuleName(moduleName, root)}"`)}`;
   if (type.isStringLiteral()) return `string-literal:${JSON.stringify(type.value)}`;
   if (type.isNumberLiteral()) return `number-literal:${type.value}`;
   if (type.flags & ts.TypeFlags.BooleanLiteral) return `boolean-literal:${checker.typeToString(type)}`;
@@ -65,64 +79,64 @@ function declarationOf(symbol: ts.Symbol): ts.Declaration | null {
   return symbol.valueDeclaration ?? (declarations[0] ?? null);
 }
 
-function qualifiedTypeName(type: ts.Type, checker: ts.TypeChecker): string {
+function qualifiedTypeName(type: ts.Type, checker: ts.TypeChecker, root: string): string {
   const symbol = type.symbol ?? (type.aliasSymbol ?? null);
   const declaration = symbol ? declarationOf(symbol) : null;
-  return declaration ? checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType) : checker.typeToString(type);
+  return portableTypeText(declaration ? checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType) : checker.typeToString(type), root);
 }
 
-function objectFingerprint(type: ts.Type, checker: ts.TypeChecker, active: Set<ts.Type>, depth: number): string {
+function objectFingerprint(type: ts.Type, checker: ts.TypeChecker, root: string, active: Set<ts.Type>, depth: number): string {
   // Large structural types are too costly to expand here. For smaller ones,
   // resolve members at their declarations so aliases retain their context.
   const properties = checker.getPropertiesOfType(type);
   const symbol = type.symbol ?? null;
-  if (depth > 0 && properties.length > 32) return `complex:${qualifiedTypeName(type, checker)}`;
+  if (depth > 0 && properties.length > 32) return `complex:${qualifiedTypeName(type, checker, root)}`;
   const members = properties.map(property => {
     const declaration = declarationOf(property);
     const memberType = declaration ? checker.getTypeOfSymbolAtLocation(property, declaration) : null;
     const optional = property.flags & ts.SymbolFlags.Optional ? "?" : "";
     const modifiers = declaration && ts.canHaveModifiers(declaration) ? ts.getModifiers(declaration) ?? [] : [];
     const readonly = modifiers.some(modifier => modifier.kind === ts.SyntaxKind.ReadonlyKeyword) ? "readonly " : "";
-    return `${readonly}${property.name}${optional}:${memberType ? fingerprint(memberType, checker, active, depth + 1) : "unknown"}`;
+    return `${readonly}${property.name}${optional}:${memberType ? fingerprint(memberType, checker, root, active, depth + 1) : "unknown"}`;
   }).sort();
   const index = checker.getIndexInfosOfType(type).map(item =>
-    `[${item.keyType.flags & ts.TypeFlags.NumberLike ? "number" : "string"}]:${fingerprint(item.type, checker, active, depth + 1)}`
+    `[${item.keyType.flags & ts.TypeFlags.NumberLike ? "number" : "string"}]:${fingerprint(item.type, checker, root, active, depth + 1)}`
   ).sort();
   const calls = checker.getSignaturesOfType(type, ts.SignatureKind.Call).map(signature => {
     const args = signature.getParameters().map(symbol => {
       const declaration = declarationOf(symbol);
-      return declaration ? fingerprint(checker.getTypeOfSymbolAtLocation(symbol, declaration), checker, active, depth + 1) : "unknown";
+      return declaration ? fingerprint(checker.getTypeOfSymbolAtLocation(symbol, declaration), checker, root, active, depth + 1) : "unknown";
     });
-    return `(${args.join(",")}):${fingerprint(signature.getReturnType(), checker, active, depth + 1)}`;
+    return `(${args.join(",")}):${fingerprint(signature.getReturnType(), checker, root, active, depth + 1)}`;
   }).sort();
   if (members.length || index.length || calls.length) return `{${[...members, ...index, ...calls].join(";")}}`;
   const declaration = symbol ? declarationOf(symbol) : null;
-  return declaration ? checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation) : checker.typeToString(type);
+  return portableTypeText(declaration ? checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation) : checker.typeToString(type), root);
 }
 
 // Resolve shape, including optionality, literal discriminants and call signatures;
 // cap recursion to keep pathological generic/recursive types bounded.
-function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts.Type>(), depth = 0): string {
+function fingerprint(type: ts.Type, checker: ts.TypeChecker, root: string, active = new Set<ts.Type>(), depth = 0): string {
   const symbol = type.aliasSymbol ?? (type.symbol ?? null);
   const declarations = symbol ? symbol.declarations ?? [] : [];
   const declaration = declarations[0] ?? null;
   const source = declaration ? declaration.getSourceFile().fileName : "";
   if (declaration && (source.includes("node_modules") || /(?:^|[\\/])lib\.[^\\/]+\.d\.ts$/.test(source))) {
-    return `external:${checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation)}`;
+    return `external:${portableTypeText(checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation), root)}`;
   }
-  if (depth >= 5 || active.has(type)) return `complex:${qualifiedTypeName(type, checker)}`;
-  const primitive = primitiveFingerprint(type, checker);
+  if (depth >= 5 || active.has(type)) return `complex:${qualifiedTypeName(type, checker, root)}`;
+  const primitive = primitiveFingerprint(type, checker, root);
   if (primitive !== null) return primitive;
   if (type.isUnionOrIntersection()) {
     const kind = type.isUnion() ? "union" : "intersection";
-    return `${kind}(${type.types.map(item => fingerprint(item, checker, active, depth + 1)).sort().join("|")})`;
+    return `${kind}(${type.types.map(item => fingerprint(item, checker, root, active, depth + 1)).sort().join("|")})`;
   }
   if (checker.isArrayType(type)) {
     const element = checker.getTypeArguments(type as ts.TypeReference)[0] ?? null;
-    return `array(${element ? fingerprint(element, checker, active, depth + 1) : "unknown"})`;
+    return `array(${element ? fingerprint(element, checker, root, active, depth + 1) : "unknown"})`;
   }
   if (checker.isTupleType(type)) {
-    return `tuple(${checker.getTypeArguments(type as ts.TypeReference).map(item => fingerprint(item, checker, active, depth + 1)).join(",")})`;
+    return `tuple(${checker.getTypeArguments(type as ts.TypeReference).map(item => fingerprint(item, checker, root, active, depth + 1)).join(",")})`;
   }
   active.add(type);
   try {
@@ -134,13 +148,13 @@ function fingerprint(type: ts.Type, checker: ts.TypeChecker, active = new Set<ts
       const parameters: readonly ts.TypeParameterDeclaration[] = owner && (ts.isInterfaceDeclaration(owner) || ts.isTypeAliasDeclaration(owner) || ts.isClassDeclaration(owner))
         ? owner.typeParameters ?? [] : [];
       const position = declaration && ts.isTypeParameterDeclaration(declaration) ? parameters.indexOf(declaration) : -1;
-      const identity = position >= 0 ? String(position) : checker.typeToString(type);
-      return `parameter:${identity}:${constraint ? fingerprint(constraint, checker, active, depth + 1) : "unconstrained"}:${fallback ? fingerprint(fallback, checker, active, depth + 1) : "no-default"}`;
+      const identity = position >= 0 ? String(position) : portableTypeText(checker.typeToString(type), root);
+      return `parameter:${identity}:${constraint ? fingerprint(constraint, checker, root, active, depth + 1) : "unconstrained"}:${fallback ? fingerprint(fallback, checker, root, active, depth + 1) : "no-default"}`;
     }
     const reference = (type.flags & ts.TypeFlags.Object) && ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference);
     const args = reference ? checker.getTypeArguments(type as ts.TypeReference) : type.aliasTypeArguments ?? [];
-    const parameters = args.map(argument => fingerprint(argument, checker, active, depth + 1));
-    const shape = objectFingerprint(type, checker, active, depth);
+    const parameters = args.map(argument => fingerprint(argument, checker, root, active, depth + 1));
+    const shape = objectFingerprint(type, checker, root, active, depth);
     return parameters.length ? `generic(${parameters.join(",")}):${shape}` : shape;
   } finally { active.delete(type); }
 }
@@ -201,15 +215,15 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
         const declaration = declarationOf(property);
         return {
           name: property.name,
-          fingerprint: declaration ? fingerprint(project.checker.getTypeOfSymbolAtLocation(property, declaration), project.checker) : "unknown"
+          fingerprint: declaration ? fingerprint(project.checker.getTypeOfSymbolAtLocation(property, declaration), project.checker, project.root) : "unknown"
         };
       });
       // Primitive aliases, utility aliases and one-field records are too noisy.
       if (properties.length >= 2) {
         const genericSignature = (node.typeParameters ?? []).map(parameter =>
-          fingerprint(project.checker.getTypeAtLocation(parameter.name), project.checker)
+          fingerprint(project.checker.getTypeAtLocation(parameter.name), project.checker, project.root)
         ).join(";");
-        definitions.push({ name: identifier.text, node, kind, type, genericSignature, properties, fingerprint: fingerprint(type, project.checker) });
+        definitions.push({ name: identifier.text, node, kind, type, genericSignature, properties, fingerprint: fingerprint(type, project.checker, project.root) });
       }
       ts.forEachChild(node, visit);
     };

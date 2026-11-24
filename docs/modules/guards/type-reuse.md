@@ -11,3 +11,5 @@ Merged declarations are collected once by their TypeScript symbol, with the orig
 Classes with different runtime behaviour are never declared exact duplicates solely from matching properties. Scalar and array aliases are not equivalent. The tool makes suggestions and does not automatically merge types.
 
 `CG103` requires compatible resolved field types and at least 65% semantic field-name overlap before the local model is consulted. Matching declaration names alone, or sharing only a small subset of configuration fields, is not sufficient evidence of reuse. `CG102` requires at least 70% exact field overlap plus model agreement.
+
+Compiler-generated qualified names for modules inside the scanned project use project-relative identities, preserving their directory structure. Semantic questions no longer depend on an absolute checkout location for these names. Existing cache entries with absolute paths remain intact but cannot be reused for questions whose text changed; the portable questions are cached normally thereafter. External module identities and literal values are not deliberately rewritten.

@@ -155,6 +155,42 @@ test("conceptual type reuse invokes zero-shot scorer", async () => {
   assert.deepEqual(await typeReuse(sample, false, reject), []);
 });
 
+test("type reuse semantic questions survive relocation of a checkout", async () => {
+  const files = {
+    "status.ts": "export enum State { Open, Closed }",
+    "customer.ts": "import { State } from './status'; export interface Customer { status: State.Open; name: string; id: number }",
+    "client.ts": "import { State } from './status'; export interface Client { status: State.Open; fullName: string; id: number }"
+  };
+  const collect = async (sample: ReturnType<typeof project>) => {
+    const premises: string[] = [];
+    const findings = await typeReuse(sample, false, async question => {
+      premises.push(question.premise);
+      return endorse(question);
+    });
+    assert.equal(findings.length, 1);
+    assert.equal(premises.length, 1);
+    return premises;
+  };
+  const first = project(files);
+  const second = project(files);
+  assert.notEqual(first.root, second.root);
+  const questions = await collect(first);
+  assert.deepEqual(await collect(second), questions);
+  assert.ok(questions.every(question => !question.includes(first.root.replace(/\\/g, "/"))));
+  assert.ok(questions.some(question => question.includes("./status")));
+});
+
+test("type reuse preserves identities of identically named enums in different modules", async () => {
+  const sample = project({
+    "first/status.ts": "export enum State { Open, Closed }",
+    "second/status.ts": "export enum State { Open, Closed }",
+    "customer.ts": "import { State } from './first/status'; export interface Customer { status: State.Open; name: string }",
+    "client.ts": "import { State } from './second/status'; export interface Client { status: State.Open; fullName: string }"
+  });
+  const forbidden: SemanticScorer = async () => { throw new Error("Distinct enum identities must not reach NLP"); };
+  assert.deepEqual(await typeReuse(sample, false, forbidden), []);
+});
+
 test("primitive and collection aliases do not get reported as duplicates", async () => {
   const sample = project({
     "one.ts": "export type Person = string | null;",
