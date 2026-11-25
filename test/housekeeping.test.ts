@@ -542,3 +542,23 @@ test("bidirectional contract review reports insufficient retrieval without inven
   assert.ok(!seen.some(question => question.includes("concrete assertion about this exported contract")));
   assert.ok(!findings.some(item => item.code === "CG413"));
 });
+
+test("ambiguous contract coverage expands the actual section context before making a narrower judgement", async () => {
+  const project = fixture({
+    "src/store.ts": "export function save(value: string): string { if (!value) throw Error('empty'); return value.trim(); }",
+    "docs/modules/store.md": "# Store\n\nThe save operation stores a string.\n\nEmpty strings throw an exception; leading and trailing whitespace is removed."
+  });
+  let expanded = 0;
+  const scorer: SemanticScorer = async question => {
+    if (question.same.includes("documentation of this exported contract")) return {sameConcept: 0.6, differentConcept: 0.6};
+    if (question.same.includes("at least one concrete observable behaviour")) {
+      expanded += 1;
+      assert.match(question.premise, /Empty strings throw an exception/);
+      return reject(question);
+    }
+    return reject(question);
+  };
+  const findings = await documentation(project, scorer, null, true);
+  assert.equal(expanded, 1);
+  assert.ok(!findings.some(item => item.code === "CG409" && item.subject === "save"));
+});

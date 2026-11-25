@@ -21,3 +21,5 @@ Enabled experts persist embeddings locally by default. `expertCacheDirectory` us
 Expert telemetry reports actual encoded inputs, cache hits, persistent hits, batches, inference time, model-loading time and sampled process RSS. Identical uncached text in one batch is encoded once.
 
 `createProseExpert` and `createCodeExpert` construct real checkpoint sessions with an explicit local cache path and optional memory budget. Run `bun scripts/verify-experts.ts` on authorised inference infrastructure to measure real cold and warm execution, cache parity, model loads, resource samples and retrieval results using generic examples. This is a smoke test, not an independently labelled accuracy benchmark. The script uses disposable private cache directories and leaves the ordinary persistent caches unchanged.
+
+The optional contract review uses Jina retrieval over compiler declarations, signature queries and linked documentation passages. `rank` accepts an optional retrieval limit from one to eight candidates per query. Candidates provide evidence for MobileBERT, not a final classification. The contract retrieval session closes before semantic judgement.

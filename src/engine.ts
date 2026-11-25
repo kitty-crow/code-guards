@@ -52,6 +52,19 @@ async function analyseFunctions(project: Project, includeTests: boolean, report:
   }
 }
 
+async function analyseDocumentation(project: Project, prose: ReturnType<typeof configuredProseExpert>, report: (message: string) => void, telemetry: (event: ScanTelemetry) => void): Promise<Finding[]> {
+  const verify = (process.env.CODE_GUARDS_EXPERIMENTAL_CONTRACTS ?? "") === "1";
+  const code = verify ? configuredCodeExpert() : null;
+  try { return await documentation(project, zeroShot, prose, verify, code); }
+  finally {
+    if (code) {
+      await code.close();
+      report("[Code Guards] Contract retrieval expert: " + JSON.stringify(code.metrics));
+      telemetry({type: "expert-complete", model: CODE_EXPERT.model, revision: CODE_EXPERT.revision, device: CODE_EXPERT.provider, metrics: code.metrics});
+    }
+  }
+}
+
 /** Run every selected rule and report stage-level progress independently of the findings format. */
 export async function analyse(
   config: AnalysisOptions,
@@ -76,7 +89,7 @@ export async function analyse(
       codeHealth(project, config.includeTests).filter(item => config.enabled.has(item.guard))},
     {name: "cross-module (2 rules)", includes: crossModuleGuards, run: () =>
       crossModule(project).filter(item => config.enabled.has(item.guard))},
-    {name: "documentation", includes: ["documentation"], run: () => documentation(project, zeroShot, proseExpert)},
+    {name: "documentation", includes: ["documentation"], run: () => analyseDocumentation(project, proseExpert, report, telemetry)},
     {name: "repo-hygiene", includes: ["repo-hygiene"], run: () => repoHygiene(project.root)},
     {name: "enterprise-looking-naming", includes: ["enterprise-looking-naming"], run: () =>
       enterpriseLookingNaming(project, config.includeTests)},

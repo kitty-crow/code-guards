@@ -108,3 +108,15 @@ test("identical uncached expert inputs are encoded only once per batch", async (
     assert.equal(expert.metrics.cacheHits, 1);
   } finally { await expert.close(); }
 });
+
+test("retrieval can shortlist multiple candidates for a code-to-documentation query", async () => {
+  const expert = new ProseExpert(async () => ({
+    embed: async inputs => inputs.map(text => text === "unrelated" ? [0, 1] : [1, 0]),
+    dispose: async () => {}
+  }));
+  const inputs = [passage("first", 1), passage("second", 2), passage("unrelated", 3), passage("query", 4)];
+  try {
+    const result = await expert.rank(inputs, (_a, b) => b.text === "query", 2);
+    assert.deepEqual(result.matches.map(item => item.earlier.location.line), [1, 2]);
+  } finally { await expert.close(); }
+});

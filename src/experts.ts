@@ -51,7 +51,7 @@ export const CODE_EXPERT: ExpertProfile = {
 export const FINAL_JUDGE = {model: MODEL, contextTokens: MAX_MODEL_TOKENS, capability: "semantic-judgement"} as const;
 
 export function guardCapabilities(guard: GuardName): readonly Capability[] {
-  if (guard === "documentation") return ["compiler-facts", "prose-retrieval", "semantic-judgement"];
+  if (guard === "documentation") return ["compiler-facts", "prose-retrieval", "code-retrieval", "semantic-judgement"];
   if (guard === "function-quality") return ["compiler-facts", "code-retrieval", "semantic-judgement"];
   if (guard === "type-reuse" || guard === "module-cohesion") return ["compiler-facts", "semantic-judgement"];
   return ["compiler-facts"];
@@ -152,16 +152,13 @@ type VectorEvidence = { evidence: SourceEvidence; vector: number[] };
 
 export type RetrievalFilter = (earlier: SourceEvidence, later: SourceEvidence) => boolean;
 
-function nearestEarlier(rows: VectorEvidence[], eligible: RetrievalFilter): ProseMatch[] {
+function nearestEarlier(rows: VectorEvidence[], eligible: RetrievalFilter, limit: number): ProseMatch[] {
   const matches: ProseMatch[] = [];
   for (const [index, later] of rows.entries()) {
-    const nearest = rows.slice(0, index).reduce<ProseMatch | null>((best, item) => {
-      if (!eligible(item.evidence, later.evidence)) return best;
-      const relevance = cosine(item.vector, later.vector);
-      return !best || relevance > best.relevance
-        ? {earlier: item.evidence, later: later.evidence, relevance} : best;
-    }, null);
-    if (nearest && nearest.relevance > 0) matches.push(nearest);
+    const ranked = rows.slice(0, index).filter(item => eligible(item.evidence, later.evidence)).map(item => ({
+      earlier: item.evidence, later: later.evidence, relevance: cosine(item.vector, later.vector)
+    }));
+    matches.push(...ranked.filter(item => item.relevance > 0).sort((a, b) => b.relevance - a.relevance).slice(0, limit));
   }
   return matches;
 }
@@ -253,7 +250,7 @@ export class EmbeddingExpert {
     return keys.map(key => completed.get(key) ?? null);
   }
 
-  private async retrieve(passages: SourceEvidence[], eligible: RetrievalFilter): Promise<RetrievalResult> {
+  private async retrieve(passages: SourceEvidence[], eligible: RetrievalFilter, limit: number): Promise<RetrievalResult> {
     const rows: VectorEvidence[] = [];
     const unresolved: SourceEvidence[] = [];
     for (let offset = 0; offset < passages.length; offset += this.profile.batchSize) {
@@ -265,13 +262,14 @@ export class EmbeddingExpert {
         else unresolved.push(evidence);
       }
     }
-    return {matches: nearestEarlier(rows, eligible), unresolved};
+    return {matches: nearestEarlier(rows, eligible, limit), unresolved};
   }
 
-  async rank(passages: SourceEvidence[], eligible: RetrievalFilter = (a, b) => a.text !== b.text): Promise<RetrievalResult> {
+  async rank(passages: SourceEvidence[], eligible: RetrievalFilter = (a, b) => a.text !== b.text, limit = 1): Promise<RetrievalResult> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 8) throw new Error("Retrieval limit must be 1..8.");
     if (this.closed || this.busy) throw new Error("Embedding expert is closed or already evaluating a batch.");
     if (passages.length < 2) return {matches: [], unresolved: []};
-    const work = this.retrieve(passages, eligible);
+    const work = this.retrieve(passages, eligible, limit);
     this.busy = work;
     try { return await work; }
     finally { this.busy = null; }

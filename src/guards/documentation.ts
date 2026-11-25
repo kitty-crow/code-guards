@@ -6,7 +6,7 @@ import { isVendoredPath, vendoredPaths, type Project } from "../project.ts";
 import type { Finding, Location } from "../model.ts";
 import { readScripts } from "../scripts.ts";
 import { supportsReuse, zeroShot, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
-import type { ProseExpert } from "../experts.ts";
+import type { ProseExpert, CodeExpert, SourceEvidence } from "../experts.ts";
 
 type Paragraph = { line: number; text: string; section: string; kind: "paragraph" | "heading" | "list" | "table" };
 type DocIssue = {
@@ -328,7 +328,7 @@ function checkModuleCoverage(project: Project, files: Set<string>, findings: Fin
   }
 }
 
-type ModuleContract = { name: string; source: Location; evidence: string };
+type ModuleContract = { name: string; source: Location; evidence: string; signature: string };
 type ContractPassage = Paragraph & {file: string};
 
 // Inspect only declarations from the loaded project. External libraries may
@@ -347,19 +347,28 @@ function moduleContracts(project: Project, source: ts.SourceFile): ModuleContrac
     const type = value ? project.checker.getTypeOfSymbolAtLocation(target, value) : project.checker.getDeclaredTypeOfSymbol(target);
     const typeText = project.checker.typeToString(type, first, ts.TypeFormatFlags.NoTruncation);
     const code = declarations.map(node => node.getText()).join("\n");
-    contracts.push({name: exported.name, source: location(project.root, first),
+    contracts.push({name: exported.name, source: location(project.root, first), signature: `Export ${exported.name}. Compiler type: ${typeText}.`,
       evidence: `Export ${exported.name}. Compiler type: ${typeText}. Source declarations:\n${code}`});
   }
   return contracts;
 }
 
-function linkedContractPages(project: Project, doc: string, allowed: Set<string>): string[] {
+function directContractLinks(project: Project, doc: string, allowed: Set<string>): string[] {
   const content = read(project.root, doc) ?? "";
   const links = [...content.replace(/\x60{3}[\s\S]*?\x60{3}/g, "").matchAll(/(?<!!)\[[^\]]+\]\(([^)]+)\)/g)];
   const targets = links.map(match => (match[1] ?? "").split("#", 1)[0] ?? "")
     .filter(target => target && !/^(?:[a-z]+:|\/|#)/i.test(target))
     .map(target => path.posix.normalize(path.posix.join(path.posix.dirname(doc), target)));
-  return [...new Set([doc, ...targets.filter(target => allowed.has(target) && !releaseFile.test(target))])];
+  return [...new Set(targets.filter(target => allowed.has(target) && !releaseFile.test(target)))];
+}
+
+// Traverse the in-scope link graph without following cycles or leaving the repository.
+function linkedContractPages(project: Project, doc: string, allowed: Set<string>): string[] {
+  const pages = new Set([doc]);
+  for (const file of pages) {
+    for (const target of directContractLinks(project, file, allowed)) pages.add(target);
+  }
+  return [...pages];
 }
 
 function contractPassages(project: Project, doc: string, allowed: Set<string>): ContractPassage[] {
@@ -380,32 +389,81 @@ function reportUnresolvedContract(contract: ModuleContract, file: string, aspect
   console.error(`[Code Guards] Unresolved ${aspect}: ${contract.name} in ${file}; source ${contract.source.file}:${contract.source.line}`);
 }
 
-async function reviewContractCoverage(contract: ModuleContract, passages: ContractPassage[], score: SemanticScorer, findings: Finding[]): Promise<void> {
+function passageKey(passage: ContractPassage): string {
+  return JSON.stringify([passage.file, passage.line]);
+}
+
+type ContractReview = { contract: ModuleContract; selected: ContractPassage[]; available: ContractPassage[]; doc: string };
+
+async function retrieveContractPassages(contract: ModuleContract, passages: ContractPassage[], expert: CodeExpert | null): Promise<ContractPassage[]> {
+  const named = passages.filter(passage => matchesContract(passage, contract.name));
+  if (!expert || !passages.length) return named;
+  // Use the checkpoint's code/docstring retrieval task. A signature query
+  // retains an alternative when the complete implementation is overlength.
+  const corpus: SourceEvidence[] = passages.map(passage => ({
+    location: {file: passage.file, line: passage.line, column: 1}, text: passage.section + "\n" + passage.text
+  }));
+  const query: SourceEvidence = {location: contract.source, text: contract.evidence};
+  const signature: SourceEvidence = {location: contract.source, text: contract.signature};
+  const retrieval = await expert.rank([...corpus, query, signature],
+    (earlier, later) => earlier.location.file !== contract.source.file && later.location.file === contract.source.file, 3);
+  if (retrieval.unresolved.some(item => item === query)) reportUnresolvedContract(contract, contract.source.file, "overlength CG409 retrieval");
+  const retrieved = new Set(retrieval.matches.map(pair => JSON.stringify([pair.earlier.location.file, pair.earlier.location.line])));
+  return passages.filter(passage => matchesContract(passage, contract.name) || retrieved.has(passageKey(passage)));
+}
+
+function expandedPassages(selected: ContractPassage[], available: ContractPassage[]): ContractPassage[] {
+  const anchors = new Set(selected.map(passageKey));
+  // Preserve the section's neighbouring paragraphs, where conditions and
+  // exceptions commonly qualify the isolated claim.
+  return available.filter(passage => anchors.has(passageKey(passage)) ||
+    selected.some(item => item.file === passage.file && item.section === passage.section && Math.abs(item.line - passage.line) <= 12));
+}
+
+function oppositeVerdict(verdict: {sameConcept: number; differentConcept: number}): {sameConcept: number; differentConcept: number} {
+  return {sameConcept: verdict.differentConcept, differentConcept: verdict.sameConcept};
+}
+
+async function refineCoverage(contract: ModuleContract, passages: ContractPassage[], score: SemanticScorer) {
+  const docs = passages.map(passageEvidence).join("\n");
+  return score(comparisonQuestion({
+    premise: `Public implementation:\n${contract.evidence}\nExpanded documentation context:\n${docs}`,
+    same: "at least one concrete observable behaviour, precondition, input or output of this public implementation is absent from the expanded documentation",
+    different: "the expanded documentation describes the observable contract including its important conditions and outputs"
+  }, {name: "public implementation", evidence: contract.evidence}, {name: "expanded documentation", evidence: docs}));
+}
+
+async function reviewContractCoverage(contract: ModuleContract, passages: ContractPassage[], available: ContractPassage[], score: SemanticScorer, findings: Finding[]): Promise<void> {
   const first = passages[0] ?? null;
   if (!first) return;
   const docs = passages.map(passageEvidence).join("\n");
-  const verdict = await score(comparisonQuestion({
+  const initial = await score(comparisonQuestion({
     premise: `Public implementation:\n${contract.evidence}\nRelevant documentation:\n${docs}`,
     same: "the documentation of this exported contract is superficial or omits significant functionality, input, output, state changes, preconditions or limitations established by the source",
     different: "the documentation explains the significant public behaviour and contract without needing to narrate incidental implementation details"
   }, {name: "public implementation", evidence: contract.evidence}, {name: "relevant documentation", evidence: docs}));
+  const uncertain = !supportsReuse(initial, 0.78) && !supportsReuse(oppositeVerdict(initial), 0.78);
+  const evidence = uncertain ? expandedPassages(passages, available) : passages;
+  const verdict = uncertain ? await refineCoverage(contract, evidence, score) : initial;
   if (supportsReuse(verdict, 0.78)) {
     issue(findings, {code: "CG409", file: first.file, line: first.line,
       title: "Public contract lacks substantive documentation", subject: contract.name,
-      reason: `The source contract for ${contract.name} and its retrieved documentation received ${Math.round(verdict.sameConcept * 100)}% support for incomplete coverage and ${Math.round(verdict.differentConcept * 100)}% opposition. Relevant passages: ${passages.map(item => item.file + ":" + item.line).join(", ")}.`,
+      reason: `The source contract for ${contract.name} and its retrieved documentation received ${Math.round(verdict.sameConcept * 100)}% support for incomplete coverage and ${Math.round(verdict.differentConcept * 100)}% opposition. Relevant passages: ${evidence.map(item => item.file + ":" + item.line).join(", ")}.`,
       suggestion: "Explain the significant public behaviour, constraints and observable effects established by the related source declaration.", related: contract.source});
     return;
   }
-  if (!supportsReuse({sameConcept: verdict.differentConcept, differentConcept: verdict.sameConcept}, 0.78)) reportUnresolvedContract(contract, first.file, "CG409 coverage");
+  if (!supportsReuse(oppositeVerdict(verdict), 0.78)) reportUnresolvedContract(contract, first.file, "CG409 coverage");
 }
 
-async function reviewContractClaim(contract: ModuleContract, passage: ContractPassage, score: SemanticScorer, findings: Finding[]): Promise<void> {
+async function reviewContractClaim(contract: ModuleContract, passage: ContractPassage, available: ContractPassage[], score: SemanticScorer, findings: Finding[]): Promise<void> {
   const docs = passageEvidence(passage);
-  const verdict = await score(comparisonQuestion({
+  const initial = await score(comparisonQuestion({
     premise: `Public implementation:\n${contract.evidence}\nDocumentation claim:\n${docs}`,
     same: "the documentation makes a concrete assertion about this exported contract that is contradicted by the actual implementation or compiler type",
     different: "the documentation is consistent with the supplied source or the supplied evidence cannot establish a contradiction"
   }, {name: "public implementation", evidence: contract.evidence}, {name: "documentation claim", evidence: docs}));
+  const uncertain = !supportsReuse(initial, 0.78) && !supportsReuse(oppositeVerdict(initial), 0.78);
+  const verdict = uncertain ? await refineClaim(contract, passage, available, score) : initial;
   if (supportsReuse(verdict, 0.78)) {
     issue(findings, {code: "CG413", file: passage.file, line: passage.line,
       title: "Documented contract may contradict implementation", subject: passage.text.slice(0, 110),
@@ -413,23 +471,43 @@ async function reviewContractClaim(contract: ModuleContract, passage: ContractPa
       suggestion: "Correct the specific behavioural claim or implement the stated contract, preserving the public API.", related: contract.source});
     return;
   }
-  if (!supportsReuse({sameConcept: verdict.differentConcept, differentConcept: verdict.sameConcept}, 0.78)) reportUnresolvedContract(contract, passage.file, "CG413 claim");
+  if (!supportsReuse(oppositeVerdict(verdict), 0.78)) reportUnresolvedContract(contract, passage.file, "CG413 claim");
 }
 
-async function reviewModuleContracts(project: Project, files: Set<string>, score: SemanticScorer, findings: Finding[]): Promise<void> {
-  // Symbol retrieval traverses every scanned module and searches its own page
-  // and directly linked in-scope pages. Missing retrieval is not proof of absence.
+async function refineClaim(contract: ModuleContract, passage: ContractPassage, available: ContractPassage[], score: SemanticScorer) {
+  const docs = "Claim: " + passageEvidence(passage) + "\nSection context:\n" +
+    expandedPassages([passage], available).map(passageEvidence).join("\n");
+  return score(comparisonQuestion({
+    premise: `Public implementation:\n${contract.evidence}\n${docs}`,
+    same: "an observable result, input restriction or error condition asserted in the highlighted claim directly conflicts with the source even after accounting for the surrounding qualifications",
+    different: "the claim and its qualifications describe behaviour consistent with the source, or a contradiction cannot be established"
+  }, {name: "public implementation", evidence: contract.evidence}, {name: "qualified claim", evidence: docs}));
+}
+
+async function gatherContractReviews(project: Project, files: Set<string>, expert: CodeExpert | null): Promise<ContractReview[]> {
+  const reviews: ContractReview[] = [];
   for (const source of sourceModules(project)) {
     const relative = path.relative(project.root, source.fileName).replace(/\\/g, "/");
     const doc = moduleDocs(relative).find(candidate => files.has(candidate)) ?? null;
     if (!doc) continue;
-    const passages = contractPassages(project, doc, files);
+    const available = contractPassages(project, doc, files);
     for (const contract of moduleContracts(project, source)) {
-      const relevant = passages.filter(passage => matchesContract(passage, contract.name));
-      if (!relevant.length) reportUnresolvedContract(contract, doc, "CG409 retrieval");
-      await reviewContractCoverage(contract, relevant, score, findings);
-      for (const passage of relevant) await reviewContractClaim(contract, passage, score, findings);
+      const selected = await retrieveContractPassages(contract, available, expert);
+      reviews.push({contract, selected, available, doc});
     }
+  }
+  return reviews;
+}
+
+async function reviewModuleContracts(project: Project, files: Set<string>, score: SemanticScorer, findings: Finding[], expert: CodeExpert | null): Promise<void> {
+  // Retrieve candidates before judgement and release the embedding session.
+  const reviews = await gatherContractReviews(project, files, expert).finally(async () => {
+    if (expert) await expert.close();
+  });
+  for (const {contract, selected, available, doc} of reviews) {
+    if (!selected.length) reportUnresolvedContract(contract, doc, "CG409 retrieval");
+    await reviewContractCoverage(contract, selected, available, score, findings);
+    for (const passage of selected) await reviewContractClaim(contract, passage, available, score, findings);
   }
 }
 
@@ -679,7 +757,7 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
 // Markdown is not part of TypeScript's source graph, so inspect the target
 // repository directly when validating user-facing usage and module coverage.
 export async function documentation(project: Project, score: SemanticScorer = zeroShot, expert: ProseExpert | null = null,
-  verifyContracts = (process.env.CODE_GUARDS_EXPERIMENTAL_CONTRACTS ?? "") === "1"): Promise<Finding[]> {
+  verifyContracts = (process.env.CODE_GUARDS_EXPERIMENTAL_CONTRACTS ?? "") === "1", contractExpert: CodeExpert | null = null): Promise<Finding[]> {
   const findings: Finding[] = [];
   const root = project.root;
   const fileNames = markdownFiles(root);
@@ -688,7 +766,7 @@ export async function documentation(project: Project, score: SemanticScorer = ze
     reason: "The repository has no top-level entry point explaining how to install, run or maintain it.",
     suggestion: "Add a short README with purpose, prerequisites, working installation commands, example output, limitations and a link to docs/index.md."});
   checkModuleCoverage(project, files, findings);
-  if (verifyContracts) await reviewModuleContracts(project, files, score, findings);
+  if (verifyContracts) await reviewModuleContracts(project, files, score, findings, contractExpert);
   const readme = read(root, "README.md");
   if (readme && project.files.some(file => path.relative(root, file.fileName).startsWith("src/")) && !readme.includes("docs/index.md")) issue(findings, {
     code: "CG407", file: "README.md", line: 1, title: "README does not point developers to module docs", subject: "README.md",

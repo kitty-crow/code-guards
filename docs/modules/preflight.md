@@ -48,3 +48,5 @@ The maximum documentation workload includes a separate information-value questio
 Experimental code retrieval is excluded from the tokenizer-only question count because its candidate pairs depend on neural embeddings.
 
 When experimental contract review is enabled, the preflight scorer counts the same compiler-retrieved coverage and claim questions without loading model weights.
+
+Adaptive contract retrieval and follow-up questions depend on model results, so the tokenizer-only estimates exclude this additional workload.
