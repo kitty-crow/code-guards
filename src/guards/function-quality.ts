@@ -7,6 +7,15 @@ import { isTestFile, type Project } from "../project.ts";
 import { supportsReuse, zeroShot, semanticConcurrency, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
+type BehaviourFacts = {
+  signature: string;
+  references: string[];
+  writes: number;
+  throws: number;
+  awaits: number;
+  returns: number;
+};
+
 type FunctionInfo = {
   name: string;
   node: ts.Node;
@@ -22,6 +31,7 @@ type FunctionInfo = {
   comments: boolean;
   arguments: number;
   fingerprint: string;
+  behaviour: BehaviourFacts;
 };
 
 function functionName(node: ts.Node): string {
@@ -36,20 +46,28 @@ function functionName(node: ts.Node): string {
   return "";
 }
 
+function resolvedDeclaration(project: Project, node: ts.Node): ts.Declaration | null {
+  const reference = project.checker.getSymbolAtLocation(node) ?? null;
+  const symbol = reference && (reference.flags & ts.SymbolFlags.Alias)
+    ? project.checker.getAliasedSymbol(reference) : reference;
+  return symbol ? (symbol.declarations ?? [])[0] ?? null : null;
+}
+
+function declarationIdentity(project: Project, declaration: ts.Declaration): string {
+  const source = declaration.getSourceFile();
+  return `${path.relative(project.root, source.fileName).replace(/\\/g, "/")}:${declaration.getStart(source)}`;
+}
+
 function recordCall(project: Project, file: ts.SourceFile, node: ts.CallExpression, info: FunctionInfo): void {
   const target = node.expression;
   info.calls.add(target.getText(file));
-  const reference = project.checker.getSymbolAtLocation(ts.isPropertyAccessExpression(target) ? target.name : target) ?? null;
-  const symbol = reference && (reference.flags & ts.SymbolFlags.Alias)
-    ? project.checker.getAliasedSymbol(reference) : reference;
-  const declarations = symbol ? symbol.declarations ?? [] : [];
-  const first = declarations[0] ?? null;
+  const first = resolvedDeclaration(project, ts.isPropertyAccessExpression(target) ? target.name : target);
   if (!first) {
     info.callTargets.push(`unresolved:${path.relative(project.root, file.fileName)}:${target.getText(file)}`);
     return;
   }
   const source = first.getSourceFile();
-  info.callTargets.push(`${path.relative(project.root, source.fileName).replace(/\\/g, "/")}:${first.getStart(source)}`);
+  info.callTargets.push(declarationIdentity(project, first));
   if (source !== file && !source.isDeclarationFile) info.dependencies.add(source.fileName);
 }
 
@@ -77,6 +95,41 @@ function requiredMethod(node: ts.Node, checker: ts.TypeChecker): boolean {
   return heritage.some(item => (checker.getPropertyOfType(checker.getTypeAtLocation(item), symbol.name) ?? null) !== null);
 }
 
+// Local bindings can be identical across two implementations; references to
+// declarations outside the function must retain their compiler identity.
+function externalReferences(project: Project, scope: ts.Node): string[] {
+  const file = scope.getSourceFile();
+  const references = new Set<string>();
+  const walk = (node: ts.Node): void => {
+    const declaration = ts.isIdentifier(node) ? resolvedDeclaration(project, node) : null;
+    const local = declaration !== null && declaration.getSourceFile() === file &&
+      declaration.pos >= scope.pos && declaration.end <= scope.end;
+    if (declaration && !local) references.add(node.getText() + ":" + declarationIdentity(project, declaration));
+    ts.forEachChild(node, walk);
+  };
+  walk(scope);
+  return [...references].sort();
+}
+
+function behaviourFacts(project: Project, node: ts.SignatureDeclaration): BehaviourFacts {
+  const signature = project.checker.getSignatureFromDeclaration(node) ?? null;
+  return {
+    signature: signature ? project.checker.signatureToString(signature, node, ts.TypeFormatFlags.NoTruncation) : "",
+    references: externalReferences(project, node), writes: 0, throws: 0, awaits: 0, returns: 0
+  };
+}
+
+function recordEffects(node: ts.Node, facts: BehaviourFacts): void {
+  if (ts.isReturnStatement(node)) facts.returns += 1;
+  if (ts.isThrowStatement(node)) facts.throws += 1;
+  if (ts.isAwaitExpression(node)) facts.awaits += 1;
+  if (ts.isDeleteExpression(node)) facts.writes += 1;
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) facts.writes += 1;
+  if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) facts.writes += 1;
+}
+
 function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
   const result: FunctionInfo[] = [];
   for (const file of project.files) {
@@ -89,7 +142,7 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
       const info: FunctionInfo = {
         name, node, body, lines: 0, branches: 0, branchClauses: [], statements: 0,
         dependencies: new Set(), calls: new Set(), callTargets: [], contract: requiredMethod(node, project.checker),
-        comments: false, arguments: node.parameters.length, fingerprint: ""
+        comments: false, arguments: node.parameters.length, fingerprint: "", behaviour: behaviourFacts(project, node)
       };
       const start = file.getLineAndCharacterOfPosition(body.getStart(file)).line;
       const end = file.getLineAndCharacterOfPosition(body.getEnd()).line;
@@ -107,13 +160,14 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
           info.branchClauses.push(`${clause} (line ${line})`);
         }
         if (ts.isCallExpression(current)) recordCall(project, file, current, info);
+        recordEffects(current, info.behaviour);
         ts.forEachChild(current, visitBody);
       };
       visitBody(body);
       // The printer removes trivia without altering literal content or call names.
       // Resolved call targets distinguish equally named operations in different modules.
       const printed = ts.createPrinter({removeComments: true}).printNode(ts.EmitHint.Unspecified, body, file);
-      info.fingerprint = JSON.stringify([printed, info.callTargets]);
+      info.fingerprint = JSON.stringify([printed, info.callTargets, info.behaviour.signature, info.behaviour.references]);
       result.push(info);
       ts.forEachChild(node, child => { if (child !== body) visit(child); });
     };
@@ -125,6 +179,21 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
 function evidence(info: FunctionInfo): string {
   const excerpt = info.body.getText().replace(/\s+/g, " ").slice(0, 360);
   return `The TypeScript function ${info.name} is ${info.lines} lines long, contains ${info.branches} decision branches, ${info.statements} statements, takes ${info.arguments} arguments, and calls ${[...info.calls].slice(0, 12).join(", ") || "nothing"}. It uses ${info.dependencies.size} external source modules. ${info.comments ? "It contains comments." : "It has no explanatory comments."} Example clauses: ${info.branchClauses.join("; ")}. Implementation excerpt: ${excerpt}`;
+}
+
+function behaviouralEvidence(info: FunctionInfo): string {
+  const facts = info.behaviour;
+  return `Typed contract: ${facts.signature}. Explicit syntax: ${facts.writes} writes, ${facts.throws} throws, ${facts.awaits} awaits, ${facts.returns} returns. Resolved external references: ${facts.references.join(", ") || "none"}. Resolved calls: ${info.callTargets.join(", ") || "none"}. Implementation: ${info.body.getText()}`;
+}
+
+function compareBehaviour(left: FunctionInfo, right: FunctionInfo) {
+  const a = behaviouralEvidence(left);
+  const b = behaviouralEvidence(right);
+  return comparisonQuestion({
+    premise: `First function ${left.name}: ${a}\nSecond function ${right.name}: ${b}`,
+    same: "these functions duplicate the same behaviour and public contract, including inputs, outputs and effects, so a shared implementation would preserve behaviour",
+    different: "these functions have distinct contracts, transformations, dependencies, state changes or error conditions despite similar code"
+  }, {name: left.name, evidence: a}, {name: right.name, evidence: b});
 }
 
 type Emit = (info: FunctionInfo, code: string, similarity: number, related: FunctionInfo | null) => void;
@@ -163,11 +232,7 @@ async function reviewSimilarFunctions(functions: FunctionInfo[], score: Semantic
         emit(right, "CG205", 1, left);
         continue;
       }
-      const verdict = await score(comparisonQuestion({
-        premise: `Function ${left.name}: ${left.body.getText()} Function ${right.name}: ${right.body.getText()}`,
-        same: "these functions duplicate the same behaviour and should share a helper",
-        different: "these functions implement distinct behaviour despite similar calls"
-      }, {name: left.name, evidence: left.body.getText()}, {name: right.name, evidence: right.body.getText()}));
+      const verdict = await score(compareBehaviour(left, right));
       if (supportsReuse(verdict)) emit(right, "CG205", verdict.sameConcept, left);
     }
   }
@@ -227,13 +292,7 @@ async function reviewRetrievedFunctions(functions: FunctionInfo[], project: Proj
     const left = indexed.get(evidenceKey(pair.earlier.location)) ?? null;
     const right = indexed.get(evidenceKey(pair.later.location)) ?? null;
     if (!left || !right) throw new Error("Code retrieval returned an unknown source location.");
-    const a = pair.earlier.text + "\nResolved calls: " + left.callTargets.join(", ");
-    const b = pair.later.text + "\nResolved calls: " + right.callTargets.join(", ");
-    const verdict = await score(comparisonQuestion({
-      premise: `First function ${left.name}: ${a}\nSecond function ${right.name}: ${b}`,
-      same: "these functions duplicate the same behaviour and public contract, including their inputs, outputs, effects and error conditions, so a shared implementation would preserve behaviour",
-      different: "these functions have distinct contracts, transformations, dependencies, state changes or error conditions despite similar code"
-    }, {name: left.name, evidence: a}, {name: right.name, evidence: b}));
+    const verdict = await score(compareBehaviour(left, right));
     if (supportsReuse(verdict)) emit(right, "CG205", verdict.sameConcept, left);
   }
 }

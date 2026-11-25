@@ -503,3 +503,25 @@ test("CG205 retrieves a code candidate without common call names but still requi
   assert.equal(endorsed.filter(item => item.code === "CG205").length, 1);
   assert.equal(opposed.filter(item => item.code === "CG205").length, 0);
 });
+
+test("CG205 does not equate identical bodies with different captured bindings or typed contracts", async () => {
+  const sample = project({
+    "one.ts": "const offset = 2; export function alpha(x: number) { const y = x + offset; const z = y * 2; return z; }",
+    "two.ts": "const offset = 3; export function beta(x: number) { const y = x + offset; const z = y * 2; return z; }",
+    "three.ts": "export function first(x: number) { const y = x; const z = y; return z; }",
+    "four.ts": "export function second(x: string) { const y = x; const z = y; return z; }"
+  });
+  assert.deepEqual((await functionQuality(sample, false, reject)).filter(item => item.code === "CG205"), []);
+});
+
+test("CG205 supplies typed contracts and behavioural evidence to the final judge", async () => {
+  const sample = project({
+    "one.ts": "export function alpha(x: number) { const y = Math.round(x); let z = Math.abs(y); z += 1; return z; }",
+    "two.ts": "export function beta(x: number) { const y = Math.round(x); let z = Math.abs(y); z += 2; return z; }"
+  });
+  const evidence: string[] = [];
+  const scorer: SemanticScorer = async question => { evidence.push(question.premise); return reject(question); };
+  const findings = await functionQuality(sample, false, scorer);
+  assert.deepEqual(findings.filter(item => item.code === "CG205"), []);
+  assert.ok(evidence.some(item => item.includes("Typed contract: (x: number): number") && item.includes("1 writes") && item.includes("Resolved calls:") && item.includes("z += 2")));
+});
