@@ -176,10 +176,10 @@ test("documentation warnings catch prompt leakage, marketing and repeated paragr
   for (const code of ["CG401", "CG403", "CG405"]) assert.ok(actual.has(code));
 });
 
-test("semantic documentation review invokes a real scorer interface only for shortlisted vague prose", async () => {
+test("semantic documentation review invokes separate broad-claim and information assessments", async () => {
   const project = fixture({"README.md": "# Intro\n\nThis tool provides a highly flexible experience for teams and maintains useful functionality through a modern solution for codebases that developers may need to update."});
   let requests = 0;
-  const score: SemanticScorer = async question => { requests += 1; assert.match(question.premise, /Documentation paragraph/); return endorse(question); };
+  const score: SemanticScorer = async question => { requests += 1; assert.match(question.premise, /Documentation paragraph/); return question.same.includes("concrete useful information") ? reject(question) : endorse(question); };
   const actual = codes(await documentation(project, score));
   assert.ok(requests > 0);
   assert.ok(actual.has("CG410"));
@@ -459,4 +459,29 @@ test("CG411 includes list and table context but excludes quotations and fenced e
   assert.ok(seen.some(item => item.includes("Markdown role: list") && item.includes("Exit 2")));
   assert.ok(seen.some(item => item.includes("Markdown role: table") && item.includes("No files are written")));
   assert.ok(seen.every(item => !item.includes("Example quotation") && !item.includes("Example code")));
+});
+
+test("CG410 retains technical descriptions despite an initial vague-prose score", async () => {
+  const project = fixture({"README.md": "# Usage\n\nThe `--strict` flag exits 1 when warnings occur.\n\nEvery part reflects the intent behind the whole."});
+  const scorer: SemanticScorer = async question => {
+    if (question.same.includes("broad promotional or vague claims")) return endorse(question);
+    if (question.same.includes("concrete useful information") && question.premise.includes("--strict")) return endorse(question);
+    return reject(question);
+  };
+  const findings = await documentation(project, scorer);
+  const vague = findings.filter(item => item.code === "CG410");
+  assert.equal(vague.length, 1);
+  assert.match(vague.map(item => item.subject).join(" "), /intent behind the whole/);
+});
+
+test("CG411 retains the condition preceding a dependent alternative", async () => {
+  const project = fixture({"README.md": "# Usage\n\nKeep the output when validation succeeds; otherwise remove it."});
+  const examined: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    if (question.same.includes("formulaic or overexplained")) examined.push(question.premise);
+    return reject(question);
+  };
+  await documentation(project, scorer);
+  assert.ok(examined.some(item => item.includes("Sentence to review: Keep the output when validation succeeds; otherwise remove it.")));
+  assert.ok(examined.every(item => !item.includes("Sentence to review: otherwise remove it.")));
 });

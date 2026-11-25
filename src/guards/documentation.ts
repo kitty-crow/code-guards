@@ -111,7 +111,8 @@ function paragraphs(lines: string[]): Paragraph[] {
     if (heading) {
       flush();
       section = heading[1] ?? "Untitled section";
-      if (/[.!?]$/.test(section)) result.push({line: i + 1, text: section, section, kind: "heading"});
+      const block: Paragraph = {line: i + 1, text: section, section, kind: "heading"};
+      result.push(...[block].filter(item => /[.!?]$/.test(item.text)));
       continue;
     }
     const list = trimmed.match(/^(?:[-*+]|\d+\.)\s+(.+)$/);
@@ -120,7 +121,8 @@ function paragraphs(lines: string[]): Paragraph[] {
       flush();
       const text = list ? list[1] ?? "" : trimmed;
       const plain = text.replace(/`[^`]*`/g, "").replace(/\[[^\]]+\]\([^)]+\)/g, "").replace(/[|:\s-]/g, "");
-      if (plain) result.push({line: i + 1, text, section, kind: list ? "list" : "table"});
+      const block: Paragraph = {line: i + 1, text, section, kind: list ? "list" : "table"};
+      result.push(...[block].filter(() => plain.length > 0));
       continue;
     }
     if (!buffer.length) start = i + 1;
@@ -292,7 +294,7 @@ export const styleQuestion = {
   different: "the wording of the highlighted sentence is direct and concise, without redundant explanations or mechanical transitions"
 } as const;
 
-const informationQuestion = {
+export const informationQuestion = {
   same: "the highlighted sentence states concrete useful information, such as a software behaviour, specific data representation, API limitation, instruction, constraint or meaningful context",
   different: "the highlighted sentence is verbal padding, restates information already supplied by its context, or conveys no concrete information for the reader"
 } as const;
@@ -302,7 +304,9 @@ function sentencesIn(paragraph: Paragraph): string[] {
   return sentences.flatMap(sentence => {
     const trimmed = sentence.trim();
     const clauses = trimmed.split(/;\s+(?=\S)/u).map(part => part.trim());
-    return clauses.length > 1 ? [trimmed, ...clauses.slice(1)] : [trimmed];
+    // Dependent alternatives must retain their preceding condition. Reviewing
+    // the fragment alone would turn an instruction into apparent padding.
+    return [trimmed, ...clauses.slice(1).filter(part => !/^(?:otherwise|else|then)\b/i.test(part))];
   }).filter(Boolean);
 }
 
@@ -393,6 +397,28 @@ async function checkSemanticRedundancy(file: string, prose: Paragraph[], finding
   }
 }
 
+export const vagueQuestion = {
+  same: "this paragraph makes broad promotional or vague claims without concrete user-facing information about the software",
+  different: "this paragraph supplies useful technical context, precise implementation details, real usage instructions, examples or testable limitations"
+} as const;
+
+async function checkVague(file: string, candidate: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
+  const premise = `Documentation paragraph: ${candidate.text}\nSection: ${candidate.section}`;
+  const verdict = await score({premise, ...vagueQuestion});
+  if (!supportsReuse(verdict, 0.75)) return;
+  const information = await score({premise: `${premise}\nSentence to review: ${candidate.text}`, ...informationQuestion});
+  if (supportsReuse(information, 0.75)) return;
+  if (!supportsReuse({sameConcept: information.differentConcept, differentConcept: information.sameConcept}, 0.75)) {
+    console.error(`[Code Guards] Unresolved CG410 information value at ${file}:${candidate.line}: ${candidate.text}`);
+    return;
+  }
+  issue(findings, {code: "CG410", file, line: candidate.line, title: "Zero-shot review suggests vague documentation", subject: candidate.text.slice(0, 115),
+    reason: `The broad-claim assessment received ${Math.round(verdict.sameConcept * 100)}% support. A separate information assessment supported missing concrete content (${Math.round(information.differentConcept * 100)}% support versus ${Math.round(information.sameConcept * 100)}% for useful information). This is not a factuality verdict.`,
+    suggestion: "Replace the broad claim with an actual CLI invocation, API example, constraints, or a reproducible observation."});
+}
+
+// Keep structural checks separate from semantic judgements: a concrete fact
+// can use formulaic wording, and lexical duplication does not require inference.
 async function checkProse(file: string, content: string, findings: Finding[], score: SemanticScorer, expert: ProseExpert | null): Promise<void> {
   const lines = content.split(/\r?\n/);
   let inFence = false;
@@ -420,15 +446,7 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
         reason: `This paragraph substantially repeats a paragraph at line ${candidate.line}.`, suggestion: "Consolidate the explanation once, then link to it from any other section.",
         related: {file, line: candidate.line, column: 1}});
     }
-    const verdict = await score({
-      premise: `Documentation paragraph: ${candidate.text}\nSection: ${candidate.section}`,
-      same: "this paragraph makes broad promotional or vague claims without concrete user-facing information about the software",
-      different: "this paragraph supplies useful technical context, precise implementation details, real usage instructions, examples or testable limitations"
-    });
-    if (!supportsReuse(verdict, 0.75)) continue;
-    issue(findings, {code: "CG410", file, line: candidate.line, title: "Zero-shot review suggests vague documentation", subject: candidate.text.slice(0, 115),
-      reason: `The local NLI model favoured vague language over concrete usage (${Math.round(verdict.sameConcept * 100)}% entailment). This is a recommendation, not a factuality verdict.`,
-      suggestion: "Replace the broad claim with an actual CLI invocation, API example, constraints, or a reproducible observation."});
+    await checkVague(file, candidate, findings, score);
   }
   for (const block of blocks.filter(item => item.kind !== "paragraph")) await checkStyle(file, block, findings, score);
   if (expert) await checkSemanticRedundancy(file, prose, findings, score, expert);

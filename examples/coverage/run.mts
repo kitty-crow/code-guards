@@ -18,7 +18,9 @@ const folder = path.join(root, "examples/coverage");
 const supportedCodes = [...new Set([...readFileSync(path.join(root, "README.md"), "utf8")
   .matchAll(/^\|\s*`(CG\d{3})`\s*\|/gm)]
   .map(match => match[1] ?? "").filter(Boolean))].sort();
-const simulatedScore: SemanticScorer = async () => ({sameConcept: 0.96, differentConcept: 0.03});
+const simulatedScore: SemanticScorer = async question => question.same.includes("concrete useful information")
+  ? {sameConcept: 0.03, differentConcept: 0.96}
+  : {sameConcept: 0.96, differentConcept: 0.03};
 
 export async function collect(): Promise<{examples: Example[]; supportedCodes: string[]; missing: string[]}> {
   const code = loadProject(path.join(folder, "codebase/tsconfig.json"));

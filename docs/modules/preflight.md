@@ -38,4 +38,4 @@ Preflight does not write to the target project and does not emit ordinary findin
 
 Module-cohesion preflight counts the initial module questions and the conditional pair comparisons. Deterministic-only preflight does not load a tokenizer. Experimental prose retrieval requires embeddings, so its additional questions are excluded from the estimate.
 
-The maximum documentation workload includes a separate information-value question for each style candidate; the minimum rejects style candidates and accepts README handover candidates. Both bounds use the production guard rather than a separate lexical estimator.
+The maximum documentation workload includes a separate information-value question for each style and vague-prose candidate; the minimum rejects both candidate types and accepts README handover candidates. Both bounds use the production guard rather than a separate lexical estimator.
