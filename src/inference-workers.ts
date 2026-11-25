@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { AccelerationConfig } from "./acceleration.ts";
+import { configuredGpuMemoryMonitor } from "./gpu-memory.ts";
 import { parseRecord, JsonRecord } from "./json.ts";
 import { comparisonQuestion, type SemanticQuestion, type SemanticTimingEvent, type WindowVerdict, type NativeWindowVerdict, type NliLogits, type RawNliWindow } from "./semantic.ts";
 
@@ -211,6 +212,8 @@ function createWorkerPool(
   }
   const workerFile = join(sourceDir, "inference-worker." + extension);
   const workers: Worker[] = [];
+  const memory = backend === "cpu" ? null : configuredGpuMemoryMonitor(ids);
+  if (memory) memory.sample("before-load");
   let nextId = 0;
   let nextWorker = 0;
   let closed = false;
@@ -322,6 +325,23 @@ function createWorkerPool(
     });
   }
 
+  // Sample independently of IPC progress so a long-running model load or
+  // question cannot defer budget enforcement until its result arrives.
+  const memoryTimer = memory ? setInterval(() => {
+    try { memory.sample("active"); }
+    catch (error) {
+      const failure = error instanceof Error ? error : new Error("GPU memory monitoring failed.");
+      for (const worker of workers) {
+        rejectWorker(worker, failure);
+        worker.child.kill("SIGKILL");
+      }
+    }
+  }, 1000) : null;
+
+  function stopMonitoring(): void {
+    if (memoryTimer !== null) clearInterval(memoryTimer);
+  }
+
   return {
     score: (question): Promise<WindowVerdict> => {
       if (closed) return Promise.reject(new Error("GPU worker pool has closed."));
@@ -353,6 +373,7 @@ function createWorkerPool(
     close(): void {
       if (closed) return;
       closed = true;
+      stopMonitoring();
       for (const worker of workers) {
         rejectWorker(worker, new Error("GPU worker pool closed."));
         worker.child.kill("SIGKILL");
@@ -362,7 +383,10 @@ function createWorkerPool(
       if (draining) return draining;
       if (closed) return Promise.resolve();
       closed = true;
-      draining = drainWorkers(workers, rejectWorker);
+      draining = drainWorkers(workers, rejectWorker).finally(() => {
+        stopMonitoring();
+        if (memory) memory.sample("after-exit");
+      });
       return draining;
     }
   };
