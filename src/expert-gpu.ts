@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { GpuMemoryMonitor, parseMemoryMap } from "./gpu-memory.ts";
+import { GpuMemoryMonitor, parseMemoryMap, readNvidiaMemory, type DeviceMemory } from "./gpu-memory.ts";
 import { parseRecord, type JsonValue } from "./json.ts";
 import { semanticAccelerationConfig } from "./semantic.ts";
 import type { AccelerationConfig } from "./acceleration.ts";
@@ -15,11 +15,13 @@ export function validateExpertAdapter(adapter: number, uuid: string, judge: Acce
   if (!Number.isSafeInteger(adapter) || adapter < 0 || adapter > 15 || !/^GPU-[a-fA-F0-9-]+$/.test(uuid)) throw new Error("Invalid expert GPU adapter or UUID.");
   const gpu = ["cuda", "dml", "webgpu"].filter(device => [...judge.features].some(feature => feature === device));
   if (!gpu.length) return;
-  if (gpu.length !== 1 || !gpu.includes("webgpu") || !judge.gpuIds.length || judge.gpuIds.includes(adapter)) {
-    throw new Error("Expert WebGPU requires a dedicated adapter and explicit disjoint WebGPU judge selection, or a CPU judge.");
+  if (gpu.length !== 1 || !gpu.includes("webgpu") || !judge.gpuIds.length) {
+    throw new Error("Expert WebGPU requires explicit native WebGPU judge selection or a CPU judge.");
   }
   const judgeDevices = parseMemoryMap(mapping, judge.gpuIds);
-  if ([...judgeDevices.values()].includes(uuid)) throw new Error("Expert and judge share a physical GPU UUID.");
+  const mapped = judgeDevices.get(adapter) ?? null;
+  if (mapped !== null && mapped !== uuid) throw new Error("Expert adapter UUID contradicts the judge mapping.");
+  if (mapped === null && [...judgeDevices.values()].includes(uuid)) throw new Error("Expert UUID is mapped to another judge adapter.");
 }
 
 export function configuredExpertGpu(): ExpertGpu | null {
@@ -30,12 +32,23 @@ export function configuredExpertGpu(): ExpertGpu | null {
   const adapter = Number(ordinal);
   const uuid = process.env.CODE_GUARDS_EXPERT_GPU_UUID ?? "";
   validateExpertAdapter(adapter, uuid, semanticAccelerationConfig(), process.env.CODE_GUARDS_GPU_MEMORY_MAP ?? "");
-  const budgetMiB = Number(process.env.CODE_GUARDS_EXPERT_GPU_BUDGET_MIB ?? "");
+  const expertLimit = Number(process.env.CODE_GUARDS_EXPERT_GPU_BUDGET_MIB ?? "");
+  const judgeLimit = Number(process.env.CODE_GUARDS_GPU_MEMORY_BUDGET_MIB ?? "0");
+  const budgetMiB = semanticAccelerationConfig().gpuIds.includes(adapter) ? Math.min(expertLimit, judgeLimit) : expertLimit;
   if (!Number.isSafeInteger(budgetMiB) || budgetMiB < 1) throw new Error("Set a positive expert GPU memory budget.");
   const python = process.env.CODE_GUARDS_WEBGPU_PYTHON ?? (process.platform === "win32" ? "python" : "python3");
   const versions = spawnSync(python, ["-c", "from importlib.metadata import version; print(':'.join(version(x) for x in ('onnxruntime','onnxruntime-ep-webgpu','tokenizers','numpy')))"], {encoding: "utf8", timeout: 10000, windowsHide: true});
   if (versions.status !== 0 || typeof versions.stdout !== "string" || !versions.stdout.trim()) throw new Error("Cannot identify native expert runtime versions.");
   return {adapter, uuid, budgetMiB, python, identity: "native-webgpu-mean-v1:" + uuid + ":" + versions.stdout.trim()};
+}
+
+/** Check physical headroom before a cold load; the live monitor remains authoritative. */
+export function requireExpertHeadroom(device: DeviceMemory, budgetMiB: number, weightBytes: number): void {
+  // Reserve room for the weights and execution scratch space. This is an
+  // admission estimate, not a promise about an ONNX session's peak usage.
+  const reserve = Math.ceil(weightBytes / 1048576) + 2048;
+  const available = Math.min(device.totalMiB, budgetMiB) - device.usedMiB;
+  if (available < reserve) throw new Error(`Insufficient specialist GPU headroom: ${available} MiB available, ${reserve} MiB admission reserve.`);
 }
 
 function decodeRow(value: JsonValue, dimensions: number): number[] | null {
@@ -76,6 +89,9 @@ class GpuEmbeddingProcess {
   private diagnostics = "";
 
   constructor(private readonly profile: ExpertProfile, gpu: ExpertGpu) {
+    const device = readNvidiaMemory().find(item => item.uuid === gpu.uuid) ?? null;
+    if (!device) throw new Error("Mapped expert GPU is unavailable.");
+    requireExpertHeadroom(device, gpu.budgetMiB, profile.weightBytes);
     this.memory = new GpuMemoryMonitor(new Map([[gpu.adapter, gpu.uuid]]), gpu.budgetMiB);
     this.memory.sample("before-load");
     this.ready = new Promise<void>((resolve, reject) => { this.readyResolve = resolve; this.readyReject = reject; });
@@ -169,7 +185,7 @@ class GpuEmbeddingProcess {
   }
 }
 
-/** Allocate a dedicated native GPU model only on an embedding-cache miss. */
+/** Allocate a native GPU model only on an embedding-cache miss. */
 export async function openGpuEmbeddingRuntime(profile: ExpertProfile, gpu: ExpertGpu): Promise<EmbeddingRuntime> {
   const process = new GpuEmbeddingProcess(profile, gpu);
   try { await process.initialise(); }
