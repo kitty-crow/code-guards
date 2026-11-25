@@ -124,13 +124,19 @@ export function observeSemanticProgress(observer: (event: SemanticProgressEvent)
   return () => { progressObserver = previous; };
 }
 
+/** Apply the same local model settings for tokenisers and every neural expert. */
+export async function loadTransformers() {
+  const runtime = await import("@huggingface/transformers");
+  if ((process.env.CODE_GUARDS_OFFLINE ?? "") === "1") runtime.env.allowRemoteModels = false;
+  const modelCache = process.env.CODE_GUARDS_MODEL_CACHE ?? "";
+  if (modelCache) runtime.env.cacheDir = modelCache;
+  return runtime;
+}
+
 async function loadClassifier(): Promise<Classifier> {
   const started = performance.now();
   progressObserver("loading");
-  const { env, pipeline } = await import("@huggingface/transformers");
-  if ((process.env.CODE_GUARDS_OFFLINE ?? "") === "1") env.allowRemoteModels = false;
-  const modelCache = process.env.CODE_GUARDS_MODEL_CACHE ?? "";
-  if (modelCache) env.cacheDir = modelCache;
+  const { pipeline } = await loadTransformers();
 
   const chosen = [...acceleration.features].filter(
     (feature): feature is "cuda" | "dml" | "webgpu" =>

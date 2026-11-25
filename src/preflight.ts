@@ -13,7 +13,7 @@ import { guardCapabilities } from "./experts.ts";
 import { typeReuse } from "./guards/type-reuse.ts";
 import type { AnalysisOptions } from "./engine.ts";
 import { loadProject } from "./project.ts";
-import { configureSemanticAcceleration, MODEL, premiseWindowCount,
+import { configureSemanticAcceleration, loadTransformers, MODEL, premiseWindowCount,
   type SemanticQuestion, type SemanticScorer, type Tokenizer } from "./semantic.ts";
 
 export type InferenceWork = {
@@ -151,10 +151,7 @@ export class InferenceCounter {
  * inference session, ONNX weights or physical GPU worker is initialised.
  */
 export async function loadPreflightTokenizer(): Promise<Tokenizer> {
-  const { AutoTokenizer, env } = await import("@huggingface/transformers");
-  if ((process.env.CODE_GUARDS_OFFLINE ?? "") === "1") env.allowRemoteModels = false;
-  const cache = process.env.CODE_GUARDS_MODEL_CACHE ?? "";
-  if (cache) env.cacheDir = cache;
+  const { AutoTokenizer } = await loadTransformers();
   const tokenizer = await AutoTokenizer.from_pretrained(MODEL);
   return {
     encode: (text, options) => tokenizer.encode(text, options),

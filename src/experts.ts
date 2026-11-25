@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { GuardName, Location } from "./model.ts";
-import { MODEL, MAX_MODEL_TOKENS } from "./semantic.ts";
+import { MODEL, MAX_MODEL_TOKENS, loadTransformers } from "./semantic.ts";
 
 export type Capability = "compiler-facts" | "semantic-judgement" | "prose-retrieval";
 export type ExpertProfile = {
@@ -46,10 +46,7 @@ export type ExpertMetrics = {
 };
 
 async function loadProseRuntime(): Promise<EmbeddingRuntime> {
-  const { env, pipeline } = await import("@huggingface/transformers");
-  if ((process.env.CODE_GUARDS_OFFLINE ?? "") === "1") env.allowRemoteModels = false;
-  const cache = process.env.CODE_GUARDS_MODEL_CACHE ?? "";
-  if (cache) env.cacheDir = cache;
+  const { pipeline } = await loadTransformers();
   const extractor = await pipeline("feature-extraction", PROSE_EXPERT.model, {
     revision: PROSE_EXPERT.revision, device: PROSE_EXPERT.provider, dtype: PROSE_EXPERT.precision
   });
@@ -61,7 +58,7 @@ async function loadProseRuntime(): Promise<EmbeddingRuntime> {
       if (!inputs.length) return passages.map(() => null);
       const tensor = await extractor(inputs, {pooling: "mean", normalize: true});
       try {
-        const data = tensor.data;
+        const { data }: { data: object | null } = tensor;
         if (!(data instanceof Float32Array) || data.length !== inputs.length * 384) throw new Error("Unexpected prose embedding shape.");
         const rows = inputs.map((_, index) => Array.from(data.slice(index * 384, (index + 1) * 384)));
         let cursor = 0;
@@ -144,17 +141,25 @@ export class ProseExpert {
 
   private async embedGroup(group: SourceEvidence[]): Promise<(number[] | null)[]> {
     const keys = group.map(item => contentKey(item.text));
-    const missing = group.filter((_, index) => !this.vectors.has(keys[index] ?? ""));
-    this.metrics.cacheHits += group.length - missing.length;
-    if (missing.length) {
-      const session = await this.session();
-      const vectors = await session.embed(missing.map(item => item.text));
-      if (vectors.length !== missing.length) throw new Error("Incomplete prose expert batch.");
-      for (const [index, item] of missing.entries()) this.remember(contentKey(item.text), vectors[index] ?? null);
-      this.metrics.batches += 1;
-      this.sampleMemory();
+    const completed = new Map<string, number[] | null>();
+    for (const key of keys) {
+      if (this.vectors.has(key)) completed.set(key, this.vectors.get(key) ?? null);
     }
-    return keys.map(key => this.vectors.get(key) ?? null);
+    const missing = group.filter(item => !completed.has(contentKey(item.text)));
+    this.metrics.cacheHits += group.length - missing.length;
+    if (!missing.length) return keys.map(key => completed.get(key) ?? null);
+    const session = await this.session();
+    const vectors = await session.embed(missing.map(item => item.text));
+    if (vectors.length !== missing.length) throw new Error("Incomplete prose expert batch.");
+    for (const [index, item] of missing.entries()) {
+      const key = contentKey(item.text);
+      const vector = vectors[index] ?? null;
+      completed.set(key, vector);
+      this.remember(key, vector);
+    }
+    this.metrics.batches += 1;
+    this.sampleMemory();
+    return keys.map(key => completed.get(key) ?? null);
   }
 
   private async retrieve(passages: SourceEvidence[]): Promise<RetrievalResult> {
