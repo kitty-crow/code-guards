@@ -6,7 +6,7 @@
  */
 import { performance } from "node:perf_hooks";
 import { type AccelerationConfig, accelerationNames } from "./acceleration.ts";
-import { documentation } from "./guards/documentation.ts";
+import { documentation, handoverQuestion, styleQuestion } from "./guards/documentation.ts";
 import { functionQuality } from "./guards/function-quality.ts";
 import { moduleCohesion } from "./guards/module-cohesion.ts";
 import { guardCapabilities } from "./experts.ts";
@@ -212,9 +212,9 @@ export async function estimateInference(
     if (tokeniser && config.enabled.has("documentation")) {
       progress("[Code Guards] Preflight: enumerating documentation questions");
       const maximum = new InferenceCounter(tokeniser, acceleration);
-      await documentation(project, maximum.reject);
+      await documentation(project, question => question.same === styleQuestion.same ? maximum.accept(question) : maximum.reject(question));
       const minimum = new InferenceCounter(tokeniser, acceleration);
-      await documentation(project, minimum.accept);
+      await documentation(project, question => question.same === handoverQuestion.same ? minimum.accept(question) : minimum.reject(question));
       stages.push({
         guard: "documentation", minimum: minimum.snapshot(),
         maximum: maximum.snapshot()

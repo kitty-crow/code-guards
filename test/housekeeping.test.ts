@@ -423,3 +423,40 @@ test("CG411 identifies sentence boundaries after Markdown emphasis and semicolon
   assert.ok(excerpts.some(text => text.startsWith("this extra qualification")));
   assert.equal(findings.filter(item => item.code === "CG411" && item.message.includes("Formulaic")).length, 1);
 });
+
+test("CG411 retains concrete constraints despite a formulaic style score", async () => {
+  const project = fixture({"README.md": "# Usage\n\nNote that the command accepts only UTF-8.\n\nNOTE: Writes require an open connection.\n\nExit 2 on failure."});
+  const seen: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    if (question.same.includes("formulaic or overexplained")) {
+      seen.push(question.premise);
+      return endorse(question);
+    }
+    if (question.same.includes("concrete useful information")) return endorse(question);
+    return reject(question);
+  };
+  const findings = await documentation(project, scorer);
+  assert.ok(seen.some(item => item.includes("Exit 2 on failure.")));
+  assert.ok(seen.some(item => item.includes("Note that")));
+  assert.ok(!findings.some(item => item.code === "CG411"));
+});
+
+test("CG410 evaluates polished empty prose without a lexical trigger", async () => {
+  const project = fixture({"README.md": "# Usage\n\nEvery part reflects the intent behind the whole."});
+  const scorer: SemanticScorer = async question => question.same.includes("broad promotional or vague claims") ? endorse(question) : reject(question);
+  const findings = await documentation(project, scorer);
+  assert.ok(findings.some(item => item.code === "CG410"));
+});
+
+test("CG411 includes list and table context but excludes quotations and fenced examples", async () => {
+  const project = fixture({"README.md": "# Usage\n\n- Exit 2 on failure.\n\n| Mode | Result |\n| --- | --- |\n| Read | No files are written. |\n\n> Example quotation to exclude.\n\n```text\nExample code to exclude.\n```"});
+  const seen: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    seen.push(question.premise);
+    return reject(question);
+  };
+  await documentation(project, scorer);
+  assert.ok(seen.some(item => item.includes("Markdown role: list") && item.includes("Exit 2")));
+  assert.ok(seen.some(item => item.includes("Markdown role: table") && item.includes("No files are written")));
+  assert.ok(seen.every(item => !item.includes("Example quotation") && !item.includes("Example code")));
+});

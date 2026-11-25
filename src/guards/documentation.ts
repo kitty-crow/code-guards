@@ -8,7 +8,7 @@ import { readScripts } from "../scripts.ts";
 import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
 import type { ProseExpert } from "../experts.ts";
 
-type Paragraph = { line: number; text: string };
+type Paragraph = { line: number; text: string; section: string; kind: "paragraph" | "heading" | "list" | "table" };
 type DocIssue = {
   code: string;
   file: string;
@@ -23,7 +23,6 @@ type RelatedDocIssue = DocIssue & { related: Location };
 const ignored = new Set([".git", "node_modules", "dist", "coverage", "examples", ".cache", "vendor", "third_party", "third-party"]);
 const marketing = /\b(?:seamlessly|cutting.edge|state.of.the.art|robust and scalable|powerful solution|revolutionary|effortlessly|leverage the power|unlock the potential|comprehensive suite|future.proof|game.changing)\b/i;
 const promptLeak = /\b(?:you are an (?:expert|assistant)|as an ai language model|your task is to|do not hallucinate|act as a (?:senior|professional|helpful)|here is the prompt|follow these instructions)\b/i;
-const vague = /\b(?:easy.to.use|highly flexible|powerful|robust|comprehensive|best.in.class|intuitive|efficient|enterprise.ready|production.ready|modern solution)\b/i;
 
 // A change log belongs in release notes; a feature description should describe current usage.
 const releaseFile = /(?:^|\/)(?:changelog|history|release[-_]?notes?|migrations?)(?:\.[^/]+|\/)/i;
@@ -93,17 +92,40 @@ function paragraphs(lines: string[]): Paragraph[] {
   const result: Paragraph[] = [];
   let buffer: string[] = [];
   let start = 0;
-  let fenced = false;
+  let fence = "";
+  let section = "Document introduction";
   const flush = (): void => {
-    if (buffer.length) result.push({line: start, text: buffer.join(" ")});
+    if (buffer.length) result.push({line: start, text: buffer.join(" "), section, kind: "paragraph"});
     buffer = [];
   };
-  lines.forEach((line, i) => {
-    if (/^\s*```/.test(line)) { flush(); fenced = !fenced; return; }
-    if (fenced || !line.trim() || /^\s*(?:#|\||[-*] |\d+\. )/.test(line)) { flush(); return; }
+  for (const [i, line] of lines.entries()) {
+    const trimmed = line.trim();
+    const delimiter = /^(?:`{3,}|~{3,})/.exec(trimmed);
+    if (delimiter && (!fence || delimiter[0].startsWith(fence))) {
+      flush();
+      fence = fence ? "" : delimiter[0];
+      continue;
+    }
+    if (fence || !trimmed || /^\s{4}\S/.test(line) || trimmed.startsWith(">")) { flush(); continue; }
+    const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
+    if (heading) {
+      flush();
+      section = heading[1] ?? "Untitled section";
+      if (/[.!?]$/.test(section)) result.push({line: i + 1, text: section, section, kind: "heading"});
+      continue;
+    }
+    const list = trimmed.match(/^(?:[-*+]|\d+\.)\s+(.+)$/);
+    const table = trimmed.startsWith("|");
+    if (list || table) {
+      flush();
+      const text = list ? list[1] ?? "" : trimmed;
+      const plain = text.replace(/`[^`]*`/g, "").replace(/\[[^\]]+\]\([^)]+\)/g, "").replace(/[|:\s-]/g, "");
+      if (plain) result.push({line: i + 1, text, section, kind: list ? "list" : "table"});
+      continue;
+    }
     if (!buffer.length) start = i + 1;
-    buffer.push(line.trim());
-  });
+    buffer.push(trimmed);
+  }
   flush();
   return result;
 }
@@ -238,7 +260,7 @@ function checkLinks(root: string, file: string, content: string, findings: Findi
 
 // Scope CG411 to README prose. Module API pages contain reference details that
 // are not development handovers, even when they discuss how a guard works.
-const handoverQuestion = {
+export const handoverQuestion = {
   same: "this paragraph is a developer-facing progress report, delivery note or self-justification about how work was completed, checked or left unfinished, not lasting user documentation",
   different: "this paragraph provides useful enduring information for readers about the software, such as behaviour, commands, interfaces, genuine limitations or concise attribution"
 } as const;
@@ -265,9 +287,14 @@ async function checkHandover(file: string, paragraph: Paragraph, findings: Findi
 // Review the phrasing of individual sentences, not just their subject matter.
 // Structural punctuation identifies candidates; no lexical triggers or examples
 // are used to decide which sentences are problematic.
-const styleQuestion = {
-  same: "the highlighted sentence is formulaic or overexplained technical prose, using needless clarification, self-conscious reassurance or an artificial explanatory cadence instead of making a useful point",
-  different: "the highlighted sentence is direct, relevant technical documentation that concisely explains useful behaviour, an instruction, a real constraint or meaningful context"
+export const styleQuestion = {
+  same: "the highlighted sentence is formulaic or overexplained technical prose, using needless clarification, self-conscious reassurance or an artificial explanatory cadence",
+  different: "the wording of the highlighted sentence is direct and concise, without redundant explanations or mechanical transitions"
+} as const;
+
+const informationQuestion = {
+  same: "the highlighted sentence states concrete useful information, such as a software behaviour, specific data representation, API limitation, instruction, constraint or meaningful context",
+  different: "the highlighted sentence is verbal padding, restates information already supplied by its context, or conveys no concrete information for the reader"
 } as const;
 
 function sentencesIn(paragraph: Paragraph): string[] {
@@ -287,19 +314,23 @@ function traceStyle(file: string, line: number, excerpt: string, score: {sameCon
 async function checkStyle(file: string, paragraph: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
   if (releaseFile.test(file)) return;
   for (const sentence of sentencesIn(paragraph)) {
-    if (sentence.length < 40) continue;
-    const verdict = await score({
-      premise: `Documentation paragraph: ${paragraph.text}\nSentence to review: ${sentence}`,
-      same: styleQuestion.same,
-      different: styleQuestion.different
-    });
+    const premise = `Section: ${paragraph.section}\nMarkdown role: ${paragraph.kind}\nDocumentation paragraph: ${paragraph.text}\nSentence to review: ${sentence}`;
+    const verdict = await score({premise, ...styleQuestion});
     traceStyle(file, paragraph.line, sentence, verdict);
     if (!supportsReuse(verdict, 0.81) || verdict.differentConcept > 0.35) continue;
+    // Style and information value answer different questions. Investigate
+    // the actual contribution before treating a writing pattern as a defect.
+    const information = await score({premise, ...informationQuestion});
+    if (supportsReuse(information, 0.75)) continue;
+    if (!supportsReuse({sameConcept: information.differentConcept, differentConcept: information.sameConcept}, 0.75)) {
+      console.error(`[Code Guards] Unresolved CG411 information value at ${file}:${paragraph.line}: ${sentence}`);
+      continue;
+    }
     issue(findings, {
       code: "CG411", file, line: paragraph.line,
       title: "Formulaic or unnecessary wording in documentation",
       subject: sentence.slice(0, 115),
-      reason: `The local language model judged this sentence more like padded or mechanical explanation than useful technical documentation (${Math.round(verdict.sameConcept * 100)}% support versus ${Math.round(verdict.differentConcept * 100)}% opposing evidence).`,
+      reason: `Style review found mechanical or padded wording (${Math.round(verdict.sameConcept * 100)}% support). A separate information-value assessment supported unnecessary or redundant content (${Math.round(information.differentConcept * 100)}% support versus ${Math.round(information.sameConcept * 100)}% support for useful information).`,
       suggestion: "Avoid prompt-like wording in README and documentation. State relevant facts directly, remove redundant clarification and defensive assurances, and keep necessary technical detail."
     });
   }
@@ -374,7 +405,8 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
       reason: "The sentence addresses an AI agent rather than someone trying to use or maintain this project.", suggestion: "Describe what the software does and how to use it, not instructions for generating a README."});
   }
   checkNarrative(file, lines, findings);
-  const prose = paragraphs(lines);
+  const blocks = paragraphs(lines);
+  const prose = blocks.filter(block => block.kind === "paragraph");
   await checkReadmeIntroduction(file, prose, findings, score);
   for (const [i, candidate] of prose.entries()) {
     const priorFindings = findings.length;
@@ -388,19 +420,17 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
         reason: `This paragraph substantially repeats a paragraph at line ${candidate.line}.`, suggestion: "Consolidate the explanation once, then link to it from any other section.",
         related: {file, line: candidate.line, column: 1}});
     }
-    // Zero-shot is a second stage: it must endorse a potentially vague paragraph.
-    // Candidate filtering prevents constant model downloads for already specific docs.
-    if (candidate.text.length < 50 || !vague.test(candidate.text) || marketing.test(candidate.text)) continue;
     const verdict = await score({
-      premise: `Documentation paragraph: ${candidate.text}`,
-      same: "this is vague promotional documentation without concrete user-facing information",
-      different: "this paragraph contains precise implementation details, real usage instructions or testable limitations"
+      premise: `Documentation paragraph: ${candidate.text}\nSection: ${candidate.section}`,
+      same: "this paragraph makes broad promotional or vague claims without concrete user-facing information about the software",
+      different: "this paragraph supplies useful technical context, precise implementation details, real usage instructions, examples or testable limitations"
     });
     if (!supportsReuse(verdict, 0.75)) continue;
     issue(findings, {code: "CG410", file, line: candidate.line, title: "Zero-shot review suggests vague documentation", subject: candidate.text.slice(0, 115),
       reason: `The local NLI model favoured vague language over concrete usage (${Math.round(verdict.sameConcept * 100)}% entailment). This is a recommendation, not a factuality verdict.`,
       suggestion: "Replace the broad claim with an actual CLI invocation, API example, constraints, or a reproducible observation."});
   }
+  for (const block of blocks.filter(item => item.kind !== "paragraph")) await checkStyle(file, block, findings, score);
   if (expert) await checkSemanticRedundancy(file, prose, findings, score, expert);
 }
 
