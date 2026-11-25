@@ -116,7 +116,7 @@ test("retrieval can shortlist multiple candidates for a code-to-documentation qu
   }));
   const inputs = [passage("first", 1), passage("second", 2), passage("unrelated", 3), passage("query", 4)];
   try {
-    const result = await expert.rank(inputs, (_a, b) => b.text === "query", 2);
+    const result = await expert.search(inputs.slice(0, -1), inputs.slice(-1), 2);
     assert.deepEqual(result.matches.map(item => item.earlier.location.line), [1, 2]);
   } finally { await expert.close(); }
 });

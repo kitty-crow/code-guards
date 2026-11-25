@@ -24,6 +24,8 @@ export function validateExpertAdapter(adapter: number, uuid: string, judge: Acce
 
 export function configuredExpertGpu(): ExpertGpu | null {
   const ordinal = process.env.CODE_GUARDS_EXPERT_GPU_ADAPTER ?? "";
+  const otherSettings = (process.env.CODE_GUARDS_EXPERT_GPU_UUID ?? "") || (process.env.CODE_GUARDS_EXPERT_GPU_BUDGET_MIB ?? "");
+  if (!ordinal && otherSettings) throw new Error("Expert GPU settings require an explicit adapter ordinal.");
   if (!ordinal) return null;
   const adapter = Number(ordinal);
   const uuid = process.env.CODE_GUARDS_EXPERT_GPU_UUID ?? "";

@@ -1,7 +1,7 @@
 import { loadProject, type Project } from "./project.ts";
 import {
   noNestedIf, typeReuse, functionQuality, moduleCohesion, codeHealth, crossModule,
-  documentation, repoHygiene, enterpriseLookingNaming, reviewPractices
+  documentationWithExperts, repoHygiene, enterpriseLookingNaming, reviewPractices
 } from "./guards/index.ts";
 import { guards, resolveExpectations, type Finding, type GuardName } from "./model.ts";
 import { observeSemanticProgress, observeSemanticTimings, semanticExecutionProvider, zeroShot } from "./semantic.ts";
@@ -55,7 +55,7 @@ async function analyseFunctions(project: Project, includeTests: boolean, report:
 async function analyseDocumentation(project: Project, prose: ReturnType<typeof configuredProseExpert>, report: (message: string) => void, telemetry: (event: ScanTelemetry) => void): Promise<Finding[]> {
   const verify = (process.env.CODE_GUARDS_EXPERIMENTAL_CONTRACTS ?? "") === "1";
   const code = verify ? configuredCodeExpert() : null;
-  try { return await documentation(project, zeroShot, prose, verify, code); }
+  try { return await documentationWithExperts(project, zeroShot, {prose, verifyContracts: verify, contractExpert: code}); }
   finally {
     if (code) {
       await code.close();

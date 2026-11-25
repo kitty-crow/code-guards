@@ -25,3 +25,5 @@ Expert telemetry reports actual encoded inputs, cache hits, persistent hits, bat
 The optional contract review uses Jina retrieval over compiler declarations, signature queries and linked documentation passages. `rank` accepts an optional retrieval limit from one to eight candidates per query. Candidates provide evidence for MobileBERT, not a final classification. The contract retrieval session closes before semantic judgement.
 
 An optional [isolated native WebGPU embedding worker](expert-gpu.md) runs either embedding checkpoint on a separately assigned physical adapter, with provider proof and sampled memory budgeting. Cache entries distinguish the GPU provider, runtime versions and physical device. The engine reports the effective expert profile.
+
+`search` restricts ranking to designated queries against corpus passages, without calculating corpus-to-corpus similarities. It shares the persistent cache with ordinary ranking.

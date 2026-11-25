@@ -7,7 +7,8 @@ import { afterEach, test } from "node:test";
 import { loadProject } from "../src/project.ts";
 import { codeHealth } from "../src/guards/code-health.ts";
 import { crossModule } from "../src/guards/cross-module.ts";
-import { documentation } from "../src/guards/documentation.ts";
+import { documentation, documentationWithExperts } from "../src/guards/documentation.ts";
+import { CodeExpert } from "../src/experts.ts";
 import { repoHygiene } from "../src/guards/repo-hygiene.ts";
 import type { SemanticScorer } from "../src/semantic.ts";
 import { readScripts } from "../src/scripts.ts";
@@ -561,4 +562,24 @@ test("ambiguous contract coverage expands the actual section context before maki
   const findings = await documentation(project, scorer, null, true);
   assert.equal(expanded, 1);
   assert.ok(!findings.some(item => item.code === "CG409" && item.subject === "save"));
+});
+
+test("contract retrieval finds an implicit claim through a multi-hop local link", async () => {
+  const project = fixture({
+    "src/store.ts": "export function save(value: string): string { if (!value) throw Error('empty'); return value.trim(); }",
+    "docs/modules/store.md": "# Store\n\nSee [behaviour](../behaviour.md).",
+    "docs/behaviour.md": "# Behaviour\n\nSee [limits](limits.md).",
+    "docs/limits.md": "# Input limits\n\nEmpty strings are accepted. See [behaviour](behaviour.md)."
+  });
+  const expert = new CodeExpert(async () => ({
+    embed: async inputs => inputs.map(text => /Empty strings|Export save/.test(text) ? [1, 0] : [0, 1]),
+    dispose: async () => {}
+  }));
+  const scorer: SemanticScorer = async question => {
+    if (question.same.includes("concrete assertion about this exported contract") && question.premise.includes("Empty strings are accepted.")) return endorse(question);
+    return reject(question);
+  };
+  const findings = await documentationWithExperts(project, scorer, {prose: null, verifyContracts: true, contractExpert: expert});
+  assert.ok(findings.some(item => item.code === "CG413" && item.location.file === "docs/limits.md"));
+  await assert.rejects(expert.rank([{location: {file: "a", line: 1, column: 1}, text: "one"}]), /closed/);
 });

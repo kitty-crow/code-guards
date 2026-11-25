@@ -1,0 +1,24 @@
+name: Specialist model smoke
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/verify-experts.ts
+      - .github/workflows/specialist-smoke.yml
+permissions:
+  contents: read
+jobs:
+  cpu-smoke:
+    name: Real pinned embedding models (internal fixtures)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CODE_GUARDS_EXPERT_RAM_MIB: '4096'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - name: Install with Bun
+        run: bun install --frozen-lockfile
+      - name: Verify cold and warm retrieval
+        run: bun scripts/verify-experts.ts

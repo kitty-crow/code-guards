@@ -405,8 +405,7 @@ async function retrieveContractPassages(contract: ModuleContract, passages: Cont
   }));
   const query: SourceEvidence = {location: contract.source, text: contract.evidence};
   const signature: SourceEvidence = {location: contract.source, text: contract.signature};
-  const retrieval = await expert.rank([...corpus, query, signature],
-    (earlier, later) => earlier.location.file !== contract.source.file && later.location.file === contract.source.file, 3);
+  const retrieval = await expert.search(corpus, [query, signature], 3);
   if (retrieval.unresolved.some(item => item === query)) reportUnresolvedContract(contract, contract.source.file, "overlength CG409 retrieval");
   const retrieved = new Set(retrieval.matches.map(pair => JSON.stringify([pair.earlier.location.file, pair.earlier.location.line])));
   return passages.filter(passage => matchesContract(passage, contract.name) || retrieved.has(passageKey(passage)));
@@ -756,8 +755,18 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
 
 // Markdown is not part of TypeScript's source graph, so inspect the target
 // repository directly when validating user-facing usage and module coverage.
-export async function documentation(project: Project, score: SemanticScorer = zeroShot, expert: ProseExpert | null = null,
-  verifyContracts = (process.env.CODE_GUARDS_EXPERIMENTAL_CONTRACTS ?? "") === "1", contractExpert: CodeExpert | null = null): Promise<Finding[]> {
+export function documentation(project: Project, score: SemanticScorer = zeroShot, expert: ProseExpert | null = null,
+  verifyContracts = (process.env.CODE_GUARDS_EXPERIMENTAL_CONTRACTS ?? "") === "1"): Promise<Finding[]> {
+  return documentationWithExperts(project, score, {prose: expert, verifyContracts, contractExpert: null});
+}
+
+export type DocumentationExperts = {
+  prose: ProseExpert | null;
+  verifyContracts: boolean;
+  contractExpert: CodeExpert | null;
+};
+
+export async function documentationWithExperts(project: Project, score: SemanticScorer, experts: DocumentationExperts): Promise<Finding[]> {
   const findings: Finding[] = [];
   const root = project.root;
   const fileNames = markdownFiles(root);
@@ -766,7 +775,7 @@ export async function documentation(project: Project, score: SemanticScorer = ze
     reason: "The repository has no top-level entry point explaining how to install, run or maintain it.",
     suggestion: "Add a short README with purpose, prerequisites, working installation commands, example output, limitations and a link to docs/index.md."});
   checkModuleCoverage(project, files, findings);
-  if (verifyContracts) await reviewModuleContracts(project, files, score, findings, contractExpert);
+  if (experts.verifyContracts) await reviewModuleContracts(project, files, score, findings, experts.contractExpert);
   const readme = read(root, "README.md");
   if (readme && project.files.some(file => path.relative(root, file.fileName).startsWith("src/")) && !readme.includes("docs/index.md")) issue(findings, {
     code: "CG407", file: "README.md", line: 1, title: "README does not point developers to module docs", subject: "README.md",
@@ -778,7 +787,7 @@ export async function documentation(project: Project, score: SemanticScorer = ze
     if (!content) continue;
     checkCommands(file, content, packageScripts(root, file), findings);
     checkLinks(root, file, content, findings);
-    await checkProse(file, content, findings, score, expert);
+    await checkProse(file, content, findings, score, experts.prose);
     if (path.basename(file).toLowerCase() !== "readme.md" || content.length < 180) continue;
     if (/\b(?:bun|npm|pnpm|yarn) (?:install|run|test|x)\b/.test(content)) continue;
     issue(findings, {code: "CG402", file, line: 1, title: "README has no runnable setup or usage command", subject: "README.md",
