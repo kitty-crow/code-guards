@@ -10,6 +10,7 @@ test("mechanical guards do not request model capabilities", () => {
   assert.deepEqual(guardCapabilities("no-nested-if"), ["compiler-facts"]);
   assert.ok(guardCapabilities("documentation").includes("prose-retrieval"));
   assert.ok(guardCapabilities("type-reuse").includes("semantic-judgement"));
+  assert.ok(guardCapabilities("function-quality").includes("code-retrieval"));
 });
 
 test("prose retrieval loads lazily, ranks evidence and reuses completed embeddings", async () => {

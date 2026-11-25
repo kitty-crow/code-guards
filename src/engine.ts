@@ -1,11 +1,11 @@
-import { loadProject } from "./project.ts";
+import { loadProject, type Project } from "./project.ts";
 import {
   noNestedIf, typeReuse, functionQuality, moduleCohesion, codeHealth, crossModule,
   documentation, repoHygiene, enterpriseLookingNaming, reviewPractices
 } from "./guards/index.ts";
 import { guards, resolveExpectations, type Finding, type GuardName } from "./model.ts";
 import { observeSemanticProgress, observeSemanticTimings, semanticExecutionProvider, zeroShot } from "./semantic.ts";
-import { configuredProseExpert, guardCapabilities } from "./experts.ts";
+import { configuredCodeExpert, configuredProseExpert, guardCapabilities } from "./experts.ts";
 
 export type AnalysisOptions = {
   enabled: Set<GuardName>;
@@ -39,6 +39,17 @@ const codeHealthGuards: readonly GuardName[] = [
 ];
 const crossModuleGuards: readonly GuardName[] = ["single-source", "project-conventions"];
 
+async function analyseFunctions(project: Project, includeTests: boolean, report: (message: string) => void): Promise<Finding[]> {
+  const expert = configuredCodeExpert();
+  try { return await functionQuality(project, includeTests, zeroShot, expert); }
+  finally {
+    if (expert) {
+      await expert.close();
+      report("[Code Guards] Code expert: " + JSON.stringify(expert.metrics));
+    }
+  }
+}
+
 /** Run every selected rule and report stage-level progress independently of the findings format. */
 export async function analyse(
   config: AnalysisOptions,
@@ -57,7 +68,7 @@ export async function analyse(
   const stages: Stage[] = [
     {name: "no-nested-if", includes: ["no-nested-if"], run: () => noNestedIf(project)},
     {name: "type-reuse", includes: ["type-reuse"], run: () => typeReuse(project, config.includeTests)},
-    {name: "function-quality", includes: ["function-quality"], run: () => functionQuality(project, config.includeTests)},
+    {name: "function-quality", includes: ["function-quality"], run: () => analyseFunctions(project, config.includeTests, report)},
     {name: "module-cohesion", includes: ["module-cohesion"], run: () => moduleCohesion(project, config.includeTests)},
     {name: "code-health (13 rules)", includes: codeHealthGuards, run: () =>
       codeHealth(project, config.includeTests).filter(item => config.enabled.has(item.guard))},

@@ -1,3 +1,4 @@
+import { CodeExpert } from "../src/experts.ts";
 import { strict as assert } from "node:assert";
 import { rmSync } from "node:fs";
 import path from "node:path";
@@ -486,4 +487,19 @@ test("CG314 resolves imported assertion aliases and does not trust arbitrary loc
   });
   const findings = codeHealth(sample, true).filter(item => item.code === "CG314");
   assert.equal(findings.length, 1);
+});
+
+test("CG205 retrieves a code candidate without common call names but still requires NLI support", async () => {
+  const sample = project({
+    "one.ts": "export function first(value: number) { const bounded = Math.max(value, 0); const rounded = Math.round(bounded); return rounded; }",
+    "two.ts": "export function second(value: number) { const bounded = value < 0 ? 0 : value; const rounded = Math.floor(bounded + 0.5); return rounded; }"
+  });
+  const makeExpert = () => new CodeExpert(async () => ({
+    embed: async inputs => inputs.map(() => [1, 0]),
+    dispose: async () => {}
+  }));
+  const endorsed = await functionQuality(sample, false, endorse, makeExpert());
+  const opposed = await functionQuality(sample, false, reject, makeExpert());
+  assert.equal(endorsed.filter(item => item.code === "CG205").length, 1);
+  assert.equal(opposed.filter(item => item.code === "CG205").length, 0);
 });

@@ -2,12 +2,15 @@ import { createHash } from "node:crypto";
 import type { GuardName, Location } from "./model.ts";
 import { MODEL, MAX_MODEL_TOKENS, loadTransformers } from "./semantic.ts";
 
-export type Capability = "compiler-facts" | "semantic-judgement" | "prose-retrieval";
+export type Capability = "compiler-facts" | "semantic-judgement" | "prose-retrieval" | "code-retrieval";
 export type ExpertProfile = {
   model: string;
   revision: string;
   capability: Capability;
   contextTokens: number;
+  modelContextTokens: number;
+  dimensions: number;
+  batchSize: number;
   provider: "cpu";
   precision: "fp32";
   cacheNamespace: string;
@@ -19,17 +22,35 @@ export const PROSE_EXPERT: ExpertProfile = {
   revision: "5356e92506bd45bf15c2295d5c8e19b5bc7abf94",
   capability: "prose-retrieval",
   contextTokens: 256,
+  modelContextTokens: 256,
+  dimensions: 384,
+  batchSize: 8,
   provider: "cpu",
   precision: "fp32",
   cacheNamespace: "mean-normalised-complete-paragraph-v1",
   licence: "Apache-2.0",
   weightBytes: 90400000
 };
+export const CODE_EXPERT: ExpertProfile = {
+  model: "jinaai/jina-embeddings-v2-base-code",
+  revision: "9d61b434b354511c603038133a8c1ce2190e4d98",
+  capability: "code-retrieval",
+  contextTokens: 1024,
+  modelContextTokens: 8192,
+  dimensions: 768,
+  batchSize: 2,
+  provider: "cpu",
+  precision: "fp32",
+  cacheNamespace: "mean-normalised-complete-implementation-v1",
+  licence: "Apache-2.0",
+  weightBytes: 642000000
+};
 export const FINAL_JUDGE = {model: MODEL, contextTokens: MAX_MODEL_TOKENS, capability: "semantic-judgement"} as const;
 
 export function guardCapabilities(guard: GuardName): readonly Capability[] {
   if (guard === "documentation") return ["compiler-facts", "prose-retrieval", "semantic-judgement"];
-  if (guard === "type-reuse" || guard === "function-quality" || guard === "module-cohesion") return ["compiler-facts", "semantic-judgement"];
+  if (guard === "function-quality") return ["compiler-facts", "code-retrieval", "semantic-judgement"];
+  if (guard === "type-reuse" || guard === "module-cohesion") return ["compiler-facts", "semantic-judgement"];
   return ["compiler-facts"];
 }
 
@@ -45,23 +66,23 @@ export type ExpertMetrics = {
   sampledPeakRssBytes: number; rssAfterDisposalBytes: number;
 };
 
-async function loadProseRuntime(): Promise<EmbeddingRuntime> {
+async function loadEmbeddingRuntime(profile: ExpertProfile): Promise<EmbeddingRuntime> {
   const { pipeline } = await loadTransformers();
-  const extractor = await pipeline("feature-extraction", PROSE_EXPERT.model, {
-    revision: PROSE_EXPERT.revision, device: PROSE_EXPERT.provider, dtype: PROSE_EXPERT.precision
+  const extractor = await pipeline("feature-extraction", profile.model, {
+    revision: profile.revision, device: profile.provider, dtype: profile.precision
   });
   return {
     embed: async passages => {
       const accepted = passages.map(text =>
-        extractor.tokenizer.encode(text, {add_special_tokens: false}).length <= PROSE_EXPERT.contextTokens - 2);
+        extractor.tokenizer.encode(text, {add_special_tokens: false}).length <= profile.contextTokens - 2);
       const inputs = passages.filter((_, index) => accepted[index] ?? false);
       if (!inputs.length) return passages.map(() => null);
       const tensor = await extractor(inputs, {pooling: "mean", normalize: true});
       try {
         const output: { readonly data: object | null } = tensor;
         const data = output.data;
-        if (!(data instanceof Float32Array) || data.length !== inputs.length * 384) throw new Error("Unexpected prose embedding shape.");
-        const rows = inputs.map((_, index) => Array.from(data.slice(index * 384, (index + 1) * 384)));
+        if (!(data instanceof Float32Array) || data.length !== inputs.length * profile.dimensions) throw new Error("Unexpected specialist embedding shape.");
+        const rows = inputs.map((_, index) => Array.from(data.slice(index * profile.dimensions, (index + 1) * profile.dimensions)));
         let cursor = 0;
         return accepted.map(valid => valid ? rows[cursor++] ?? null : null);
       } finally { tensor.dispose(); }
@@ -70,10 +91,10 @@ async function loadProseRuntime(): Promise<EmbeddingRuntime> {
   };
 }
 
-function contentKey(text: string): string {
+function contentKey(profile: ExpertProfile, text: string): string {
   return createHash("sha256").update(JSON.stringify([
-    PROSE_EXPERT.model, PROSE_EXPERT.revision, PROSE_EXPERT.provider,
-    PROSE_EXPERT.precision, PROSE_EXPERT.cacheNamespace, text
+    profile.model, profile.revision, profile.provider,
+    profile.precision, profile.cacheNamespace, profile.contextTokens, profile.dimensions, text
   ])).digest("hex");
 }
 
@@ -87,21 +108,24 @@ function cosine(left: number[], right: number[]): number {
 }
 type VectorEvidence = { evidence: SourceEvidence; vector: number[] };
 
-function nearestEarlier(rows: VectorEvidence[]): ProseMatch[] {
+export type RetrievalFilter = (earlier: SourceEvidence, later: SourceEvidence) => boolean;
+
+function nearestEarlier(rows: VectorEvidence[], eligible: RetrievalFilter): ProseMatch[] {
   const matches: ProseMatch[] = [];
   for (const [index, later] of rows.entries()) {
-    const prior = rows.slice(0, index).filter(item => item.evidence.text !== later.evidence.text);
-    const ranked = prior.map(item => ({
-      earlier: item.evidence, later: later.evidence, relevance: cosine(item.vector, later.vector)
-    })).sort((a, b) => b.relevance - a.relevance);
-    const nearest = ranked[0] ?? null;
+    const nearest = rows.slice(0, index).reduce<ProseMatch | null>((best, item) => {
+      if (!eligible(item.evidence, later.evidence)) return best;
+      const relevance = cosine(item.vector, later.vector);
+      return !best || relevance > best.relevance
+        ? {earlier: item.evidence, later: later.evidence, relevance} : best;
+    }, null);
     if (nearest && nearest.relevance > 0) matches.push(nearest);
   }
   return matches;
 }
 
 /** Own one lazily allocated CPU specialist session and its bounded embedding cache. */
-export class ProseExpert {
+export class EmbeddingExpert {
   private runtime: EmbeddingRuntime | null = null;
   private readonly vectors = new Map<string, number[] | null>();
   private busy: Promise<RetrievalResult> | null = null;
@@ -111,15 +135,15 @@ export class ProseExpert {
     sampledPeakRssBytes: 0, rssAfterDisposalBytes: 0
   };
 
-  constructor(private readonly load: () => Promise<EmbeddingRuntime> = loadProseRuntime,
-    private readonly rssBudgetBytes = 2147483648) {
+  constructor(private readonly profile: ExpertProfile, private readonly load: () => Promise<EmbeddingRuntime>,
+    private readonly rssBudgetBytes: number) {
     if (!Number.isSafeInteger(rssBudgetBytes) || rssBudgetBytes <= 0) throw new Error("Expert RSS budget must be a positive integer.");
   }
 
   private sampleMemory(): void {
     const rss = process.memoryUsage().rss;
     this.metrics.sampledPeakRssBytes = Math.max(this.metrics.sampledPeakRssBytes, rss);
-    if (rss > this.rssBudgetBytes) throw new Error("Prose expert exceeded the configured process RSS budget.");
+    if (rss > this.rssBudgetBytes) throw new Error("Embedding expert exceeded the configured process RSS budget.");
   }
 
   private async session(): Promise<EmbeddingRuntime> {
@@ -141,19 +165,19 @@ export class ProseExpert {
   }
 
   private async embedGroup(group: SourceEvidence[]): Promise<(number[] | null)[]> {
-    const keys = group.map(item => contentKey(item.text));
+    const keys = group.map(item => contentKey(this.profile, item.text));
     const completed = new Map<string, number[] | null>();
     for (const key of keys) {
       if (this.vectors.has(key)) completed.set(key, this.vectors.get(key) ?? null);
     }
-    const missing = group.filter(item => !completed.has(contentKey(item.text)));
+    const missing = group.filter(item => !completed.has(contentKey(this.profile, item.text)));
     this.metrics.cacheHits += group.length - missing.length;
     if (!missing.length) return keys.map(key => completed.get(key) ?? null);
     const session = await this.session();
     const vectors = await session.embed(missing.map(item => item.text));
-    if (vectors.length !== missing.length) throw new Error("Incomplete prose expert batch.");
+    if (vectors.length !== missing.length) throw new Error("Incomplete embedding expert batch.");
     for (const [index, item] of missing.entries()) {
-      const key = contentKey(item.text);
+      const key = contentKey(this.profile, item.text);
       const vector = vectors[index] ?? null;
       completed.set(key, vector);
       this.remember(key, vector);
@@ -163,11 +187,11 @@ export class ProseExpert {
     return keys.map(key => completed.get(key) ?? null);
   }
 
-  private async retrieve(passages: SourceEvidence[]): Promise<RetrievalResult> {
+  private async retrieve(passages: SourceEvidence[], eligible: RetrievalFilter): Promise<RetrievalResult> {
     const rows: VectorEvidence[] = [];
     const unresolved: SourceEvidence[] = [];
-    for (let offset = 0; offset < passages.length; offset += 8) {
-      const group = passages.slice(offset, offset + 8);
+    for (let offset = 0; offset < passages.length; offset += this.profile.batchSize) {
+      const group = passages.slice(offset, offset + this.profile.batchSize);
       const vectors = await this.embedGroup(group);
       for (const [index, evidence] of group.entries()) {
         const vector = vectors[index] ?? null;
@@ -175,13 +199,13 @@ export class ProseExpert {
         else unresolved.push(evidence);
       }
     }
-    return {matches: nearestEarlier(rows), unresolved};
+    return {matches: nearestEarlier(rows, eligible), unresolved};
   }
 
-  async rank(passages: SourceEvidence[]): Promise<RetrievalResult> {
-    if (this.closed || this.busy) throw new Error("Prose expert is closed or already evaluating a batch.");
+  async rank(passages: SourceEvidence[], eligible: RetrievalFilter = (a, b) => a.text !== b.text): Promise<RetrievalResult> {
+    if (this.closed || this.busy) throw new Error("Embedding expert is closed or already evaluating a batch.");
     if (passages.length < 2) return {matches: [], unresolved: []};
-    const work = this.retrieve(passages);
+    const work = this.retrieve(passages, eligible);
     this.busy = work;
     try { return await work; }
     finally { this.busy = null; }
@@ -199,8 +223,30 @@ export class ProseExpert {
   }
 }
 
+export class ProseExpert extends EmbeddingExpert {
+  constructor(load: () => Promise<EmbeddingRuntime> = () => loadEmbeddingRuntime(PROSE_EXPERT),
+    rssBudgetBytes = 2147483648) {
+    super(PROSE_EXPERT, load, rssBudgetBytes);
+  }
+}
+
+export class CodeExpert extends EmbeddingExpert {
+  constructor(load: () => Promise<EmbeddingRuntime> = () => loadEmbeddingRuntime(CODE_EXPERT),
+    rssBudgetBytes = 2147483648) {
+    super(CODE_EXPERT, load, rssBudgetBytes);
+  }
+}
+
+function configuredBudget(): number {
+  return Number(process.env.CODE_GUARDS_EXPERT_RAM_MIB ?? "2048") * 1048576;
+}
+
 export function configuredProseExpert(): ProseExpert | null {
   if ((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") !== "1") return null;
-  const budget = Number(process.env.CODE_GUARDS_EXPERT_RAM_MIB ?? "2048") * 1048576;
-  return new ProseExpert(loadProseRuntime, budget);
+  return new ProseExpert(() => loadEmbeddingRuntime(PROSE_EXPERT), configuredBudget());
+}
+
+export function configuredCodeExpert(): CodeExpert | null {
+  if ((process.env.CODE_GUARDS_EXPERIMENTAL_CODE ?? "") !== "1") return null;
+  return new CodeExpert(() => loadEmbeddingRuntime(CODE_EXPERT), configuredBudget());
 }

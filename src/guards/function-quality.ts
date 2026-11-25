@@ -1,7 +1,8 @@
 import { withoutIgnored } from "../model.ts";
 import ts from "typescript";
 import path from "node:path";
-import { location, type Finding } from "../model.ts";
+import { location, type Finding, type Location } from "../model.ts";
+import type { CodeExpert, SourceEvidence, ProseMatch } from "../experts.ts";
 import { isTestFile, type Project } from "../project.ts";
 import { supportsReuse, zeroShot, semanticConcurrency, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
@@ -142,6 +143,14 @@ async function reviewFunction(info: FunctionInfo, score: SemanticScorer, emit: E
   }
 }
 
+function baselineComparison(left: FunctionInfo, right: FunctionInfo): boolean {
+  if (left.statements < 3 || right.statements < 3 || right.node.getSourceFile() === left.node.getSourceFile()) return false;
+  if (Math.abs(left.statements - right.statements) > 2 || Math.abs(left.arguments - right.arguments) > 1) return false;
+  if (left.fingerprint === right.fingerprint) return true;
+  const overlap = [...left.calls].filter(call => right.calls.has(call)).length;
+  return overlap >= 2 && overlap / Math.max(left.calls.size, right.calls.size) >= 0.7;
+}
+
 async function reviewSimilarFunctions(functions: FunctionInfo[], score: SemanticScorer, emit: Emit): Promise<void> {
   // Exact duplicates are deterministic. Near-duplicates are sent to MNLI only
   // after statement count and overlapping call-site checks narrow the pairs.
@@ -149,14 +158,11 @@ async function reviewSimilarFunctions(functions: FunctionInfo[], score: Semantic
     const left = functions[i] ?? null;
     if (!left || left.statements < 3) continue;
     for (const right of functions.slice(i + 1)) {
-      if (right.statements < 3 || right.node.getSourceFile() === left.node.getSourceFile()) continue;
-      if (Math.abs(left.statements - right.statements) > 2 || Math.abs(left.arguments - right.arguments) > 1) continue;
+      if (!baselineComparison(left, right)) continue;
       if (left.fingerprint === right.fingerprint) {
         emit(right, "CG205", 1, left);
         continue;
       }
-      const overlap = [...left.calls].filter(call => right.calls.has(call)).length;
-      if (overlap < 2 || overlap / Math.max(left.calls.size, right.calls.size) < 0.7) continue;
       const verdict = await score(comparisonQuestion({
         premise: `Function ${left.name}: ${left.body.getText()} Function ${right.name}: ${right.body.getText()}`,
         same: "these functions duplicate the same behaviour and should share a helper",
@@ -164,6 +170,71 @@ async function reviewSimilarFunctions(functions: FunctionInfo[], score: Semantic
       }, {name: left.name, evidence: left.body.getText()}, {name: right.name, evidence: right.body.getText()}));
       if (supportsReuse(verdict)) emit(right, "CG205", verdict.sameConcept, left);
     }
+  }
+}
+
+function evidenceKey(place: Location): string {
+  return JSON.stringify([place.file, place.line, place.column]);
+}
+
+function codeCohorts(functions: FunctionInfo[]): FunctionInfo[][] {
+  const byArity = new Map<number, FunctionInfo[]>();
+  for (const info of functions.filter(item => item.statements >= 3)) {
+    const group = byArity.get(info.arguments) ?? [];
+    group.push(info);
+    byArity.set(info.arguments, group);
+  }
+  // Bound exact nearest-neighbour retrieval; the existing cross-project
+  // structural and call-overlap candidate path remains independent.
+  const cohorts: FunctionInfo[][] = [];
+  for (const group of byArity.values()) {
+    if (group.length > 256) console.error("[Code Guards] Experimental code retrieval partitions a cohort of " + group.length + " functions; cross-partition pairs use the baseline detector.");
+    for (let offset = 0; offset < group.length; offset += 256) cohorts.push(group.slice(offset, offset + 256));
+  }
+  return cohorts;
+}
+
+function codeEvidence(info: FunctionInfo, project: Project): SourceEvidence {
+  return {location: location(project.root, nameNode(info)), text: info.node.getText()};
+}
+
+async function retrieveCodePairs(functions: FunctionInfo[], project: Project, expert: CodeExpert): Promise<ProseMatch[]> {
+  const results: ProseMatch[] = [];
+  for (const cohort of codeCohorts(functions)) {
+    const passages = cohort.map(info => codeEvidence(info, project));
+    const indexed = new Map(cohort.map(info => [evidenceKey(location(project.root, nameNode(info))), info]));
+    const eligible = (a: SourceEvidence, b: SourceEvidence): boolean => {
+      const left = indexed.get(evidenceKey(a.location)) ?? null;
+      const right = indexed.get(evidenceKey(b.location)) ?? null;
+      return left !== null && right !== null && a.location.file !== b.location.file && !baselineComparison(left, right);
+    };
+    if (!passages.some((a, index) => passages.slice(index + 1).some(b => eligible(a, b)))) continue;
+    const retrieval = await expert.rank(passages, eligible);
+    for (const item of retrieval.unresolved) console.error(`[Code Guards] Code retrieval could not encode the complete implementation at ${item.location.file}:${item.location.line}.`);
+    results.push(...retrieval.matches);
+  }
+  return results;
+}
+
+async function reviewRetrievedFunctions(functions: FunctionInfo[], project: Project, expert: CodeExpert, score: SemanticScorer, emit: Emit): Promise<void> {
+  let pairs: ProseMatch[] = [];
+  try { pairs = await retrieveCodePairs(functions, project, expert); }
+  finally { await expert.close(); }
+  // The code specialist has finished its retrieval task before the final
+  // judge evaluates behaviour. Relevance is never a verdict on duplication.
+  const indexed = new Map(functions.map(info => [evidenceKey(location(project.root, nameNode(info))), info]));
+  for (const pair of pairs) {
+    const left = indexed.get(evidenceKey(pair.earlier.location)) ?? null;
+    const right = indexed.get(evidenceKey(pair.later.location)) ?? null;
+    if (!left || !right) throw new Error("Code retrieval returned an unknown source location.");
+    const a = pair.earlier.text + "\nResolved calls: " + left.callTargets.join(", ");
+    const b = pair.later.text + "\nResolved calls: " + right.callTargets.join(", ");
+    const verdict = await score(comparisonQuestion({
+      premise: `First function ${left.name}: ${a}\nSecond function ${right.name}: ${b}`,
+      same: "these functions duplicate the same behaviour and public contract, including their inputs, outputs, effects and error conditions, so a shared implementation would preserve behaviour",
+      different: "these functions have distinct contracts, transformations, dependencies, state changes or error conditions despite similar code"
+    }, {name: left.name, evidence: a}, {name: right.name, evidence: b}));
+    if (supportsReuse(verdict)) emit(right, "CG205", verdict.sameConcept, left);
   }
 }
 
@@ -209,12 +280,12 @@ function explain(info: FunctionInfo, code: string, related: FunctionInfo | null)
     title: `Repeated implementation: ${info.name} and ${other}`,
     reason: related && related.fingerprint === info.fingerprint
       ? `${info.name} has the same normalised function body as ${other} (in ${path.basename(related.node.getSourceFile().fileName.replace(/\\/g, "/"))}).`
-      : `${info.name} and ${other} have overlapping call patterns and the zero-shot model suggested duplicated behaviour.`,
+      : `${info.name} and ${other} were shortlisted by structural or semantic retrieval evidence and the zero-shot model suggested duplicated behaviour.`,
     suggestion: `Compare ${info.name} with ${other} and their contracts. If they genuinely perform the same operation, keep one shared implementation and import or delegate to it; otherwise preserve separate domain-specific functions.`
   };
 }
 
-export async function functionQuality(project: Project, includeTests = false, score: SemanticScorer = zeroShot): Promise<Finding[]> {
+export async function functionQuality(project: Project, includeTests = false, score: SemanticScorer = zeroShot, expert: CodeExpert | null = null): Promise<Finding[]> {
   const functions = getInfo(project, includeTests);
   const findings: Finding[] = [];
   const emit: Emit = (info, code, similarity, related) => {
@@ -248,5 +319,6 @@ export async function functionQuality(project: Project, includeTests = false, sc
   });
   for (const result of reviewed) findings.push(...result);
   await reviewSimilarFunctions(functions, score, emit);
+  if (expert) await reviewRetrievedFunctions(functions, project, expert, score, emit);
   return withoutIgnored(project.root, findings);
 }

@@ -238,6 +238,7 @@ export async function estimateInference(
     "The projected model-call range reflects batching compatibility, not GPU scheduling or runtime occupancy.",
     "Tokenizer-only preparation excludes model weight loading, native GPU workers and neural execution.",
     ...((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") === "1" && config.enabled.has("documentation") ? ["Experimental prose retrieval is not included in these counts; it requires embedding inference."] : []),
+    ...((process.env.CODE_GUARDS_EXPERIMENTAL_CODE ?? "") === "1" && config.enabled.has("function-quality") ? ["Experimental code retrieval is not included in these counts; it requires embedding inference."] : []),
     ...(conditional ? [
       "Semantic decisions control later documentation and module-cohesion questions. The minimum and maximum are possible workloads; the actual path cannot be known without neural inference."
     ] : []),
