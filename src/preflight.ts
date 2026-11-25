@@ -13,7 +13,7 @@ import { guardCapabilities } from "./experts.ts";
 import { typeReuse } from "./guards/type-reuse.ts";
 import type { AnalysisOptions } from "./engine.ts";
 import { loadProject } from "./project.ts";
-import { configureSemanticAcceleration, loadTransformers, MODEL, premiseWindowCount,
+import { configureSemanticAcceleration, loadTransformers, MODEL, premiseWindowCount, semanticQuestionKey,
   type SemanticQuestion, type SemanticScorer, type Tokenizer } from "./semantic.ts";
 
 export type InferenceWork = {
@@ -102,7 +102,7 @@ export class InferenceCounter {
     sameConcept: number; differentConcept: number
   } {
     this.questions += 1;
-    const key = JSON.stringify([MODEL, question.premise, question.same, question.different]);
+    const key = semanticQuestionKey(question);
     if (this.cacheEnabled && this.cache.has(key)) {
       this.cacheHits += 1;
     } else {

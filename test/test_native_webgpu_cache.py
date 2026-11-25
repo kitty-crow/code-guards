@@ -39,6 +39,22 @@ class FakeTokenizer:
         return " ".join(self.reverse[index] for index in ids)
 
 
+class PairedEvidenceTest(unittest.TestCase):
+    def test_distant_fragments_share_a_window(self):
+        tokenizer = FakeTokenizer()
+        left = " ".join(f"left{i}" for i in range(620))
+        right = " ".join(f"right{i}" for i in range(620))
+        question = {"premise": left + " " + right, "same": "same concept",
+                    "different": "different contract",
+                    "comparison": {"left": {"name": "alpha", "evidence": left},
+                                   "right": {"name": "beta", "evidence": right}}}
+        windows = worker.evidence_windows(question, tokenizer)
+        self.assertTrue(all("First entity alpha:" in window and "Second entity beta:" in window
+                            for window in windows))
+        self.assertTrue(any("left0" in window and "right619" in window for window in windows))
+        self.assertTrue(any("left619" in window and "right0" in window for window in windows))
+
+
 class ProfilingIsolationTest(unittest.TestCase):
     def test_unique_native_profile_prefix_per_gpu_and_session(self):
         first = worker.profile_prefix(0)

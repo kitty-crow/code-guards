@@ -3,7 +3,7 @@ import path from "node:path";
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
 import { isTestFile, type Project } from "../project.ts";
-import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
+import { supportsReuse, zeroShot, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
 
 type Unit = {
   name: string;
@@ -156,11 +156,11 @@ export async function moduleCohesion(
     // A second, concrete judgement must identify separable operations.
     // A large, cohesive module receives no warning merely for its size.
     for (const {left, right} of pairs.sort((a, b) => Math.abs(b.right.node.pos - b.left.node.pos) - Math.abs(a.right.node.pos - a.left.node.pos)).slice(0, 24)) {
-      const verdict = await score({
+      const verdict = await score(comparisonQuestion({
         premise: `Two implementations in one TypeScript module. First: ${evidence(left)}. Second: ${evidence(right)}.`,
         same: "these implementations have independent responsibilities and should be placed in distinct focused modules",
         different: "these implementations are related parts of one responsibility, share a contract, or deliberately coordinate a single workflow"
-      });
+      }, {name: left.name, evidence: evidence(left)}, {name: right.name, evidence: evidence(right)}));
       if (!supportsReuse(verdict, 0.82) || verdict.differentConcept > 0.38) continue;
       const leftGroup = breakout(left, right, units);
       const rightGroup = breakout(right, left, units);

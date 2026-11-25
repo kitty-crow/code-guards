@@ -3,7 +3,7 @@ import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
 import { isTestFile, type Project } from "../project.ts";
-import { supportsReuse, zeroShot, semanticConcurrency, type SemanticScorer } from "../semantic.ts";
+import { supportsReuse, zeroShot, semanticConcurrency, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
 type FunctionInfo = {
@@ -157,11 +157,11 @@ async function reviewSimilarFunctions(functions: FunctionInfo[], score: Semantic
       }
       const overlap = [...left.calls].filter(call => right.calls.has(call)).length;
       if (overlap < 2 || overlap / Math.max(left.calls.size, right.calls.size) < 0.7) continue;
-      const verdict = await score({
-        premise: `Function ${left.name}: ${evidence(left)} Function ${right.name}: ${evidence(right)}`,
+      const verdict = await score(comparisonQuestion({
+        premise: `Function ${left.name}: ${left.body.getText()} Function ${right.name}: ${right.body.getText()}`,
         same: "these functions duplicate the same behaviour and should share a helper",
         different: "these functions implement distinct behaviour despite similar calls"
-      });
+      }, {name: left.name, evidence: left.body.getText()}, {name: right.name, evidence: right.body.getText()}));
       if (supportsReuse(verdict)) emit(right, "CG205", verdict.sameConcept, left);
     }
   }

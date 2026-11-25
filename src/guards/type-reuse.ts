@@ -3,7 +3,7 @@ import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
 import { isTestFile, type Project } from "../project.ts";
-import { zeroShot, supportsReuse, semanticConcurrency, type SemanticScorer } from "../semantic.ts";
+import { zeroShot, supportsReuse, semanticConcurrency, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
 type Property = { name: string; fingerprint: string; origin: ts.Declaration | null; contracts: Set<ts.Declaration> };
@@ -384,11 +384,12 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
   let confidence = 1;
   if (!exactMatch) {
     const premise = `Two TypeScript declarations are being reviewed for reuse. The first is named ${a.name} with fields ${independentA.map(p => `${p.name} (${p.fingerprint})`).join(", ")}. The second is named ${b.name} with fields ${independentB.map(p => `${p.name} (${p.fingerprint})`).join(", ")}.`;
-    const verdict = await score({
+    const verdict = await score(comparisonQuestion({
       premise,
       same: "the independently declared fields duplicate a semantic contract not already represented by a shared abstraction, and extracting that contract would provide meaningful reuse",
       different: "the fields serve distinct responsibilities or are already represented by an existing abstraction, so another shared contract would not provide meaningful reuse"
-    });
+    }, {name: a.name, evidence: independentA.map(p => `${p.name} (${p.fingerprint})`).join(", ")},
+    {name: b.name, evidence: independentB.map(p => `${p.name} (${p.fingerprint})`).join(", ")}));
     confidence = supportsReuse(verdict) ? verdict.sameConcept : 0;
   }
   if (confidence === 0) return null;

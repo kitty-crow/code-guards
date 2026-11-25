@@ -13,7 +13,20 @@ export type RawNliWindow = {
   logits: { support: NliLogits; opposition: NliLogits } | null;
 };
 export type NativeWindowVerdict = WindowVerdict & { rawEvidence: RawNliWindow[] };
-export type SemanticQuestion = { premise: string; same: string; different: string };
+type PlainQuestion = { premise: string; same: string; different: string };
+export type ComparisonSide = { name: string; evidence: string };
+export type ComparisonQuestion = PlainQuestion & { comparison: { left: ComparisonSide; right: ComparisonSide } };
+export type SemanticQuestion = PlainQuestion | ComparisonQuestion;
+
+/** Retain both sides of a relational question for token-bounded comparisons. */
+export function comparisonQuestion(question: PlainQuestion, left: ComparisonSide, right: ComparisonSide): ComparisonQuestion {
+  return {...question, comparison: {left, right}};
+}
+
+export function semanticQuestionKey(question: SemanticQuestion): string {
+  const base = [MODEL, question.premise, question.same, question.different];
+  return JSON.stringify("comparison" in question ? [...base, "paired-v1", question.comparison] : base);
+}
 export type SemanticScorer = (question: SemanticQuestion) => Promise<SimilarityVerdict>;
 
 /** Completed inference phases, measured using a monotonic clock. */
@@ -214,22 +227,50 @@ function windowPlan(question: SemanticQuestion, tokenizer: Tokenizer): {
   };
 }
 
-/** Count exactly the windows production inference would submit, without decoding them. */
+function decodeWindows(tokens: number[], capacity: number, tokenizer: Tokenizer): string[] {
+  if (!tokens.length) return [""];
+  const windows: string[] = [];
+  const step = Math.max(1, capacity - OVERLAP);
+  for (let start = 0; start < tokens.length; start += step) {
+    windows.push(tokenizer.decode(tokens.slice(start, start + capacity), {skip_special_tokens: true}));
+    if (start + capacity >= tokens.length) break;
+  }
+  return windows;
+}
+
+function pairedPremises(question: ComparisonQuestion, tokenizer: Tokenizer, capacity: number): string[] {
+  const {left, right} = question.comparison;
+  const first = `First entity ${left.name}: `;
+  const second = `Second entity ${right.name}: `;
+  const overhead = tokenizer.encode(first + "\n" + second, {add_special_tokens: false}).length;
+  const budget = Math.floor((capacity - overhead - SAFETY_TOKENS) / 2);
+  if (budget < 49) throw new Error("Comparison labels exceed the paired evidence budget.");
+  const leftChunks = decodeWindows(tokenizer.encode(left.evidence, {add_special_tokens: false}), budget, tokenizer);
+  const rightChunks = decodeWindows(tokenizer.encode(right.evidence, {add_special_tokens: false}), budget, tokenizer);
+  // Cross-product pairing prevents a decisive relationship from disappearing
+  // merely because the two facts occupy distant positions in the source.
+  if (leftChunks.length * rightChunks.length > 256) throw new Error("Comparison exceeds 256 paired evidence windows; narrower evidence is required.");
+  const windows = leftChunks.flatMap(a => rightChunks.map(b => first + a + "\n" + second + b));
+  if (windows.some(window => tokenizer.encode(window, {add_special_tokens: false}).length > capacity)) {
+    throw new Error("Re-encoded comparison exceeds the model token budget.");
+  }
+  return windows;
+}
+
+/** Count exactly the windows production inference would submit. */
 export function premiseWindowCount(question: SemanticQuestion, tokenizer: Tokenizer): number {
   const { tokens, capacity, step } = windowPlan(question, tokenizer);
-  return tokens.length <= capacity ? 1 : Math.ceil((tokens.length - capacity) / step) + 1;
+  if (tokens.length <= capacity) return 1;
+  if ("comparison" in question) return pairedPremises(question, tokenizer, capacity).length;
+  return Math.ceil((tokens.length - capacity) / step) + 1;
 }
 
 /** Split the same token plan into overlapping evidence windows for real inference. */
 export function premiseWindows(question: SemanticQuestion, tokenizer: Tokenizer): string[] {
-  const { tokens, capacity, step } = windowPlan(question, tokenizer);
+  const { tokens, capacity } = windowPlan(question, tokenizer);
   if (tokens.length <= capacity) return [question.premise];
-  const windows: string[] = [];
-  for (let start = 0; start < tokens.length; start += step) {
-    windows.push(tokenizer.decode(tokens.slice(start, start + capacity), { skip_special_tokens: true }));
-    if (start + capacity >= tokens.length) break;
-  }
-  return windows;
+  if ("comparison" in question) return pairedPremises(question, tokenizer, capacity);
+  return decodeWindows(tokens, capacity, tokenizer);
 }
 
 function scores(result: Classification, question: SemanticQuestion): SimilarityVerdict {
@@ -464,7 +505,7 @@ export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdic
   if ((process.env.CODE_GUARDS_REQUIRE_RAW_NLI ?? "") === "1") throw new Error("Complete raw NLI evidence requires a native CPU or WebGPU worker.");
   if (closingClassifier) throw new Error("Semantic model is shutting down.");
   const enabled = acceleration.features.has("cache");
-  const key = enabled ? JSON.stringify([MODEL, question.premise, question.same, question.different]) : "";
+  const key = enabled ? semanticQuestionKey(question) : "";
   const previous = enabled ? (cache.get(key) ?? null) : null;
   if (previous) {
     timingObserver({ phase: "cache-hit", milliseconds: 0 });

@@ -99,7 +99,43 @@ def initialise_cpu() -> tuple[Any, Any, int, int, str]:
         model_path, tokenizer_path, (entailment, contradiction))
 
 
-def evidence_windows(question: dict[str, str], tokenizer: Any) -> list[str]:
+def decode_windows(tokens: list[int], capacity: int, tokenizer: Any) -> list[str]:
+    if not tokens:
+        return [""]
+    windows: list[str] = []
+    step = max(1, capacity - OVERLAP)
+    for start in range(0, len(tokens), step):
+        windows.append(tokenizer.decode(tokens[start:start + capacity], skip_special_tokens=True))
+        if start + capacity >= len(tokens):
+            break
+    return windows
+
+
+def paired_windows(comparison: Any, tokenizer: Any, capacity: int) -> list[str]:
+    if not isinstance(comparison, dict) or any(
+        not isinstance(comparison.get(side), dict) or any(
+            not isinstance(comparison[side].get(key), str) for key in ("name", "evidence")
+        ) for side in ("left", "right")
+    ):
+        raise ValueError("Invalid paired evidence.")
+    left, right = comparison["left"], comparison["right"]
+    first = f"First entity {left['name']}: "
+    second = f"Second entity {right['name']}: "
+    overhead = len(tokenizer.encode(first + "\n" + second, add_special_tokens=False).ids)
+    budget = (capacity - overhead - SAFETY_TOKENS) // 2
+    if budget < 49:
+        raise ValueError("Comparison labels exceed the paired evidence budget.")
+    left_chunks = decode_windows(tokenizer.encode(left["evidence"], add_special_tokens=False).ids, budget, tokenizer)
+    right_chunks = decode_windows(tokenizer.encode(right["evidence"], add_special_tokens=False).ids, budget, tokenizer)
+    if len(left_chunks) * len(right_chunks) > 256:
+        raise ValueError("Comparison exceeds 256 paired evidence windows; narrower evidence is required.")
+    windows = [first + a + "\n" + second + b for a in left_chunks for b in right_chunks]
+    if any(len(tokenizer.encode(window, add_special_tokens=False).ids) > capacity for window in windows):
+        raise ValueError("Re-encoded comparison exceeds the model token budget.")
+    return windows
+
+
+def evidence_windows(question: dict[str, Any], tokenizer: Any) -> list[str]:
     hypotheses = [TEMPLATE.format(question["same"]), TEMPLATE.format(question["different"])]
     max_hypothesis = max(len(tokenizer.encode(text, add_special_tokens=False).ids) for text in hypotheses)
     capacity = MAX_TOKENS - max_hypothesis - 3 - SAFETY_TOKENS
@@ -108,14 +144,9 @@ def evidence_windows(question: dict[str, str], tokenizer: Any) -> list[str]:
     tokens = tokenizer.encode(question["premise"], add_special_tokens=False).ids
     if len(tokens) <= capacity:
         return [question["premise"]]
-    windows: list[str] = []
-    step = max(1, capacity - OVERLAP)
-    for start in range(0, len(tokens), step):
-        chunk = tokens[start:start + capacity]
-        windows.append(tokenizer.decode(chunk, skip_special_tokens=True))
-        if start + capacity >= len(tokens):
-            break
-    return windows
+    if "comparison" in question:
+        return paired_windows(question["comparison"], tokenizer, capacity)
+    return decode_windows(tokens, capacity, tokenizer)
 
 
 def run_pairs(session: Any, tokenizer: Any, pairs: list[tuple[str, str]]) -> Any:

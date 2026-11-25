@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { assessWindows, MAX_MODEL_TOKENS, observeSemanticTimings, premiseWindows, supportsReuse, type SemanticQuestion, type SemanticTimingEvent, type Classifier } from "../src/semantic.ts";
+import { assessWindows, MAX_MODEL_TOKENS, observeSemanticTimings, premiseWindows, premiseWindowCount, comparisonQuestion, semanticQuestionKey, supportsReuse, type SemanticQuestion, type SemanticTimingEvent, type Classifier } from "../src/semantic.ts";
 
 function fakeRuntime(assess: (window: string) => { same: number; different: number }) {
   const dictionary = new Map<string, number>();
@@ -92,4 +92,21 @@ test("timing observations measure preparation and each inference without changin
   } finally {
     restore();
   }
+});
+
+test("paired windows preserve distant evidence from both compared entities", async () => {
+  const left = Array.from(Array<number>(620).keys(), index => `left${index}`).join(" ");
+  const right = Array.from(Array<number>(620).keys(), index => `right${index}`).join(" ");
+  const runtime = fakeRuntime(window => window.includes("left0") && window.includes("right619")
+    ? {same: 0.05, different: 0.96} : {same: 0.91, different: 0.04});
+  const plain = question(left + " " + right);
+  const paired = comparisonQuestion(plain, {name: "alpha", evidence: left}, {name: "beta", evidence: right});
+  const windows = premiseWindows(paired, runtime.tokenizer);
+  assert.equal(premiseWindowCount(paired, runtime.tokenizer), windows.length);
+  assert.ok(windows.every(window => window.includes("First entity alpha:") && window.includes("Second entity beta:")));
+  assert.ok(windows.some(window => window.includes("left0") && window.includes("right619")));
+  assert.ok(windows.some(window => window.includes("left619") && window.includes("right0")));
+  assert.notEqual(semanticQuestionKey(paired), semanticQuestionKey(plain));
+  const verdict = await assessWindows(paired, runtime.classify);
+  assert.ok(!supportsReuse(verdict));
 });

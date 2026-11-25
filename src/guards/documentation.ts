@@ -5,7 +5,7 @@ import ts from "typescript";
 import { isVendoredPath, vendoredPaths, type Project } from "../project.ts";
 import type { Finding, Location } from "../model.ts";
 import { readScripts } from "../scripts.ts";
-import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
+import { supportsReuse, zeroShot, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
 import type { ProseExpert } from "../experts.ts";
 
 type Paragraph = { line: number; text: string; section: string; kind: "paragraph" | "heading" | "list" | "table" };
@@ -88,6 +88,8 @@ function markdownFiles(root: string, relative = "", depth = 0, submodules: Reado
   return files.sort();
 }
 
+// Flush pending prose before changing section or fence state, so an example or
+// heading cannot inherit the previous section's editorial context.
 function paragraphs(lines: string[]): Paragraph[] {
   const result: Paragraph[] = [];
   let buffer: string[] = [];
@@ -383,11 +385,12 @@ async function checkSemanticRedundancy(file: string, prose: Paragraph[], finding
   }
   for (const match of retrieval.matches) {
     if (findings.some(item => item.code === "CG403" && item.location.file === file && item.location.line === match.later.location.line)) continue;
-    const verdict = await score({
+    const verdict = await score(comparisonQuestion({
       premise: `Earlier paragraph: ${match.earlier.text}\nLater paragraph: ${match.later.text}`,
       same: "the later paragraph needlessly repeats the same information as the earlier paragraph without adding useful details",
       different: "the later paragraph adds distinct information or serves a useful summary, reminder, example or different context"
-    });
+    }, {name: `earlier paragraph at line ${match.earlier.location.line}`, evidence: match.earlier.text},
+    {name: `later paragraph at line ${match.later.location.line}`, evidence: match.later.text}));
     if (!supportsReuse(verdict, 0.81) || verdict.differentConcept > 0.35) continue;
     issue(findings, {code: "CG403", file, line: match.later.location.line,
       title: "Semantically repeated documentation", subject: match.later.text.slice(0, 110),
