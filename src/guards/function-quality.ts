@@ -73,7 +73,7 @@ function requiredMethod(node: ts.Node, checker: ts.TypeChecker): boolean {
   const symbol = checker.getSymbolAtLocation(node.name) ?? null;
   if (!symbol) return false;
   const heritage = (parent.heritageClauses ?? []).flatMap(clause => clause.types);
-  return heritage.some(item => Boolean(checker.getPropertyOfType(checker.getTypeAtLocation(item), symbol.name)));
+  return heritage.some(item => (checker.getPropertyOfType(checker.getTypeAtLocation(item), symbol.name) ?? null) !== null);
 }
 
 function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
