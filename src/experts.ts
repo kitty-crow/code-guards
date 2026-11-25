@@ -70,14 +70,23 @@ export type ExpertMetrics = {
   sampledPeakRssBytes: number; rssAfterDisposalBytes: number;
 };
 
+function cachedCheckpoint(profile: ExpertProfile, cacheDirectory: string): string {
+  const directory = path.resolve(cacheDirectory, profile.model, profile.revision);
+  const required = ["config.json", "tokenizer.json", "tokenizer_config.json", "onnx/model.onnx"];
+  if (!required.every(file => existsSync(path.join(directory, file)))) {
+    throw new Error("Pinned offline checkpoint is incomplete: " + directory);
+  }
+  return directory;
+}
+
 async function loadEmbeddingRuntime(profile: ExpertProfile): Promise<EmbeddingRuntime> {
-  // Transformers.js 4.3.2 pipeline discovery probes the default revision
-  // even when a pinned revision is supplied. Load the two required components
-  // directly so offline operation uses the exact revision's cached files.
-  const { AutoTokenizer, AutoModel, FeatureExtractionPipeline } = await loadTransformers();
+  // Upstream discovery probes default-revision metadata even for pinned
+  // loads. Resolve offline discovery against the exact cached directory.
+  const { AutoTokenizer, AutoModel, FeatureExtractionPipeline, env } = await loadTransformers();
   const local = (process.env.CODE_GUARDS_OFFLINE ?? "") === "1";
-  const tokenizer = await AutoTokenizer.from_pretrained(profile.model, {revision: profile.revision, local_files_only: local});
-  const model = await AutoModel.from_pretrained(profile.model, {
+  const source = local ? cachedCheckpoint(profile, env.cacheDir ?? "") : profile.model;
+  const tokenizer = await AutoTokenizer.from_pretrained(source, {revision: profile.revision, local_files_only: local});
+  const model = await AutoModel.from_pretrained(source, {
     revision: profile.revision, local_files_only: local, device: profile.provider, dtype: profile.precision
   });
   const extractor = new FeatureExtractionPipeline({task: "feature-extraction", model, tokenizer});
