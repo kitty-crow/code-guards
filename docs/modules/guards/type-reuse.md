@@ -17,3 +17,7 @@ Compiler-generated qualified names for modules inside the scanned project use pr
 ### Inherited declarations
 
 An inherited member with the same compiler declaration identity in two types is already reused. CG101/CG102/CG103 compare independently declared members rather than treating shared base members as duplicate implementations. Independently declared overrides and separate structural contracts remain eligible for review. Exact duplicate extensions with independently repeated members remain reportable.
+
+### Implemented contracts
+
+For an explicit class implements clause, matching member names and resolved type fingerprints are associated with the original contract declaration. Members represented by the same contract are excluded from overlap comparisons, including comparisons against the contract itself. Independently declared fields and explicit overrides remain eligible; unrelated interfaces with similar shapes do not acquire a shared identity. This comparison covers direct implements clauses, not every possible transitive or implicit implementation.

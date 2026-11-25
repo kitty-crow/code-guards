@@ -398,3 +398,34 @@ test("CG314 handles recursive helper calls without assuming an assertion", () =>
   });
   assert.equal(codeHealth(sample, true).filter(item => item.code === "CG314").length, 1);
 });
+
+test("type reuse recognises an existing explicitly implemented interface", async () => {
+  const sample = project({
+    "contract.ts": "export interface Operation { name: string; run(value: number): number; }",
+    "one.ts": "import { Operation } from './contract'; export class Double implements Operation { name = 'double'; run(value: number): number { return value * 2; } }",
+    "two.ts": "import { Operation } from './contract'; export class Square implements Operation { name = 'square'; run(value: number): number { return value * value; } }"
+  });
+  const forbidden: SemanticScorer = async () => { throw new Error("The contract already exists"); };
+  assert.deepEqual(await typeReuse(sample, false, forbidden), []);
+});
+
+test("type reuse retains independent contracts beyond an implemented interface", async () => {
+  const sample = project({
+    "contract.ts": "export interface Operation { name: string; run(value: number): number; }",
+    "one.ts": "import { Operation } from './contract'; export class Double implements Operation { name = 'double'; run(value: number): number { return value * 2; } retries = 0; timeout = 0; }",
+    "two.ts": "import { Operation } from './contract'; export class Square implements Operation { name = 'square'; run(value: number): number { return value * value; } retries = 0; timeout = 0; }"
+  });
+  const findings = await typeReuse(sample, false, endorse);
+  assert.deepEqual(findings.map(item => item.code), ["CG103"]);
+  assert.match(findings[0]?.reason ?? "", /2 independently declared matching field/);
+});
+
+test("type reuse does not conflate unrelated structurally identical interfaces", async () => {
+  const sample = project({
+    "contract.ts": "export interface Operation { name: string; run(value: number): number; }",
+    "one.ts": "import { Operation } from './contract'; export class Double implements Operation { name = 'double'; run(value: number): number { return value * 2; } }",
+    "two.ts": "export class Square { name = 'square'; run(value: number): number { return value * value; } }"
+  });
+  const findings = await typeReuse(sample, false, endorse);
+  assert.ok(findings.some(item => item.code === "CG103" && item.location.file === "two.ts"));
+});

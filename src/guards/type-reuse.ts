@@ -6,7 +6,7 @@ import { isTestFile, type Project } from "../project.ts";
 import { zeroShot, supportsReuse, semanticConcurrency, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
-type Property = { name: string; fingerprint: string; origin: ts.Declaration | null };
+type Property = { name: string; fingerprint: string; origin: ts.Declaration | null; contracts: Set<ts.Declaration> };
 type Definition = {
   name: string;
   kind: "type" | "interface" | "class";
@@ -186,6 +186,28 @@ function isModuleAugmentationMember(node: ts.Node): boolean {
   return false;
 }
 
+function implementedContracts(node: ts.Node, project: Project): Map<string, Set<ts.Declaration>> {
+  const contracts = new Map<string, Set<ts.Declaration>>();
+  if (!ts.isClassDeclaration(node)) return contracts;
+  const checker = project.checker;
+  for (const clause of node.heritageClauses ?? []) {
+    if (clause.token !== ts.SyntaxKind.ImplementsKeyword) continue;
+    for (const heritage of clause.types) {
+      const type = checker.getTypeAtLocation(heritage);
+      for (const property of checker.getPropertiesOfType(type)) {
+        const origin = declarationOf(property);
+        if (!origin) continue;
+        const shape = fingerprint(checker.getTypeOfSymbolAtLocation(property, heritage), checker, project.root);
+        const key = JSON.stringify([property.name, shape]);
+        const origins = contracts.get(key) ?? new Set<ts.Declaration>();
+        origins.add(origin);
+        contracts.set(key, origins);
+      }
+    }
+  }
+  return contracts;
+}
+
 function getDefinitions(project: Project, includeTests: boolean): Definition[] {
   const definitions: Definition[] = [];
   const seen = new Set<ts.Symbol>();
@@ -211,12 +233,17 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
       }
       const type = project.checker.getTypeAtLocation(identifier);
       if (!isRecordType(type, project.checker)) { ts.forEachChild(node, visit); return; }
+      const contracts = implementedContracts(node, project);
       const properties = project.checker.getPropertiesOfType(type).map(property => {
         const declaration = declarationOf(property);
+        const shape = declaration ? fingerprint(project.checker.getTypeOfSymbolAtLocation(property, declaration), project.checker, project.root) : "unknown";
+        const modifiers = declaration && ts.canHaveModifiers(declaration) ? ts.getModifiers(declaration) ?? [] : [];
+        const override = modifiers.some(modifier => modifier.kind === ts.SyntaxKind.OverrideKeyword);
         return {
           name: property.name,
           origin: declaration,
-          fingerprint: declaration ? fingerprint(project.checker.getTypeOfSymbolAtLocation(property, declaration), project.checker, project.root) : "unknown"
+          fingerprint: shape,
+          contracts: override ? new Set<ts.Declaration>() : contracts.get(JSON.stringify([property.name, shape])) ?? new Set<ts.Declaration>()
         };
       });
       // Primitive aliases, utility aliases and one-field records are too noisy.
@@ -311,11 +338,21 @@ function reuseAdvice(a: Definition, b: Definition, exact: boolean): string {
 /** Shared declaration identities are evidence of reuse, not duplicated implementation.
  * Keep independently declared overrides and unrelated structural lookalikes.
  */
+function sharedContract(left: Property, right: Property): boolean {
+  if (left.name !== right.name || left.fingerprint !== right.fingerprint) return false;
+  if (left.origin !== null && right.contracts.has(left.origin)) return true;
+  if (right.origin !== null && left.contracts.has(right.origin)) return true;
+  return [...left.contracts].some(origin => right.contracts.has(origin));
+}
+
 function independentProperties(left: Definition, right: Definition): Property[] {
   const reused = new Set(right.properties
     .filter(property => property.origin !== null)
     .map(property => property.origin));
-  return left.properties.filter(property => property.origin === null || !reused.has(property.origin));
+  return left.properties.filter(property => {
+    if (property.origin !== null && reused.has(property.origin)) return false;
+    return !right.properties.some(other => sharedContract(property, other));
+  });
 }
 
 async function compareDefinitions(project: Project, a: Definition, b: Definition, score: SemanticScorer): Promise<Finding | null> {
@@ -349,8 +386,8 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
     const premise = `Two TypeScript declarations are being reviewed for reuse. The first is named ${a.name} with fields ${independentA.map(p => `${p.name} (${p.fingerprint})`).join(", ")}. The second is named ${b.name} with fields ${independentB.map(p => `${p.name} (${p.fingerprint})`).join(", ")}.`;
     const verdict = await score({
       premise,
-      same: "both declarations represent the same domain concept and may share a reusable type",
-      different: "the declarations represent different domain concepts and should remain separate"
+      same: "the independently declared fields duplicate a semantic contract not already represented by a shared abstraction, and extracting that contract would provide meaningful reuse",
+      different: "the fields serve distinct responsibilities or are already represented by an existing abstraction, so another shared contract would not provide meaningful reuse"
     });
     confidence = supportsReuse(verdict) ? verdict.sameConcept : 0;
   }
