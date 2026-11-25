@@ -372,8 +372,8 @@ function passageEvidence(passage: ContractPassage): string {
 }
 
 function matchesContract(passage: ContractPassage, name: string): boolean {
-  const identifiers = (passage.section + " " + passage.text).match(/[A-Za-z_$][\w$]*/g) ?? [];
-  return identifiers.includes(name);
+  const identifiers = new Set((passage.section + " " + passage.text).match(/[A-Za-z_$][\w$]*/g) ?? []);
+  return identifiers.has(name);
 }
 
 function reportUnresolvedContract(contract: ModuleContract, file: string, aspect: string): void {
