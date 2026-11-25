@@ -8,6 +8,8 @@ import { performance } from "node:perf_hooks";
 import { accelerationNames, parseAccelerationFlags } from "../src/acceleration.ts";
 import { guards } from "../src/model.ts";
 import type { ScanTelemetry } from "../src/engine.ts";
+import type { ExpertMetrics } from "../src/experts.ts";
+import type { JsonRecord } from "../src/json.ts";
 import { parseRecord } from "../src/json.ts";
 
 export type ThroughputOptions = {
@@ -92,6 +94,7 @@ type ScanResult = {
   maximumBatchSize: number;
   completedSemanticQuestions: number;
   cacheHits: number;
+  experts: Record<string, {revision: string; device: string; metrics: ExpertMetrics}>;
   provider: string;
   gpuWindows: Record<string, number>;
   gpuProviderProof: Record<string, {
@@ -113,7 +116,17 @@ export function usefulBenchmarkError(lines: readonly string[]): string | null {
     !line.startsWith("[Code Guards]")) ?? null);
 }
 
-function decodeEvent(line: string): ScanTelemetry {
+function decodeExpertMetrics(data: JsonRecord): ExpertMetrics {
+  return {
+    loads: data.number("loads"), batches: data.number("batches"),
+    cacheHits: data.number("cacheHits"), persistentHits: data.number("persistentHits"),
+    encodedInputs: data.number("encodedInputs"), loadMilliseconds: data.number("loadMilliseconds"),
+    inferenceMilliseconds: data.number("inferenceMilliseconds"),
+    sampledPeakRssBytes: data.number("sampledPeakRssBytes"), rssAfterDisposalBytes: data.number("rssAfterDisposalBytes")
+  };
+}
+
+export function decodeEvent(line: string): ScanTelemetry {
   const data = parseRecord(line);
   const type = data.text("type");
   switch (type) {
@@ -132,6 +145,7 @@ function decodeEvent(line: string): ScanTelemetry {
       cpuNodes: data.number("cpuNodes"), gpuOps: data.strings("gpuOps"),
       gpuTimeMs: data.number("gpuTimeMs"), cpuTimeMs: data.number("cpuTimeMs") };
     case "cache-hit": return { type };
+    case "expert-complete": return {type, model: data.text("model"), revision: data.text("revision"), device: data.text("device"), metrics: decodeExpertMetrics(data.record("metrics"))};
     default: throw new Error("Invalid benchmark telemetry: " + type);
   }
 }
@@ -172,6 +186,9 @@ function consumeEvent(result: ScanResult, event: ScanTelemetry): void {
         gpuTimeMs: event.gpuTimeMs, cpuTimeMs: event.cpuTimeMs
       };
       return;
+    case "expert-complete":
+      result.experts[event.model] = {revision: event.revision, device: event.device, metrics: event.metrics};
+      return;
     case "cache-hit":
       result.completedSemanticQuestions += 1;
       result.cacheHits += 1;
@@ -203,7 +220,7 @@ function emptyResult(settings: ThroughputOptions, mode: string): ScanResult {
     stage: "starting", completedStages: 0, totalStages: 0, stageFindings: 0,
     completedInferenceWindows: 0, completedInferenceCalls: 0,
     crossQuestionBatches: 0, maximumBatchSize: 0, completedSemanticQuestions: 0,
-    cacheHits: 0, provider: "not initialised", gpuWindows: {}, gpuProviderProof: {}, error: null
+    cacheHits: 0, experts: {}, provider: "not initialised", gpuWindows: {}, gpuProviderProof: {}, error: null
   };
 }
 

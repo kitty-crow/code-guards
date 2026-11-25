@@ -224,6 +224,9 @@ export class EmbeddingExpert {
     if (this.persistent && vector) this.persistent.write(key, vector);
   }
 
+  // Retain a complete batch-local lookup even if inserting new vectors evicts
+  // earlier entries from the bounded memory cache. Disk writes happen only
+  // after successful encoding, so an interrupted batch cannot create a hit.
   private async embedGroup(group: SourceEvidence[]): Promise<(number[] | null)[]> {
     const keys = group.map(item => contentKey(this.profile, item.text));
     const completed = new Map<string, number[] | null>();
@@ -302,12 +305,19 @@ export class CodeExpert extends EmbeddingExpert {
 }
 
 /** Resolve a private cache outside the target source and published Git snapshot. */
-export function expertCacheDirectory(settings: Readonly<Record<string, string | undefined>> = process.env): string {
+export function expertCacheDirectory(settings: Readonly<Record<string, string>> = {
+  CODE_GUARDS_EXPERT_CACHE_DIR: process.env.CODE_GUARDS_EXPERT_CACHE_DIR ?? "",
+  CODE_GUARDS_INFERENCE_CACHE_DIR: process.env.CODE_GUARDS_INFERENCE_CACHE_DIR ?? "",
+  LOCALAPPDATA: process.env.LOCALAPPDATA ?? "",
+  XDG_CACHE_HOME: process.env.XDG_CACHE_HOME ?? ""
+}): string {
   const explicit = settings.CODE_GUARDS_EXPERT_CACHE_DIR ?? "";
   if (explicit) return path.resolve(explicit);
   const inference = settings.CODE_GUARDS_INFERENCE_CACHE_DIR ?? "";
   if (inference) return path.resolve(inference) + ".experts";
-  const base = settings.LOCALAPPDATA ?? settings.XDG_CACHE_HOME ?? path.join(homedir(), ".cache");
+  const local = settings.LOCALAPPDATA ?? "";
+  const xdg = settings.XDG_CACHE_HOME ?? "";
+  const base = local || xdg || path.join(homedir(), ".cache");
   return path.resolve(base, "code-guards", "experts");
 }
 

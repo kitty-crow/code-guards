@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { resolve } from "node:path";
-import { throughputOptions, usefulBenchmarkError } from "../scripts/benchmark-throughput.ts";
+import { throughputOptions, usefulBenchmarkError, decodeEvent } from "../scripts/benchmark-throughput.ts";
 
 test("throughput benchmark defaults to three independent, minute-long scans", () => {
   const options = throughputOptions(["--project", "tsconfig.json"]);
@@ -69,4 +69,11 @@ test("benchmark keeps the worker exception rather than Bun version footer", () =
     "Bun v1.4.3 (Windows x64)"
   ];
   assert.match(usefulBenchmarkError(lines) ?? "", /adapter unavailable/);
+});
+
+test("throughput accepts model-specific expert completion telemetry", () => {
+  const event = {type: "expert-complete", model: "example/embedding", revision: "revision",
+    device: "cpu", metrics: {loads: 0, batches: 0, cacheHits: 4, persistentHits: 4, encodedInputs: 0,
+      loadMilliseconds: 0, inferenceMilliseconds: 0, sampledPeakRssBytes: 0, rssAfterDisposalBytes: 100}};
+  assert.deepEqual(decodeEvent(JSON.stringify(event)), event);
 });
