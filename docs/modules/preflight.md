@@ -26,7 +26,12 @@ Without cross-question batching, calls equal the sum of the window batches for e
 
 Documentation has adaptive selection: a strong README handover verdict can suppress the style questions for that paragraph. Preflight runs the unchanged documentation guard with two opposing synthetic verdicts to calculate possible minimum and maximum workloads. The real question count depends on the model verdicts.
 
-Set `CODE_GUARDS_MEASURED_WINDOWS_PER_SECOND` to a measured positive throughput for the selected WebGPU hardware and settings to obtain a warm inference-only estimate. The JSON field `estimatedWarmInferenceSeconds` is null when no throughput is supplied or adaptive embedding retrieval is enabled. GPU count alone does not identify performance.
+Set `CODE_GUARDS_MEASURED_WINDOWS_PER_SECOND` to the measured window throughput of the selected WebGPU configuration.
+
+| Configuration | `estimatedWarmInferenceSeconds` |
+| --- | --- |
+| WebGPU with measured throughput and no adaptive embedding retrieval | Window count divided by throughput, in seconds |
+| Missing throughput, other backends or adaptive embedding retrieval | `null` |
 
 Preflight does not write to the target project and does not emit ordinary findings. `--format json` returns machine-readable bounds and limitations; otherwise it prints a short text report. `--strict` has no effect on preflight because it never produces inferred violations.
 
