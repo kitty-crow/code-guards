@@ -6,7 +6,7 @@ import { isTestFile, type Project } from "../project.ts";
 import { zeroShot, supportsReuse, semanticConcurrency, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
-type Property = { name: string; fingerprint: string };
+type Property = { name: string; fingerprint: string; origin: ts.Declaration | null };
 type Definition = {
   name: string;
   kind: "type" | "interface" | "class";
@@ -215,6 +215,7 @@ function getDefinitions(project: Project, includeTests: boolean): Definition[] {
         const declaration = declarationOf(property);
         return {
           name: property.name,
+          origin: declaration,
           fingerprint: declaration ? fingerprint(project.checker.getTypeOfSymbolAtLocation(property, declaration), project.checker, project.root) : "unknown"
         };
       });
@@ -307,8 +308,23 @@ function reuseAdvice(a: Definition, b: Definition, exact: boolean): string {
   return `${prefix}Prefer importing the existing definition: import type { ${a.name} } from "${module}"; If callers require the ${b.name} name, expose an alias: export type ${b.name} = ${a.name}; Confirm both concepts should evolve together.`;
 }
 
+/** Shared declaration identities are evidence of reuse, not duplicated implementation.
+ * Keep independently declared overrides and unrelated structural lookalikes.
+ */
+function independentProperties(left: Definition, right: Definition): Property[] {
+  const reused = new Set(right.properties
+    .filter(property => property.origin !== null)
+    .map(property => property.origin));
+  return left.properties.filter(property => property.origin === null || !reused.has(property.origin));
+}
+
 async function compareDefinitions(project: Project, a: Definition, b: Definition, score: SemanticScorer): Promise<Finding | null> {
   if (a.node.getSourceFile() === b.node.getSourceFile()) return null;
+  const independentA = independentProperties(a, b);
+  const independentB = independentProperties(b, a);
+  if (independentA.length === 0 || independentB.length === 0) return null;
+  const localA = { ...a, properties: independentA };
+  const localB = { ...b, properties: independentB };
   const isClass = a.kind === "class" || b.kind === "class";
   const commonShape = a.fingerprint === b.fingerprint && a.genericSignature === b.genericSignature && !isClass;
   // Independent generic declarations have distinct formal parameter symbols.
@@ -319,8 +335,8 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
     ? !a.fingerprint.includes("complex:") && !a.genericSignature.includes("complex:")
     : project.checker.isTypeAssignableTo(a.type, b.type) && project.checker.isTypeAssignableTo(b.type, a.type);
   const exactMatch = commonShape && equivalent;
-  const commonFields = fieldSimilarity(a, b, false);
-  const semanticFields = fieldSimilarity(a, b, true);
+  const commonFields = fieldSimilarity(localA, localB, false);
+  const semanticFields = fieldSimilarity(localA, localB, true);
   const nearMatch = commonFields >= 0.7 && !exactMatch && !isClass;
   // A similar name alone is not evidence that two types share a reusable contract.
   // Require matching field names and compatible types before asking the model.
@@ -330,7 +346,7 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
   // actual zero-shot entailment and contradiction checks before reporting.
   let confidence = 1;
   if (!exactMatch) {
-    const premise = `Two TypeScript declarations are being reviewed for reuse. The first is named ${a.name} with fields ${a.properties.map(p => `${p.name} (${p.fingerprint})`).join(", ")}. The second is named ${b.name} with fields ${b.properties.map(p => `${p.name} (${p.fingerprint})`).join(", ")}.`;
+    const premise = `Two TypeScript declarations are being reviewed for reuse. The first is named ${a.name} with fields ${independentA.map(p => `${p.name} (${p.fingerprint})`).join(", ")}. The second is named ${b.name} with fields ${independentB.map(p => `${p.name} (${p.fingerprint})`).join(", ")}.`;
     const verdict = await score({
       premise,
       same: "both declarations represent the same domain concept and may share a reusable type",
@@ -341,12 +357,12 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
   if (confidence === 0) return null;
 
   const code = exactMatch ? "CG101" : nearMatch ? "CG102" : "CG103";
-  const shared = b.properties.filter(property => a.properties.some(other => other.name === property.name && other.fingerprint === property.fingerprint));
+  const shared = independentB.filter(property => independentA.some(other => other.name === property.name && other.fingerprint === property.fingerprint));
   const fields = shared.slice(0, 8).map(property => property.name).join(", ");
   const fieldNote = shared.length > 8 ? `${fields}, plus ${shared.length - 8} more` : fields;
   const reason = exactMatch
     ? `${b.name} duplicates the complete resolved shape of ${a.name} (${b.properties.length} fields: ${b.properties.map(property => property.name).join(", ")}).`
-    : `${b.name} and ${a.name} may overlap. ${shared.length} exactly matching field(s)${shared.length ? `: ${fieldNote}` : ""}; zero-shot confidence ${Math.round(confidence * 100)}%. ${isClass ? "Class runtime behaviour may still differ." : "This is not proof of equivalent domain meaning."}`;
+    : `${b.name} and ${a.name} may overlap. ${shared.length} independently declared matching field(s)${shared.length ? `: ${fieldNote}` : ""}; zero-shot confidence ${Math.round(confidence * 100)}%. ${isClass ? "Class runtime behaviour may still differ." : "This is not proof of equivalent domain meaning."}`;
   return {
     guard: "type-reuse", severity: "warning", code,
     message: exactMatch ? `Duplicate type definition: ${b.name} matches ${a.name}` : `Potential type overlap: ${b.name} and ${a.name}`,

@@ -13,3 +13,7 @@ Classes with different runtime behaviour are never declared exact duplicates sol
 `CG103` requires compatible resolved field types and at least 65% semantic field-name overlap before the local model is consulted. Matching declaration names alone, or sharing only a small subset of configuration fields, is not sufficient evidence of reuse. `CG102` requires at least 70% exact field overlap plus model agreement.
 
 Compiler-generated qualified names for modules inside the scanned project use project-relative identities, preserving their directory structure. Semantic questions no longer depend on an absolute checkout location for these names. Existing cache entries with absolute paths remain intact but cannot be reused for questions whose text changed; the portable questions are cached normally thereafter. External module identities and literal values are not deliberately rewritten.
+
+### Inherited declarations
+
+An inherited member with the same compiler declaration identity in two types is already reused. CG101/CG102/CG103 compare independently declared members rather than treating shared base members as duplicate implementations. Independently declared overrides and separate structural contracts remain eligible for review. Exact duplicate extensions with independently repeated members remain reportable.
