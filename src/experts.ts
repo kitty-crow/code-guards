@@ -325,12 +325,20 @@ function configuredBudget(): number {
   return Number(process.env.CODE_GUARDS_EXPERT_RAM_MIB ?? "2048") * 1048576;
 }
 
+export function createProseExpert(cacheDirectory: string, rssBudgetBytes = configuredBudget()): ProseExpert {
+  return new ProseExpert(() => loadEmbeddingRuntime(PROSE_EXPERT), rssBudgetBytes, cacheDirectory);
+}
+
+export function createCodeExpert(cacheDirectory: string, rssBudgetBytes = configuredBudget()): CodeExpert {
+  return new CodeExpert(() => loadEmbeddingRuntime(CODE_EXPERT), rssBudgetBytes, cacheDirectory);
+}
+
 export function configuredProseExpert(): ProseExpert | null {
   if ((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") !== "1") return null;
-  return new ProseExpert(() => loadEmbeddingRuntime(PROSE_EXPERT), configuredBudget(), expertCacheDirectory());
+  return createProseExpert(expertCacheDirectory());
 }
 
 export function configuredCodeExpert(): CodeExpert | null {
   if ((process.env.CODE_GUARDS_EXPERIMENTAL_CODE ?? "") !== "1") return null;
-  return new CodeExpert(() => loadEmbeddingRuntime(CODE_EXPERT), configuredBudget(), expertCacheDirectory());
+  return createCodeExpert(expertCacheDirectory());
 }

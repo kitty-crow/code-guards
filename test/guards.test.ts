@@ -280,10 +280,18 @@ test("similar option names do not imply reusable types without field-level evide
 });
 
 test("complex functions with documented invariants are not reported as unexplained", async () => {
-  const sample = loadProject(path.resolve("tsconfig.json"));
-  const findings = await functionQuality(sample, false, endorse);
-  const documented = new Set(["suggestion", "explain", "inspectFunction", "checkNarrative", "documentation"]);
-  assert.deepEqual(findings.filter(item => item.code === "CG202" && documented.has(item.subject ?? "")), []);
+  const steps = Array.from(Array<number>(28).keys(), i => `if (value === ${i}) { value += 1; }`).join("\n");
+  const sample = project({"normalise.ts": `// Each transition must run in order: its output may trigger the next rule.\nexport function normalise(value: number) {\n${steps}\nreturn value;\n}`});
+  let reviewed = 0;
+  const scorer: SemanticScorer = async question => {
+    if (!question.same.includes("non-obvious decision or invariant")) return reject(question);
+    reviewed += 1;
+    assert.match(question.premise, /line 1: \/\/ Each transition must run in order/);
+    assert.match(question.premise, /if \(value === 27\)/);
+    return reject(question);
+  };
+  assert.deepEqual((await functionQuality(sample, false, scorer)).filter(item => item.code === "CG202"), []);
+  assert.equal(reviewed, 1);
 });
 
 test("documentation commands use the nearest package manifest", async () => {
