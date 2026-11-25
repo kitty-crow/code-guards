@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - scripts/verify-experts.ts
+      - examples/coverage/check-quality.mts
       - .github/workflows/specialist-smoke.yml
 permissions:
   contents: read
@@ -22,3 +23,12 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Verify cold and warm retrieval
         run: bun scripts/verify-experts.ts
+
+      - name: Verify offline model availability and cache equivalence
+        env:
+          CODE_GUARDS_OFFLINE: '1'
+        run: bun scripts/verify-experts.ts
+      - name: Verify real MobileBERT windowing
+        run: bun run demo:model:bun
+      - name: Measure internal labelled function-pair ablation
+        run: bun examples/coverage/check-quality.mts
