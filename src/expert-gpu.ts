@@ -173,6 +173,6 @@ class GpuEmbeddingProcess {
 export async function openGpuEmbeddingRuntime(profile: ExpertProfile, gpu: ExpertGpu): Promise<EmbeddingRuntime> {
   const process = new GpuEmbeddingProcess(profile, gpu);
   try { await process.initialise(); }
-  catch (error) { await process.close(); throw error; }
+  catch (error) { await process.close(); throw error instanceof Error ? error : new Error("Expert GPU initialisation failed."); }
   return {embed: passages => process.embed(passages), dispose: () => process.close()};
 }
