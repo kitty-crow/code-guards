@@ -431,3 +431,22 @@ test("type reuse does not conflate unrelated structurally identical interfaces",
   const findings = await typeReuse(sample, false, endorse);
   assert.ok(findings.some(item => item.code === "CG103" && item.location.file === "two.ts"));
 });
+
+test("CG205 preserves call targets and string literal content in structural comparisons", async () => {
+  const sample = project({
+    "one.ts": "function calculate(value: number) { return value + 1; } export function alpha(x: number) { const y = calculate(x); const z = y + 2; return z; }",
+    "two.ts": "function calculate(value: number) { return value * 2; } export function beta(x: number) { const y = calculate(x); const z = y + 2; return z; }",
+    "three.ts": "export function label(x: string) { const y = x + 'a b'; const z = y + '!'; return z; }",
+    "four.ts": "export function caption(x: string) { const y = x + 'ab'; const z = y + '!'; return z; }"
+  });
+  assert.deepEqual((await functionQuality(sample, false, reject)).filter(item => item.code === "CG205"), []);
+});
+
+test("CG204 keeps stateless methods required by a declared contract", async () => {
+  const sample = project({
+    "contract.ts": "export interface Formatter { format(value: string): string; }",
+    "formatter.ts": "import { Formatter } from './contract'; export class TextFormatter implements Formatter { format(value: string) { return value.trim(); } extra(value: string) { return value.toLowerCase(); } }"
+  });
+  const findings = await functionQuality(sample, false, endorse);
+  assert.deepEqual(findings.filter(item => item.code === "CG204").map(item => item.subject), ["extra"]);
+});

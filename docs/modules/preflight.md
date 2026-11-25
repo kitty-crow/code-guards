@@ -7,7 +7,7 @@ The `--preflight` CLI option estimates semantic questions and token-bounded evid
 ## Usage
 
 ```sh
-bun src/cli.ts all --project ../tensorflow-ts/tsconfig.code-guards.json --preflight --include-tests --accelerate batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4 --format json
+bun src/cli.ts all --project ../example-project/tsconfig.code-guards.json --preflight --include-tests --accelerate batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4 --format json
 ```
 
 No model weights, ONNX sessions or GPU workers are loaded. Only the Xenova/mobilebert-uncased-mnli tokenizer is initialised. On the first run it may download tokenizer assets, but never model weights. `--offline` requires an existing tokenizer cache. `CODE_GUARDS_MODEL_CACHE` selects the cache location.

@@ -3,7 +3,7 @@
 Source: [`scripts/benchmark-throughput.ts`](../../scripts/benchmark-throughput.ts)
 
 Run `bun run benchmark:throughput --project /path/to/tsconfig.code-guards.json`
-to compare real scans of the TensorFlow TypeScript source tree.
+to compare real scans of an existing TypeScript project.
 The default runs three configurations: CPU/q8, WebGPU/FP32 and
 WebGPU/FP32 with four-window batches.
 
@@ -59,7 +59,7 @@ largest model call. A nonzero `crossQuestionBatches` is direct evidence that
 To measure explicit dual-DirectML adapter execution on Windows:
 
 ```powershell
-bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode dml --mode parallel,dml --gpu-ids 0,1 --concurrency 4
+bun run benchmark:throughput --project "$env:TEMP\\example-project\\tsconfig.code-guards.json" --mode dml --mode parallel,dml --gpu-ids 0,1 --concurrency 4
 ```
 
 This reports work completed by each adapter and retains the 60-second
@@ -100,8 +100,8 @@ is diagnostic and may be slower than later ones.
 Run each command separately, retaining identical batch size and concurrency:
 
 ```powershell
-bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0 --concurrency 4 --batch-size 4
-bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4
+bun run benchmark:throughput --project "$env:TEMP\\example-project\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0 --concurrency 4 --batch-size 4
+bun run benchmark:throughput --project "$env:TEMP\\example-project\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4
 ```
 
 This compares the same native plugin, model format and scoring path rather

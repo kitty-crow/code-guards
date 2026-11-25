@@ -16,6 +16,8 @@ type FunctionInfo = {
   statements: number;
   dependencies: Set<string>;
   calls: Set<string>;
+  callTargets: string[];
+  contract: boolean;
   comments: boolean;
   arguments: number;
   fingerprint: string;
@@ -41,8 +43,12 @@ function recordCall(project: Project, file: ts.SourceFile, node: ts.CallExpressi
     ? project.checker.getAliasedSymbol(reference) : reference;
   const declarations = symbol ? symbol.declarations ?? [] : [];
   const first = declarations[0] ?? null;
-  if (!first) return;
+  if (!first) {
+    info.callTargets.push(`unresolved:${path.relative(project.root, file.fileName)}:${target.getText(file)}`);
+    return;
+  }
   const source = first.getSourceFile();
+  info.callTargets.push(`${path.relative(project.root, source.fileName).replace(/\\/g, "/")}:${first.getStart(source)}`);
   if (source !== file && !source.isDeclarationFile) info.dependencies.add(source.fileName);
 }
 
@@ -56,6 +62,20 @@ function branchClause(node: ts.Node): string {
   return "";
 }
 
+// A method required by an explicit base or interface contract cannot be removed
+// solely because its body does not read instance state.
+function requiredMethod(node: ts.Node, checker: ts.TypeChecker): boolean {
+  if (!ts.isMethodDeclaration(node)) return false;
+  const modifiers = ts.getModifiers(node) ?? [];
+  if (modifiers.some(modifier => modifier.kind === ts.SyntaxKind.OverrideKeyword)) return true;
+  const parent = node.parent;
+  if (!ts.isClassDeclaration(parent) && !ts.isClassExpression(parent)) return false;
+  const symbol = checker.getSymbolAtLocation(node.name) ?? null;
+  if (!symbol) return false;
+  const heritage = (parent.heritageClauses ?? []).flatMap(clause => clause.types);
+  return heritage.some(item => Boolean(checker.getPropertyOfType(checker.getTypeAtLocation(item), symbol.name)));
+}
+
 function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
   const result: FunctionInfo[] = [];
   for (const file of project.files) {
@@ -67,7 +87,8 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
       if (!name || !body) { ts.forEachChild(node, visit); return; }
       const info: FunctionInfo = {
         name, node, body, lines: 0, branches: 0, branchClauses: [], statements: 0,
-        dependencies: new Set(), calls: new Set(), comments: false, arguments: node.parameters.length, fingerprint: ""
+        dependencies: new Set(), calls: new Set(), callTargets: [], contract: requiredMethod(node, project.checker),
+        comments: false, arguments: node.parameters.length, fingerprint: ""
       };
       const start = file.getLineAndCharacterOfPosition(body.getStart(file)).line;
       const end = file.getLineAndCharacterOfPosition(body.getEnd()).line;
@@ -88,7 +109,10 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
         ts.forEachChild(current, visitBody);
       };
       visitBody(body);
-      info.fingerprint = body.getText(file).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "").replace(/\s+/g, "").replace(/\b[a-z_$][\w$]*(?=\s*\()/gi, "_");
+      // The printer removes trivia without altering literal content or call names.
+      // Resolved call targets distinguish equally named operations in different modules.
+      const printed = ts.createPrinter({removeComments: true}).printNode(ts.EmitHint.Unspecified, body, file);
+      info.fingerprint = JSON.stringify([printed, info.callTargets]);
       result.push(info);
       ts.forEachChild(node, child => { if (child !== body) visit(child); });
     };
@@ -109,7 +133,7 @@ async function reviewFunction(info: FunctionInfo, score: SemanticScorer, emit: E
     { trigger: info.lines >= 45 && info.branches >= 4, code: "CG201", suggestion: "this function has multiple responsibilities and should be split into smaller focused functions", opposite: "this function is cohesive and should remain one function" },
     { trigger: info.lines >= 25 && info.branches >= 3 && !info.comments, code: "CG202", suggestion: "this function needs explanatory comments describing non-obvious decisions and invariants", opposite: "this function is self-explanatory and needs no comments" },
     { trigger: info.dependencies.size >= 4, code: "CG203", suggestion: "this function depends on too many external modules and may belong in a different module", opposite: "the function has appropriate modular dependencies" },
-    { trigger: ts.isMethodDeclaration(info.node) && info.lines <= 6 && info.statements <= 2 && !/\b(?:this|super)\b/.test(info.body.getText()), code: "CG204", suggestion: "this short stateless method could be a standalone helper or arrow function instead of a class method", opposite: "this method belongs to the class and needs its own method declaration" }
+    { trigger: ts.isMethodDeclaration(info.node) && !info.contract && info.lines <= 6 && info.statements <= 2 && !/\b(?:this|super)\b/.test(info.body.getText()), code: "CG204", suggestion: "this short stateless method could be a standalone helper or arrow function instead of a class method", opposite: "this method belongs to the class and needs its own method declaration" }
   ];
   for (const check of checks) {
     if (!check.trigger) continue;

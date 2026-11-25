@@ -8,7 +8,7 @@ The public `synchroniseInferenceCache(action, cacheDir, remote, log?)` export me
 
 Code Guards retains its project-wide candidate index, cross-file type comparisons,
 and ordered parallel semantic scheduler. The explicit `--gpu-ids 0,1` setting
-uses two independent native WebGPU workers, one on each RTX 2080 Ti.
+uses two independent native WebGPU workers, one per selected adapter.
 
 The native workers can now reuse **individual completed evidence-window scores**
 across runs, even when an earlier question was interrupted. A shared SQLite database
@@ -18,13 +18,13 @@ window indexes. Changed questions reuse unchanged windows, while new or modified
 window text produces new content hashes. The cache key includes a fingerprint of the
 ONNX weights, tokenizer and scoring ABI, preventing incompatible reuse.
 
-## Run on KittyWin
+## Run on Windows
 
 From a Code Guards checkout with a working native WebGPU Python environment:
 
 ```powershell
 $env:CODE_GUARDS_WEBGPU_PYTHON = "$env:TEMP\code-guards-webgpu\Scripts\python.exe"
-bun src/cli.ts all --project "$env:TEMP\tensorflow-ts-benchmark\tsconfig.code-guards.json" --strict --include-tests --progress --accelerate batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4 --inference-cache-dir "$env:TEMP\code-guards-inference" --cache-remote https://github.com/kitty-crow/tensorflow-ts.git --sync-inference-cache --format json > "$env:TEMP\tensorflow-ts-findings.json"
+bun src/cli.ts all --project "$env:TEMP\example-project\tsconfig.code-guards.json" --strict --include-tests --progress --accelerate batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4 --inference-cache-dir "$env:TEMP\code-guards-inference" --cache-remote https://github.com/OWNER/REPOSITORY.git --sync-inference-cache --format json > "$env:TEMP\code-guards-findings.json"
 ```
 
 The opt-in `--sync-inference-cache` flag downloads existing completed window

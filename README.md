@@ -244,7 +244,7 @@ CODE_GUARDS_BENCHMARK_LONG=1 bun run benchmark:inference --accelerate batch --ba
 bun run benchmark:inference --accelerate webgpu
 bun run benchmark:inference --accelerate cuda
 bun run benchmark:inference --accelerate cache,batch,webgpu --batch-size 4
-bun run guards:bun --project ../tensorflow-ts/tsconfig.code-guards.json --accelerate cache,batch,cuda --batch-size 4
+bun run guards:bun --project ../example-project/tsconfig.code-guards.json --accelerate cache,batch,cuda --batch-size 4
 ```
 
 CUDA and WebGPU are explicit GPU requests; model compatibility, runtime
@@ -252,17 +252,14 @@ libraries and drivers determine availability. Use `--accelerate cuda,webgpu`
 to try CUDA then WebGPU, or reverse the order. These are alternative
 providers, not simultaneous multi-GPU execution. CPU is **not** silently
 selected if both fail. GPU precision is FP32, and semantic scores may differ
-from CPU/q8. All work remains local. The TensorFlow fork is a real-world
-project-scan target, not an inference model.
+from CPU/q8. All work remains local. The benchmark accepts an existing TypeScript project.
 
-## Sixty-second TensorFlow source throughput comparison
+## Sixty-second source throughput comparison
 
-To compare actual Code Guards progress across CPU and GPU modes using
-the TensorFlow TypeScript fork, start from a checkout of Code Guards
-and an existing checkout of TensorFlow TypeScript:
+To compare Code Guards progress across CPU and GPU modes, supply the path to an existing TypeScript project's configuration:
 
 ```sh
-bun run benchmark:throughput --project /absolute/path/to/tensorflow-ts/tsconfig.code-guards.json
+bun run benchmark:throughput --project /absolute/path/to/example-project/tsconfig.code-guards.json
 ```
 
 The supervisor runs three independent real scans, each with a hard
@@ -307,7 +304,7 @@ multiple calls targeted the same WebGPU session concurrently.
 Compare it directly against the previous WebGPU baseline:
 
 ```powershell
-bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode webgpu --mode batch,webgpu --mode batch,parallel,webgpu --concurrency 4
+bun run benchmark:throughput --project "$env:TEMP\\benchmark-project\\tsconfig.code-guards.json" --mode webgpu --mode batch,webgpu --mode batch,parallel,webgpu --concurrency 4
 ```
 
 This optimisation is experimental and its throughput improvement needs to
@@ -331,7 +328,7 @@ physical-adapter selector.
 
 Install a separate Python environment with the matched pair
 `onnxruntime==1.31.0` and `onnxruntime-ep-webgpu==0.5.0`, plus
-`huggingface-hub`, `tokenizers` and `numpy`. For example on KittyWin:
+`huggingface-hub`, `tokenizers` and `numpy`. For example on Windows:
 
 ```powershell
 py -3.12 -m venv "$env:TEMP\\code-guards-webgpu"
@@ -342,7 +339,7 @@ $env:CODE_GUARDS_WEBGPU_PYTHON = "$env:TEMP\\code-guards-webgpu\\Scripts\\python
 Then run:
 
 ```powershell
-bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode webgpu --mode parallel,webgpu --gpu-ids 0,1 --concurrency 4
+bun run benchmark:throughput --project "$env:TEMP\\benchmark-project\\tsconfig.code-guards.json" --mode webgpu --mode parallel,webgpu --gpu-ids 0,1 --concurrency 4
 ```
 
 This is experimental and must be hardware-validated; compare both per-adapter
@@ -351,7 +348,7 @@ counters and semantic scores before adopting it. It does not use NVLink.
 Before running the full native dual-WebGPU benchmark, run
 `bun run probe:dual-webgpu`. The probe initialises adapter 0 and 1,
 runs an inference on each and prints either their scores or the concrete
-failure. No TensorFlow project scan is needed for this smoke test.
+failure. The probe requires no external source project.
 
 ## Fair native WebGPU scaling comparison
 
@@ -360,8 +357,8 @@ Unlike the default `webgpu` mode, both of the following use the **same
 native ONNX WebGPU plugin** and model format:
 
 ```powershell
-bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0 --concurrency 4 --batch-size 4
-bun run benchmark:throughput --project "$env:TEMP\\tensorflow-ts-benchmark\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4
+bun run benchmark:throughput --project "$env:TEMP\\benchmark-project\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0 --concurrency 4 --batch-size 4
+bun run benchmark:throughput --project "$env:TEMP\\benchmark-project\\tsconfig.code-guards.json" --mode batch,parallel,webgpu --gpu-ids 0,1 --concurrency 4 --batch-size 4
 ```
 
 Question assignment across workers now favours the least-queued adapter and

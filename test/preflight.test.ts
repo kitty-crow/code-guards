@@ -177,8 +177,8 @@ test("explicit native WebGPU cache requires both directory and a remote for sync
   assert.equal(local.inferenceCacheDir, "C:\\cache");
   assert.equal(local.syncInferenceCache, false);
   const remote = options([...base, "--inference-cache-dir", "C:\\cache",
-    "--cache-remote", "https://github.com/kitty-crow/tensorflow-ts.git",
+    "--cache-remote", "https://github.com/example-owner/example-project.git",
     "--sync-inference-cache"]);
   assert.equal(remote.syncInferenceCache, true);
-  assert.equal(remote.cacheRemote, "https://github.com/kitty-crow/tensorflow-ts.git");
+  assert.equal(remote.cacheRemote, "https://github.com/example-owner/example-project.git");
 });

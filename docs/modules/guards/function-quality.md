@@ -17,6 +17,6 @@ Source: [`src/guards/function-quality.ts`](../../../src/guards/function-quality.
 
 ## Behaviour and boundaries
 
-The model receives AST-derived metrics, not a proof of design intent. Review false positives, especially when a public API intentionally wraps a helper.
+Structural comparison removes comments and formatting without discarding call names or string contents. Resolved call declarations distinguish same-named operations from different modules. CG204 excludes methods required by explicit base or interface contracts. Other public API obligations require review.
 
 `CG202` only considers branch-heavy functions without detected comments. A comment is useful when it explains a non-obvious invariant or safety condition; narrated comments are not an acceptable way to satisfy it, and are checked separately by `CG319`.

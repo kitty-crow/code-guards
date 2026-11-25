@@ -58,7 +58,7 @@ test("throughput rejects invalid modes, bounds and non-existent projects", () =>
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--seconds", "0"]), /--seconds/);
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--batch-size", "17"]), /--batch-size/);
   assert.throws(() => throughputOptions(["--project", "tsconfig.json", "--guard", "not-a-guard"]), /Unknown guard/);
-  assert.throws(() => throughputOptions(["--project", "tsconfig-nonexistent-123.json"]), /existing TensorFlow tsconfig/);
+  assert.throws(() => throughputOptions(["--project", "tsconfig-nonexistent-123.json"]), /existing TypeScript tsconfig/);
 });
 
 test("benchmark keeps the worker exception rather than Bun version footer", () => {

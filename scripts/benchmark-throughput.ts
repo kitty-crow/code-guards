@@ -55,7 +55,7 @@ function readOptions(argv: readonly string[]): ThroughputOptions {
 }
 
 function validateOptions(settings: ThroughputOptions): void {
-  if (!settings.project || !existsSync(settings.project)) throw new Error("Supply --project with an existing TensorFlow tsconfig path.");
+  if (!settings.project || !existsSync(settings.project)) throw new Error("Supply --project with an existing TypeScript tsconfig path.");
   if (!Number.isSafeInteger(settings.seconds) || settings.seconds < 1 || settings.seconds > 3600) throw new Error("--seconds must be 1..3600.");
   if (!Number.isSafeInteger(settings.batchSize) || settings.batchSize < 2 || settings.batchSize > 16) throw new Error("--batch-size must be 2..16.");
   if (!Number.isSafeInteger(settings.concurrency) || settings.concurrency < 2 || settings.concurrency > 16) throw new Error("--concurrency must be 2..16.");
