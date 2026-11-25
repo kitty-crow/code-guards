@@ -10,19 +10,54 @@ permissions:
   contents: read
 
 jobs:
-  tests:
+  typecheck:
+    name: Type checking
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
       - name: Install dependencies with Bun
-        run: bun install
-      - name: Type check
-        run: bun run typecheck
-      - name: Build TypeScript with Bun
-        run: bun run build
-      - name: Unit tests with Bun
+        run: bun install --frozen-lockfile
+      - name: Check TypeScript
+        run: bun run --bun typecheck
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install dependencies with Bun
+        run: bun install --frozen-lockfile
+      - name: Compile TypeScript
+        run: bun run --bun build
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install dependencies with Bun
+        run: bun install --frozen-lockfile
+      - name: Build test fixtures and CLI
+        run: bun run --bun build
+      - name: Run Bun unit tests
         run: bun test --timeout 30000 ./test/*.test.ts
+
+  strict-self-scan:
+    name: Strict self-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install dependencies with Bun
+        run: bun install --frozen-lockfile
+      - name: Build CLI
+        run: bun run --bun build
       - name: Strict full self-check with progress
         run: bun dist/src/cli.js --strict --include-tests --progress
