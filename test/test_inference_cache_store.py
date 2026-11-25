@@ -24,6 +24,22 @@ class InferenceCacheTest(unittest.TestCase):
             second.close()
             third.close()
 
+    def test_raw_cache_is_provider_specific_and_does_not_replace_legacy_scores(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = WindowCache(tmp, "model-a")
+            key = cache.key("input", "same", "different")
+            pair = ((1.0, 2.0, 3.0), (4.0, 5.0, 6.0))
+            cache.put_many([(key, 0.7, 0.1)])
+            cache.put_raw_many([(key, pair)], "provider-a")
+            cache.close()
+            reopened = WindowCache(tmp, "model-a")
+            self.assertEqual(reopened.get_raw_many([key], "provider-a"), {key: pair})
+            self.assertEqual(reopened.get_raw_many([key], "provider-b"), {})
+            self.assertEqual(reopened.get_many([key]), {key: (0.7, 0.1)})
+            with self.assertRaises(ValueError):
+                reopened.put_raw_many([(key, ((1, 2), (3, 4)))], "provider-a")
+            reopened.close()
+
     def test_sharded_snapshot_merges_without_source_text(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

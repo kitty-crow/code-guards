@@ -79,7 +79,7 @@ class NativeWorkerCacheTest(unittest.TestCase):
 
             def inference(_session, _tokenizer, pairs):
                 calls.append(len(pairs) // 2)
-                return [[0.0, 2.0] if index % 2 == 0 else [2.0, 0.0]
+                return [[0.0, 2.0, 0.5] if index % 2 == 0 else [2.0, 0.0, 1.0]
                         for index in range(len(pairs))]
 
             words = [f"word_{index}" for index in range(1000)]
@@ -94,6 +94,7 @@ class NativeWorkerCacheTest(unittest.TestCase):
             expected_windows = len(worker.evidence_windows(question, tokenizer))
             self.assertGreaterEqual(expected_windows, 3)
             self.assertEqual(sum(calls), expected_windows)
+            self.assertEqual(first_verdict["rawEvidence"][0]["logits"]["support"], {"entailment": 2.0, "neutral": 0.5, "contradiction": 0.0})
             cache.close()
 
             # Only one interior window changes. First and last should survive.
@@ -111,7 +112,35 @@ class NativeWorkerCacheTest(unittest.TestCase):
             self.assertEqual(second_verdict["evidence"]["windows"], expected_windows)
             self.assertEqual(second_verdict["sameConcept"], first_verdict["sameConcept"])
             self.assertEqual(second_verdict["differentConcept"], first_verdict["differentConcept"])
+            self.assertEqual(second_verdict["rawEvidence"], first_verdict["rawEvidence"])
             restored.close()
+
+    def test_legacy_windows_are_reused_until_complete_raw_evidence_is_requested(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tokenizer = FakeTokenizer()
+            session = types.SimpleNamespace(_code_guards_verified=True)
+            question = {"premise": "some evidence", "same": "same", "different": "different"}
+            cache = WindowCache(directory, "model")
+            key = cache.key(question["premise"], question["same"], question["different"])
+            cache.put_many([(key, 0.8, 0.2)])
+            output = []
+            with patch.object(worker, "emit", output.append), patch.object(worker, "run_pairs") as inference:
+                worker.classify({"id": 1, "question": question}, session, tokenizer, 1, 0, 0, 4, cache)
+                inference.assert_not_called()
+                self.assertEqual(output[-1]["verdict"]["rawEvidence"], [{"window": 1, "logits": None}])
+                inference.return_value = [[0.0, 2.0, 5.0], [2.0, 0.0, 3.0]]
+                worker.classify({"id": 2, "question": question}, session, tokenizer, 1, 0, 0, 4, cache,
+                                "provider-a", True)
+                inference.assert_called_once()
+                fresh = output[-1]["verdict"]
+                self.assertEqual(fresh["rawEvidence"][0]["logits"]["support"]["neutral"], 5.0)
+                inference.reset_mock()
+                worker.classify({"id": 3, "question": question}, session, tokenizer, 1, 0, 0, 4, cache,
+                                "provider-a", True)
+                inference.assert_not_called()
+                self.assertEqual(output[-1]["verdict"], fresh)
+                self.assertEqual(cache.get_many([key]), {key: (0.8, 0.2)})
+            cache.close()
 
 
 class PortableCpuCacheTest(unittest.TestCase):

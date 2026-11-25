@@ -7,6 +7,12 @@ export type SimilarityVerdict = {
 export type WindowVerdict = SimilarityVerdict & {
   evidence: { windows: number; supportWindow: number; oppositionWindow: number };
 };
+export type NliLogits = { entailment: number; neutral: number; contradiction: number };
+export type RawNliWindow = {
+  window: number;
+  logits: { support: NliLogits; opposition: NliLogits } | null;
+};
+export type NativeWindowVerdict = WindowVerdict & { rawEvidence: RawNliWindow[] };
 export type SemanticQuestion = { premise: string; same: string; different: string };
 export type SemanticScorer = (question: SemanticQuestion) => Promise<SimilarityVerdict>;
 
@@ -455,6 +461,7 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
 
 export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdict> {
   if (remoteScorer) return remoteScorer(question);
+  if ((process.env.CODE_GUARDS_REQUIRE_RAW_NLI ?? "") === "1") throw new Error("Complete raw NLI evidence requires a native CPU or WebGPU worker.");
   if (closingClassifier) throw new Error("Semantic model is shutting down.");
   const enabled = acceleration.features.has("cache");
   const key = enabled ? JSON.stringify([MODEL, question.premise, question.same, question.different]) : "";

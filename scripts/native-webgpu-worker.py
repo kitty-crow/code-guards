@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
-from inference_cache_store import PortableCpuWindowCache, WindowCache, model_namespace
+from inference_cache_store import PortableCpuWindowCache, WindowCache, model_namespace, RawPair, raw_pair
 
 MODEL = "Xenova/mobilebert-uncased-mnli"
 TEMPLATE = "The evidence indicates that {}."
@@ -203,8 +203,27 @@ def sigmoid(delta: float) -> float:
     return exponent / (1 + exponent)
 
 
+def ordered_logits(logits: Any, entailment: int, contradiction: int) -> tuple[float, float, float]:
+    """Keep three original logits in entailment, neutral, contradiction order."""
+    if len(logits) != 3 or entailment == contradiction or not all(
+        0 <= index < 3 for index in (entailment, contradiction)
+    ):
+        raise ValueError("Expected a three-class NLI classifier.")
+    neutral = 3 - entailment - contradiction
+    return float(logits[entailment]), float(logits[neutral]), float(logits[contradiction])
+
+
+def legacy_scores(pair: RawPair) -> tuple[float, float]:
+    return tuple(sigmoid(row[0] - row[2]) for row in pair)
+
+
+def logit_record(row: tuple[float, float, float]) -> dict[str, float]:
+    return dict(zip(("entailment", "neutral", "contradiction"), row))
+
+
 def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: int,
-             contradiction: int, gpu_id: int, batch_size: int, cache: WindowCache | None = None) -> None:
+             contradiction: int, gpu_id: int, batch_size: int, cache: WindowCache | None = None,
+             provider: str = "test", require_raw: bool = False) -> None:
     question = request["question"]
     if not isinstance(question, dict) or any(
         not isinstance(question.get(key), str) for key in ("premise", "same", "different")
@@ -219,14 +238,17 @@ def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: 
     }})
     positive = negative = 0.0
     positive_window = negative_window = 0
+    raw_evidence: list[dict[str, Any]] = []
     for index in range(0, len(windows), batch_size):
         group = windows[index:index + batch_size]
         keys = ([cache.key(window, question["same"], question["different"]) for window in group]
                 if cache is not None else [])
         cached = cache.get_many(keys) if cache is not None else {}
+        raw_cached = cache.get_raw_many(keys, provider) if cache is not None else {}
         positions = [offset for offset in range(len(group))
-                     if cache is None or keys[offset] not in cached]
-        computed: dict[int, tuple[float, float]] = {}
+                     if cache is None or (keys[offset] not in raw_cached and
+                         (require_raw or keys[offset] not in cached))]
+        computed: dict[int, RawPair] = {}
         if positions:
             pairs = [(group[offset], TEMPLATE.format(label)) for offset in positions
                      for label in (question["same"], question["different"])]
@@ -244,26 +266,40 @@ def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: 
                 "phase": "inference", "milliseconds": elapsed, "batchSize": len(positions),
                 "window": index + 1, "windows": len(windows)
             }})
-            new_rows: list[tuple[str, float, float]] = []
             for pos_index, offset in enumerate(positions):
-                same_logits = logits[pos_index * 2]
-                different_logits = logits[pos_index * 2 + 1]
-                same_score = sigmoid(float(same_logits[entailment]) - float(same_logits[contradiction]))
-                different_score = sigmoid(float(different_logits[entailment]) - float(different_logits[contradiction]))
-                computed[offset] = (same_score, different_score)
-                if cache is not None:
-                    new_rows.append((keys[offset], same_score, different_score))
+                computed[offset] = raw_pair([
+                    ordered_logits(logits[pos_index * 2], entailment, contradiction),
+                    ordered_logits(logits[pos_index * 2 + 1], entailment, contradiction)
+                ])
             if cache is not None:
-                cache.put_many(new_rows)
+                cache.put_raw_many(((keys[offset], pair) for offset, pair in computed.items()), provider)
+                cache.put_many((keys[offset], *legacy_scores(pair)) for offset, pair in computed.items())
         else:
             emit({"type": "timing", "gpuId": gpu_id, "timing": {
                 "phase": "cache-hit", "milliseconds": 0
             }})
         for offset in range(len(group)):
-            result = computed.get(offset)
-            if result is None:
-                result = cached[keys[offset]]
+            pair = computed.get(offset)
+            if pair is None and cache is not None:
+                pair = raw_cached.get(keys[offset])
+            previous = cached.get(keys[offset]) if cache is not None else None
+            if pair is not None:
+                result = legacy_scores(pair)
+                # The portable legacy cache may contain another provider's
+                # scores. Retain them unless complete raw evidence was requested.
+                if previous is not None and not require_raw and previous != result:
+                    pair, result = None, previous
+            elif previous is not None and not require_raw:
+                result = previous
+            else:
+                raise RuntimeError("Missing completed NLI window.")
             same_score, different_score = result
+            raw_evidence.append({
+                "window": index + offset + 1,
+                "logits": None if pair is None else {
+                    "support": logit_record(pair[0]), "opposition": logit_record(pair[1])
+                }
+            })
             if same_score > positive:
                 positive = same_score
                 positive_window = index + offset + 1
@@ -276,6 +312,7 @@ def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: 
     }})
     emit({"type": "result", "id": request["id"], "gpuId": gpu_id, "verdict": {
         "sameConcept": positive, "differentConcept": negative,
+        "rawEvidence": raw_evidence,
         "evidence": {
             "windows": len(windows), "supportWindow": positive_window,
             "oppositionWindow": negative_window
@@ -295,11 +332,15 @@ def main() -> int:
     cpu = os.environ.get("CODE_GUARDS_GPU_BACKEND") == "cpu"
     session, tokenizer, entailment, contradiction, namespace = (
         initialise_cpu() if cpu else initialise(gpu_id))
+    import onnxruntime as ort
+    from importlib.metadata import version
+    provider = "cpu-fp32:" + ort.__version__ if cpu else (
+        "webgpu-fp32:" + ort.__version__ + ":" + version("onnxruntime-ep-webgpu"))
+    require_raw = os.environ.get("CODE_GUARDS_REQUIRE_RAW_NLI") == "1"
     cache_dir = os.environ.get("CODE_GUARDS_INFERENCE_CACHE_DIR")
     cache = None
     if cache_dir:
         if cpu:
-            import onnxruntime as ort
             cache = PortableCpuWindowCache(cache_dir, namespace, ort.__version__)
         else:
             cache = WindowCache(cache_dir, namespace)
@@ -314,7 +355,8 @@ def main() -> int:
             request = json.loads(line)
             if not isinstance(request, dict) or not isinstance(request.get("id"), int):
                 raise ValueError("Malformed WebGPU worker request.")
-            classify(request, session, tokenizer, entailment, contradiction, gpu_id, batch_size, cache)
+            classify(request, session, tokenizer, entailment, contradiction, gpu_id, batch_size,
+                     cache, provider, require_raw)
     finally:
         if cache is not None:
             cache.close()

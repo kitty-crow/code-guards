@@ -114,3 +114,5 @@ session options. CPU, CUDA and WebGPU remain selectable independently.
 `disposeLocalSemanticModel()` drains accepted local questions before releasing the Transformers.js session. The CLI awaits disposal before restoring scan settings. This does not establish that the native allocator releases physical GPU memory immediately.
 
 `loadTransformers()` centralises offline and model-cache configuration for both tokenisers and neural models.
+
+`NliLogits`, `RawNliWindow` and `NativeWindowVerdict` represent original native-worker entailment, neutral and contradiction logits for both hypotheses. A null window means only a legacy reduced score is available. The default Transformers.js pipeline does not expose three-class logits through its zero-shot API. `CODE_GUARDS_REQUIRE_RAW_NLI=1` requires a native CPU or WebGPU worker and rejects the reduced-score local pathway. These logits are not calibrated probabilities; the existing decision thresholds remain unchanged.

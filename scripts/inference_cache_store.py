@@ -23,6 +23,24 @@ CREATE = """CREATE TABLE IF NOT EXISTS windows (
 ) WITHOUT ROWID"""
 
 
+RAW_CREATE = """CREATE TABLE IF NOT EXISTS raw_nli (
+    key TEXT PRIMARY KEY,
+    logits TEXT NOT NULL
+) WITHOUT ROWID"""
+RawPair = tuple[tuple[float, float, float], tuple[float, float, float]]
+
+
+def raw_pair(value: object) -> RawPair:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError("Expected two NLI hypotheses.")
+    if any(not isinstance(row, (list, tuple)) or len(row) != 3 for row in value):
+        raise ValueError("Expected entailment, neutral and contradiction logits.")
+    if any(not isinstance(score, (int, float)) or not math.isfinite(score)
+           for row in value for score in row):
+        raise ValueError("Invalid NLI logit.")
+    return tuple(tuple(float(score) for score in row) for row in value)
+
+
 def file_sha256(filename: str) -> str:
     digest = hashlib.sha256()
     with open(filename, "rb") as handle:
@@ -50,6 +68,7 @@ class WindowCache:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         self.connection.execute(CREATE)
+        self.connection.execute(RAW_CREATE)
         self.connection.commit()
         self.namespace = namespace
 
@@ -77,6 +96,31 @@ class WindowCache:
         with self.connection:
             self.connection.executemany(
                 "INSERT OR IGNORE INTO windows(key, same, different) VALUES (?, ?, ?)", values
+            )
+
+    def raw_key(self, key: str, provider: str) -> str:
+        # The legacy key already includes model weights, tokenizer and input.
+        # Raw results additionally identify provider/version and raw score ABI.
+        material = json.dumps(["raw-nli-v1", self.namespace, provider, key],
+                              separators=(",", ":"))
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def get_raw_many(self, keys: Iterable[str], provider: str) -> dict[str, RawPair]:
+        results = {}
+        for key in keys:
+            row = self.connection.execute(
+                "SELECT logits FROM raw_nli WHERE key=?", (self.raw_key(key, provider),)
+            ).fetchone()
+            if row is not None:
+                results[key] = raw_pair(json.loads(row[0]))
+        return results
+
+    def put_raw_many(self, entries: Iterable[tuple[str, RawPair]], provider: str) -> None:
+        values = [(self.raw_key(key, provider), json.dumps(raw_pair(pair), separators=(",", ":")))
+                  for key, pair in entries]
+        with self.connection:
+            self.connection.executemany(
+                "INSERT OR IGNORE INTO raw_nli(key, logits) VALUES (?, ?)", values
             )
 
     def close(self) -> None:

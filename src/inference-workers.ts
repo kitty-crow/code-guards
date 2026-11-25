@@ -5,8 +5,8 @@ import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { AccelerationConfig } from "./acceleration.ts";
-import { parseRecord, type JsonRecord } from "./json.ts";
-import type { SemanticQuestion, SemanticTimingEvent, WindowVerdict } from "./semantic.ts";
+import { parseRecord, JsonRecord } from "./json.ts";
+import type { SemanticQuestion, SemanticTimingEvent, WindowVerdict, NativeWindowVerdict, NliLogits, RawNliWindow } from "./semantic.ts";
 
 type WorkerEvent = { type: "loading" | "ready"; gpuId: number; backend: "cuda" | "dml" | "webgpu" | "cpu" } |
   { type: "timing"; gpuId: number; timing: SemanticTimingEvent };
@@ -70,17 +70,40 @@ function decodeTiming(data: JsonRecord, gpuId: number | null): SemanticTimingEve
   }
 }
 
-function decodeVerdict(data: JsonRecord): WindowVerdict {
+function decodeLogits(record: JsonRecord): NliLogits {
+  return {entailment: record.number("entailment"), neutral: record.number("neutral"),
+    contradiction: record.number("contradiction")};
+}
+
+function decodeRawWindow(record: JsonRecord): RawNliWindow {
+  const value = record.get("logits");
+  if (value === null) return {window: record.number("window"), logits: null};
+  if (!(value instanceof JsonRecord)) throw new Error("Invalid raw NLI evidence.");
+  return {window: record.number("window"), logits: {
+    support: decodeLogits(value.record("support")), opposition: decodeLogits(value.record("opposition"))
+  }};
+}
+
+function decodeVerdict(data: JsonRecord): WindowVerdict | NativeWindowVerdict {
   const evidence = data.record("evidence");
   const sameConcept = data.number("sameConcept");
   const differentConcept = data.number("differentConcept");
   if (sameConcept < 0 || sameConcept > 1 || differentConcept < 0 || differentConcept > 1) {
     throw new Error("GPU worker returned an invalid semantic score.");
   }
-  return { sameConcept, differentConcept, evidence: {
+  const verdict: WindowVerdict = { sameConcept, differentConcept, evidence: {
     windows: evidence.number("windows"), supportWindow: evidence.number("supportWindow"),
     oppositionWindow: evidence.number("oppositionWindow")
   } };
+  const raw = data.get("rawEvidence");
+  if (raw === null) return verdict;
+  if (!Array.isArray(raw) || raw.length !== verdict.evidence.windows) throw new Error("Incomplete raw NLI window list.");
+  const rawEvidence = raw.map(item => {
+    if (!(item instanceof JsonRecord)) throw new Error("Invalid raw NLI window record.");
+    return decodeRawWindow(item);
+  });
+  if (rawEvidence.some((item, index) => item.window !== index + 1)) throw new Error("Unordered raw NLI evidence.");
+  return {...verdict, rawEvidence};
 }
 
 /** Bind each worker to a selected GPU adapter through native execution providers. */

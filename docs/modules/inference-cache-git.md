@@ -45,3 +45,5 @@ The initial scan still costs real GPU work; persistent reuse makes incremental
 iterations inexpensive. Existing physical-adapter scheduling remains the primary
 parallel execution mechanism. The repository's deterministic guards still read
 the complete TypeScript project and regenerate findings on each scan.
+
+Native workers retain original three-class logits in a separate local `raw_nli` SQLite table, keyed by model, tokenizer, window content, provider version and raw scoring ABI. Existing reduced scores and the Git snapshot format remain compatible. Raw results are not published to Git. Set `CODE_GUARDS_REQUIRE_RAW_NLI=1` to recompute only windows lacking raw evidence from the selected provider. Otherwise compatible legacy scores remain usable and unavailable raw logits are represented explicitly as null.
