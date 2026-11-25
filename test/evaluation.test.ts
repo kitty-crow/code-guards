@@ -22,7 +22,9 @@ test("evaluation counts missed positives and reviewed negatives without assuming
   assert.equal(precision.value, 0.5);
   assert.ok(precision.lower95 < 0.5 && precision.upper95 > 0.5);
   assert.deepEqual(result.unlabelled, [at(5)]);
-  assert.equal(result.byCode["CG411"]?.recall ?? null, null);
+  const editorial = result.byCode["CG411"] ?? null;
+  assert.ok(editorial);
+  assert.equal(editorial.recall, null);
   assert.throws(() => evaluateFindings([...labels, {...at(1), present: false}], []), /Duplicate/);
 });
 
