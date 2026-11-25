@@ -87,4 +87,6 @@ adapter with rotating tie-breaks.
 
 ## Public configuration helpers
 
+`Acceleration` is the union of selectable acceleration features: cache, batch, parallel, cuda, dml and webgpu.
+
 `NO_ACCELERATION` supplies the default CPU configuration with no optional features. `accelerationNames(config)` formats the selected feature names, returning `["none"]` when no acceleration is selected. Both functions accept or return the same `AccelerationConfig` used by the CLI and preflight estimator.

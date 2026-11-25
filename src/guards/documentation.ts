@@ -189,6 +189,8 @@ function primitiveType(type: ts.Type): string {
   return match ? match[1] : "";
 }
 
+// Use resolved overload declarations rather than implementation signatures:
+// the implementation's wider union can accept arguments callers may not use.
 function signatureEvidence(project: Project, source: ts.SourceFile): PublicSignature[] {
   const module = project.checker.getSymbolAtLocation(source) ?? null;
   if (!module) return [];
@@ -267,6 +269,31 @@ function checkDocumentedSignatures(project: Project, source: ts.SourceFile, doc:
   }
 }
 
+function checkModulePage(project: Project, source: ts.SourceFile, doc: string, index: string | null, findings: Finding[]): void {
+  const sourcePath = path.relative(project.root, source.fileName).replace(/\\/g, "/");
+  const exports = exportedNames(project, source);
+  const content = read(project.root, doc) ?? "";
+  checkImplementationClaim(project.root, source, doc, findings);
+  checkDocumentedSignatures(project, source, doc, content, findings);
+  if (content.replace(/```[\s\S]*?```/g, "").trim().length < 100) issue(findings, {
+    code: "CG409", file: doc, line: 1, title: "Module documentation lacks practical detail",
+    subject: doc, reason: `The document contains fewer than 100 characters of explanatory content outside code fences.`,
+    suggestion: `Explain ${sourcePath}'s responsibilities, public API, usage and relevant limitations in plain language.`
+  });
+  const identifiers = new Set(content.match(/[A-Za-z_$][\w$]*/g) ?? []);
+  const missing = exports.filter(name => !identifiers.has(name));
+  if (missing.length) issue(findings, {
+    code: "CG409", file: doc, line: 1, title: "Documented module omits public exports",
+    subject: doc, reason: `The module exports ${missing.join(", ")}, but its documentation does not mention these identifiers.`,
+    suggestion: `Document how to use ${missing.slice(0, 5).join(", ")}, including expected inputs/outputs or when not to use them.`
+  });
+  if (index && !index.includes(doc.replace(/^docs\//, "")) && !index.includes(doc)) issue(findings, {
+    code: "CG407", file: "docs/index.md", line: 1, title: "Module page is absent from documentation index",
+    subject: doc, reason: `The module has a page at ${doc}, but docs/index.md does not link to it.`,
+    suggestion: `Add a Markdown link to ${doc} in docs/index.md.`
+  });
+}
+
 function checkModuleCoverage(project: Project, files: Set<string>, findings: Finding[]): void {
   const index = read(project.root, "docs/index.md");
   const moduleFiles = project.files.filter(file => {
@@ -291,26 +318,7 @@ function checkModuleCoverage(project: Project, files: Set<string>, findings: Fin
       });
       continue;
     }
-    const content = read(project.root, doc) ?? "";
-    checkImplementationClaim(project.root, source, doc, findings);
-    checkDocumentedSignatures(project, source, doc, content, findings);
-    if (content.replace(/```[\s\S]*?```/g, "").trim().length < 100) issue(findings, {
-      code: "CG409", file: doc, line: 1, title: "Module documentation lacks practical detail",
-      subject: doc, reason: `The document contains fewer than 100 characters of explanatory content outside code fences.`,
-      suggestion: `Explain ${sourcePath}'s responsibilities, public API, usage and relevant limitations in plain language.`
-    });
-    const identifiers = new Set(content.match(/[A-Za-z_$][\w$]*/g) ?? []);
-    const missing = exports.filter(name => !identifiers.has(name));
-    if (missing.length) issue(findings, {
-      code: "CG409", file: doc, line: 1, title: "Documented module omits public exports",
-      subject: doc, reason: `The module exports ${missing.join(", ")}, but its documentation does not mention these identifiers.`,
-      suggestion: `Document how to use ${missing.slice(0, 5).join(", ")}, including expected inputs/outputs or when not to use them.`
-    });
-    if (index && !index.includes(doc.replace(/^docs\//, "")) && !index.includes(doc)) issue(findings, {
-      code: "CG407", file: "docs/index.md", line: 1, title: "Module page is absent from documentation index",
-      subject: doc, reason: `The module has a page at ${doc}, but docs/index.md does not link to it.`,
-      suggestion: `Add a Markdown link to ${doc} in docs/index.md.`
-    });
+    checkModulePage(project, source, doc, index, findings);
   }
 }
 
