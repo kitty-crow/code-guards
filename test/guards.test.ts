@@ -450,3 +450,40 @@ test("CG204 keeps stateless methods required by a declared contract", async () =
   const findings = await functionQuality(sample, false, endorse);
   assert.deepEqual(findings.filter(item => item.code === "CG204").map(item => item.subject), ["extra"]);
 });
+
+test("CG314 distinguishes actual checks from comments, uncalled callbacks and bare spies", () => {
+  const sample = project({
+    "sample_test.ts": `
+      declare function it(name: string, fn: () => void): void;
+      declare function assert(value: boolean): void;
+      declare function spyOn(value: object, key: string): void;
+      declare function expect(value: number): { toBe(expected: number): void };
+      it("comment", () => { /* assert(true) */ Math.round(3); });
+      it("unused", () => { const later = () => assert(true); });
+      it("spy", () => { spyOn({}, "method"); });
+      it("bare expectation", () => { expect(3); });
+      it("unreachable", () => { if (false) assert(true); });
+      it("matcher", () => { expect(Math.round(3.4)).toBe(3); });
+      it("direct", () => { assert(Math.round(3.4) === 3); });
+      it("executed helper", () => { const check = () => assert(Math.round(3.4) === 3); check(); });
+      it("array callbacks", () => { [2, 3].forEach(value => assert(value > 0)); });
+    `
+  });
+  const findings = codeHealth(sample, true).filter(item => item.code === "CG314");
+  assert.equal(findings.length, 5);
+  for (const finding of findings) assert.match(finding.subject, /it/);
+});
+
+test("CG314 resolves imported assertion aliases and does not trust arbitrary local functions", () => {
+  const sample = project({
+    "sample_test.ts": `
+      import { strictEqual as check } from "node:assert";
+      declare function it(name: string, fn: () => void): void;
+      function verify(value: number): number { return value; }
+      it("alias", () => { check(Math.round(3.4), 3); });
+      it("ordinary call", () => { verify(3); });
+    `
+  });
+  const findings = codeHealth(sample, true).filter(item => item.code === "CG314");
+  assert.equal(findings.length, 1);
+});

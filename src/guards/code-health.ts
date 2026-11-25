@@ -188,15 +188,71 @@ function variableCondition(expression: ts.Node): boolean {
   return found;
 }
 
-function assertionHelperBody(call: ts.CallExpression, checker: ts.TypeChecker): ts.ConciseBody | null {
+function assertionHelper(call: ts.CallExpression, checker: ts.TypeChecker): {body: ts.ConciseBody; checksFailure: boolean} | null {
   const signature = checker.getResolvedSignature(call) ?? null;
   if (!signature) return null;
   const declaration = signature.declaration ?? null;
   if (!declaration || declaration.getSourceFile().isDeclarationFile) return null;
-  if (!ts.isFunctionDeclaration(declaration) && !ts.isMethodDeclaration(declaration)) return null;
-  const name = declaration.name ?? null;
-  if (!name || !ts.isIdentifier(name) || !/^(?:expect|assert|verify)[A-Z_]/.test(name.text)) return null;
-  return bodyOf(declaration);
+  const body = bodyOf(declaration);
+  if (!body) return null;
+  const name = "name" in declaration ? declaration.name ?? null : null;
+  const checksFailure = name !== null && ts.isIdentifier(name) && /^(?:expect|assert|verify)(?:$|[A-Z_])/.test(name.text);
+  return {body, checksFailure};
+}
+
+const assertionMethods = new Set([
+  "ok", "equal", "strictEqual", "deepEqual", "deepStrictEqual", "notEqual", "notStrictEqual",
+  "notDeepEqual", "notDeepStrictEqual", "match", "doesNotMatch", "throws", "doesNotThrow",
+  "rejects", "doesNotReject", "ifError", "fail", "partialDeepStrictEqual"
+]);
+
+function importedAssertion(identifier: ts.Identifier, checker: ts.TypeChecker): string {
+  const symbol = checker.getSymbolAtLocation(identifier) ?? null;
+  const declarations = symbol ? symbol.declarations ?? [] : [];
+  for (const declaration of declarations) {
+    const source = ts.isImportSpecifier(declaration) ? declaration.parent.parent.parent
+      : ts.isImportClause(declaration) ? declaration.parent
+      : ts.isNamespaceImport(declaration) ? declaration.parent.parent : null;
+    if (!source || !ts.isImportDeclaration(source) || !ts.isStringLiteral(source.moduleSpecifier)) continue;
+    const module = source.moduleSpecifier.text;
+    const name = ts.isImportSpecifier(declaration) ? (declaration.propertyName ?? declaration.name).text : "";
+    if (/^(?:node:)?assert(?:\/strict)?$/.test(module)) {
+      return assertionMethods.has(name) ? "assertion" : name === "" || name === "strict" ? "assert" : "";
+    }
+    if (["bun:test", "vitest", "@jest/globals", "chai"].includes(module) && ["expect", "assert"].includes(name)) return name;
+    return "";
+  }
+  return /^(?:assert|expect|should|throws|rejects)$/.test(identifier.text) ? identifier.text : "";
+}
+
+// Only an actual matcher or assertion call establishes a check. Registering
+// a spy, constructing an expectation, or mentioning an assertion does not.
+function directAssertion(call: ts.CallExpression, checker: ts.TypeChecker): boolean {
+  const expression = call.expression;
+  if (ts.isIdentifier(expression)) {
+    return ["assert", "assertion", "throws", "rejects"].includes(importedAssertion(expression, checker));
+  }
+  if (!ts.isPropertyAccessExpression(expression)) return false;
+  const method = expression.name.text;
+  let root: ts.Expression = expression.expression;
+  while (ts.isPropertyAccessExpression(root)) root = root.expression;
+  if (ts.isIdentifier(root)) return importedAssertion(root, checker) === "assert" && assertionMethods.has(method);
+  if (!ts.isCallExpression(root) || !ts.isIdentifier(root.expression)) return false;
+  return importedAssertion(root.expression, checker) === "expect" &&
+    /^(?:to[A-Z]\w*|equal|eql|above|below|within|throw|include|match|property|lengthOf|a|an)$/.test(method);
+}
+
+function arrayCallbackAssertion(call: ts.CallExpression, checker: ts.TypeChecker, active: Set<ts.Node>, remaining: number): boolean {
+  const expression = call.expression;
+  if (!ts.isPropertyAccessExpression(expression) || !/^(?:forEach|map|filter|every|some|reduce|reduceRight|find|findIndex)$/.test(expression.name.text)) return false;
+  const signature = checker.getResolvedSignature(call) ?? null;
+  const declaration = signature ? signature.declaration ?? null : null;
+  if (!declaration || !ts.isInterfaceDeclaration(declaration.parent) ||
+      !["Array", "ReadonlyArray"].includes(declaration.parent.name.text) ||
+      !declaration.getSourceFile().isDeclarationFile) return false;
+  const callback = call.arguments[0] ?? null;
+  return callback !== null && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+    hasAssertionCall(callback.body, checker, active, remaining - 1, false);
 }
 
 function guardedThrow(node: ts.Node): boolean {
@@ -210,10 +266,9 @@ function callHasAssertion(
     node: ts.Node, checker: ts.TypeChecker, active: Set<ts.Node>,
     remaining: number): boolean {
   if (!ts.isCallExpression(node)) return false;
-  const callee = node.expression.getText();
-  if (/^(?:assert|expect|should|throws|rejects|verify)(?:\.|$)/.test(callee)) return true;
-  const body = assertionHelperBody(node, checker);
-  return body !== null && hasAssertionCall(body, checker, active, remaining - 1, true);
+  const helper = assertionHelper(node, checker);
+  if (helper) return hasAssertionCall(helper.body, checker, active, remaining - 1, helper.checksFailure);
+  return directAssertion(node, checker) || arrayCallbackAssertion(node, checker, active, remaining);
 }
 
 function hasAssertionCall(
@@ -223,6 +278,10 @@ function hasAssertionCall(
   active.add(root);
   const inspect = (node: ts.Node): boolean => {
     if (ts.isFunctionLike(node)) return false;
+    if (ts.isIfStatement(node) && node.expression.kind === ts.SyntaxKind.FalseKeyword) {
+      const alternate = node.elseStatement ?? null;
+      return alternate !== null && inspect(alternate);
+    }
     if (helper && guardedThrow(node)) return true;
     if (callHasAssertion(node, checker, active, remaining)) return true;
     let found = false;
@@ -242,9 +301,7 @@ function checkTest(node: ts.Node, project: Project, report: Report): void {
   if (!/^(?:test|it|describe)(?:\.|$)/.test(name)) return;
   const callback = node.arguments.find(arg => ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) ?? null;
   if (!callback) return;
-  const text = callback.getText();
-  const hasAssert = /\b(?:assert|expect|should|throws|rejects|spyOn|verify)\s*(?:\.|\()/.test(text);
-  if (hasAssert || name === "describe") return;
+  if (/^describe(?:\.|$)|\.(?:skip|todo)$/.test(name)) return;
   if (hasAssertionCall(callback.body, project.checker, new Set<ts.Node>(), 8, false)) return;
   report({guard: "test-quality", code: "CG314", node: node, message: "Test has no meaningful assertion", reason: `This ${name} callback contains no recognisable assertion or failure expectation.`, suggestion: "Assert a concrete result or side effect; avoid tests that only invoke functions and always pass."});
 }
