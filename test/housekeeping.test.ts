@@ -505,3 +505,40 @@ test("CG409 does not count a substring in another identifier as export coverage"
   const findings = await documentation(project, reject);
   assert.ok(findings.some(item => item.code === "CG409" && item.reason.includes("exports read,")));
 });
+
+test("bidirectional contract review distinguishes missing coverage, contradictions and useful linked documentation", async () => {
+  const project = fixture({
+    "src/store.ts": "export function save(value: string): string { if (!value) throw Error('empty'); return value.trim(); } export function load(value: string): string { return value; }",
+    "docs/modules/store.md": "# Store\n\nThe save operation never throws and accepts empty strings.\n\nThe load operation retrieves information. See [load behaviour](../load.md).\n\nThe source contract is documented for readers who need to use this module.",
+    "docs/load.md": "# load\n\nThe load function returns its input string without modification."
+  });
+  const scorer: SemanticScorer = async question => {
+    const coverage = question.same.includes("documentation of this exported contract");
+    const contradiction = question.same.includes("concrete assertion about this exported contract");
+    if (coverage && question.premise.includes("Export save.")) return endorse(question);
+    if (coverage && question.premise.includes("Export load.")) {
+      assert.match(question.premise, /returns its input string without modification/);
+      return reject(question);
+    }
+    if (contradiction && question.premise.includes("Export save.") && question.premise.includes("never throws")) return endorse(question);
+    return reject(question);
+  };
+  const findings = await documentation(project, scorer, null, true);
+  const coverage = findings.filter(item => item.code === "CG409");
+  const contradictions = findings.filter(item => item.code === "CG413");
+  assert.deepEqual(coverage.map(item => item.subject), ["save"]);
+  assert.equal(contradictions.length, 1);
+  assert.ok(contradictions.some(item => "related" in item && item.related.file === "src/store.ts"));
+});
+
+test("bidirectional contract review reports insufficient retrieval without inventing a contradiction", async () => {
+  const project = fixture({
+    "src/store.ts": "export function save(value: string): string { return value; }",
+    "docs/modules/store.md": "# Store\n\nThe current component is described by its implementation and the example below. The public surface can be inspected by reading the source file.\n\n```ts\nsave('value');\n```"
+  });
+  const seen: string[] = [];
+  const scorer: SemanticScorer = async question => { seen.push(question.same); return reject(question); };
+  const findings = await documentation(project, scorer, null, true);
+  assert.ok(!seen.some(question => question.includes("concrete assertion about this exported contract")));
+  assert.ok(!findings.some(item => item.code === "CG413"));
+});

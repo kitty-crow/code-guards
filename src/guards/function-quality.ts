@@ -9,6 +9,7 @@ import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
 type BehaviourFacts = {
   signature: string;
+  returnDomain: string;
   references: string[];
   writes: number;
   throws: number;
@@ -111,10 +112,22 @@ function externalReferences(project: Project, scope: ts.Node): string[] {
   return [...references].sort();
 }
 
+// Only disjoint primitive return domains are conclusive here. Unions,
+// generics and object contracts need semantic or assignability evidence.
+function returnDomain(type: ts.Type): string {
+  if (type.flags & ts.TypeFlags.BooleanLike) return "boolean";
+  if (type.flags & ts.TypeFlags.NumberLike) return "number";
+  if (type.flags & ts.TypeFlags.StringLike) return "string";
+  if (type.flags & ts.TypeFlags.BigIntLike) return "bigint";
+  if (type.flags & ts.TypeFlags.ESSymbolLike) return "symbol";
+  return "";
+}
+
 function behaviourFacts(project: Project, node: ts.SignatureDeclaration): BehaviourFacts {
   const signature = project.checker.getSignatureFromDeclaration(node) ?? null;
   return {
     signature: signature ? project.checker.signatureToString(signature, node, ts.TypeFormatFlags.NoTruncation) : "",
+    returnDomain: signature ? returnDomain(project.checker.getReturnTypeOfSignature(signature)) : "",
     references: externalReferences(project, node), writes: 0, throws: 0, awaits: 0, returns: 0
   };
 }
@@ -212,7 +225,16 @@ async function reviewFunction(info: FunctionInfo, score: SemanticScorer, emit: E
   }
 }
 
+function incompatibleReturns(left: FunctionInfo, right: FunctionInfo): boolean {
+  const a = left.behaviour.returnDomain;
+  const b = right.behaviour.returnDomain;
+  return a !== "" && b !== "" && a !== b;
+}
+
 function baselineComparison(left: FunctionInfo, right: FunctionInfo): boolean {
+  // CG205 concerns equivalent whole implementations, not arbitrary shared
+  // subexpressions. Disjoint primitive outputs refute contract equivalence.
+  if (incompatibleReturns(left, right)) return false;
   if (left.statements < 3 || right.statements < 3 || right.node.getSourceFile() === left.node.getSourceFile()) return false;
   if (Math.abs(left.statements - right.statements) > 2 || Math.abs(left.arguments - right.arguments) > 1) return false;
   if (left.fingerprint === right.fingerprint) return true;
@@ -271,7 +293,7 @@ async function retrieveCodePairs(functions: FunctionInfo[], project: Project, ex
     const eligible = (a: SourceEvidence, b: SourceEvidence): boolean => {
       const left = indexed.get(evidenceKey(a.location)) ?? null;
       const right = indexed.get(evidenceKey(b.location)) ?? null;
-      return left !== null && right !== null && a.location.file !== b.location.file && !baselineComparison(left, right);
+      return left !== null && right !== null && a.location.file !== b.location.file && !incompatibleReturns(left, right) && !baselineComparison(left, right);
     };
     if (!passages.some((a, index) => passages.slice(index + 1).some(b => eligible(a, b)))) continue;
     const retrieval = await expert.rank(passages, eligible);

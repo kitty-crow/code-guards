@@ -525,3 +525,16 @@ test("CG205 supplies typed contracts and behavioural evidence to the final judge
   assert.deepEqual(findings.filter(item => item.code === "CG205"), []);
   assert.ok(evidence.some(item => item.includes("Typed contract: (x: number): number") && item.includes("1 writes") && item.includes("Resolved calls:") && item.includes("z += 2")));
 });
+
+test("CG205 does not treat a numeric measurement and boolean predicate as equivalent contracts", async () => {
+  const sample = project({
+    "one.ts": "export function measure(value: number) { const rounded = Math.round(value); const magnitude = Math.abs(rounded); return magnitude; }",
+    "two.ts": "export function check(value: number) { const rounded = Math.round(value); const magnitude = Math.abs(rounded); return magnitude > 2; }"
+  });
+  const expert = new CodeExpert(async () => ({
+    embed: async inputs => inputs.map(() => [1, 0]),
+    dispose: async () => {}
+  }));
+  const result = await functionQuality(sample, false, endorse, expert);
+  assert.equal(result.filter(item => item.code === "CG205").length, 0);
+});

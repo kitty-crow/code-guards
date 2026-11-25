@@ -41,3 +41,5 @@ Module-cohesion preflight counts the initial module questions and the conditiona
 The maximum documentation workload includes a separate information-value question for each style and vague-prose candidate; the minimum rejects both candidate types and accepts README handover candidates. Both bounds use the production guard rather than a separate lexical estimator.
 
 Experimental code retrieval is excluded from the tokenizer-only question count because its candidate pairs depend on neural embeddings.
+
+When experimental contract review is enabled, the preflight scorer counts the same compiler-retrieved coverage and claim questions without loading model weights.

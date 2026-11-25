@@ -500,6 +500,9 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
   };
 }
 
+// Remote workers own their inference sessions. Local promises must be
+// registered before awaiting them so shutdown can drain accepted requests
+// and concurrent cache hits can share the same work.
 export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdict> {
   if (remoteScorer) return remoteScorer(question);
   if ((process.env.CODE_GUARDS_REQUIRE_RAW_NLI ?? "") === "1") throw new Error("Complete raw NLI evidence requires a native CPU or WebGPU worker.");

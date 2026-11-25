@@ -294,14 +294,18 @@ function checkModulePage(project: Project, source: ts.SourceFile, doc: string, i
   });
 }
 
+function sourceModules(project: Project): readonly ts.SourceFile[] {
+  return project.files.filter(file => {
+    const relative = path.relative(project.root, file.fileName).replace(/\\/g, "/");
+    return relative.startsWith("src/") && ts.isExternalModule(file);
+  });
+}
+
 // Module discovery handles absent pages separately: without a corresponding
 // page there is no documentation claim or coverage evidence to validate.
 function checkModuleCoverage(project: Project, files: Set<string>, findings: Finding[]): void {
   const index = read(project.root, "docs/index.md");
-  const moduleFiles = project.files.filter(file => {
-    const relative = path.relative(project.root, file.fileName).replace(/\\/g, "/");
-    return relative.startsWith("src/") && ts.isExternalModule(file);
-  });
+  const moduleFiles = sourceModules(project);
   if (moduleFiles.length && !index) issue(findings, {
     code: "CG407", file: "docs/index.md", line: 1, title: "Documentation index is missing",
     subject: "docs/index.md", reason: `${moduleFiles.length} TypeScript modules need a navigable documentation entry point.`,
@@ -321,6 +325,111 @@ function checkModuleCoverage(project: Project, files: Set<string>, findings: Fin
       continue;
     }
     checkModulePage(project, source, doc, index, findings);
+  }
+}
+
+type ModuleContract = { name: string; source: Location; evidence: string };
+type ContractPassage = Paragraph & {file: string};
+
+// Inspect only declarations from the loaded project. External libraries may
+// supply a type, but the scanner cannot establish their implementation contract.
+function moduleContracts(project: Project, source: ts.SourceFile): ModuleContract[] {
+  const symbol = project.checker.getSymbolAtLocation(source) ?? null;
+  if (!symbol) return [];
+  const contracts: ModuleContract[] = [];
+  const eligible = new Set(project.files);
+  for (const exported of project.checker.getExportsOfModule(symbol)) {
+    const target = exported.flags & ts.SymbolFlags.Alias ? project.checker.getAliasedSymbol(exported) : exported;
+    const declarations = (target.declarations ?? []).filter(node => eligible.has(node.getSourceFile()));
+    const first = declarations[0] ?? null;
+    if (!first || exported.name === "default") continue;
+    const value = target.valueDeclaration ?? null;
+    const type = value ? project.checker.getTypeOfSymbolAtLocation(target, value) : project.checker.getDeclaredTypeOfSymbol(target);
+    const typeText = project.checker.typeToString(type, first, ts.TypeFormatFlags.NoTruncation);
+    const code = declarations.map(node => node.getText()).join("\n");
+    contracts.push({name: exported.name, source: location(project.root, first),
+      evidence: `Export ${exported.name}. Compiler type: ${typeText}. Source declarations:\n${code}`});
+  }
+  return contracts;
+}
+
+function linkedContractPages(project: Project, doc: string, allowed: Set<string>): string[] {
+  const content = read(project.root, doc) ?? "";
+  const links = [...content.replace(/\x60{3}[\s\S]*?\x60{3}/g, "").matchAll(/(?<!!)\[[^\]]+\]\(([^)]+)\)/g)];
+  const targets = links.map(match => (match[1] ?? "").split("#", 1)[0] ?? "")
+    .filter(target => target && !/^(?:[a-z]+:|\/|#)/i.test(target))
+    .map(target => path.posix.normalize(path.posix.join(path.posix.dirname(doc), target)));
+  return [...new Set([doc, ...targets.filter(target => allowed.has(target) && !releaseFile.test(target))])];
+}
+
+function contractPassages(project: Project, doc: string, allowed: Set<string>): ContractPassage[] {
+  return linkedContractPages(project, doc, allowed).flatMap(file =>
+    paragraphs((read(project.root, file) ?? "").split(/\r?\n/)).map(block => ({...block, file})));
+}
+
+function passageEvidence(passage: ContractPassage): string {
+  return `${passage.file}:${passage.line} | ${passage.section}\n${passage.text}`;
+}
+
+function matchesContract(passage: ContractPassage, name: string): boolean {
+  const identifiers = (passage.section + " " + passage.text).match(/[A-Za-z_$][\w$]*/g) ?? [];
+  return identifiers.includes(name);
+}
+
+function reportUnresolvedContract(contract: ModuleContract, file: string, aspect: string): void {
+  console.error(`[Code Guards] Unresolved ${aspect}: ${contract.name} in ${file}; source ${contract.source.file}:${contract.source.line}`);
+}
+
+async function reviewContractCoverage(contract: ModuleContract, passages: ContractPassage[], score: SemanticScorer, findings: Finding[]): Promise<void> {
+  const first = passages[0] ?? null;
+  if (!first) return;
+  const docs = passages.map(passageEvidence).join("\n");
+  const verdict = await score(comparisonQuestion({
+    premise: `Public implementation:\n${contract.evidence}\nRelevant documentation:\n${docs}`,
+    same: "the documentation of this exported contract is superficial or omits significant functionality, input, output, state changes, preconditions or limitations established by the source",
+    different: "the documentation explains the significant public behaviour and contract without needing to narrate incidental implementation details"
+  }, {name: "public implementation", evidence: contract.evidence}, {name: "relevant documentation", evidence: docs}));
+  if (supportsReuse(verdict, 0.78)) {
+    issue(findings, {code: "CG409", file: first.file, line: first.line,
+      title: "Public contract lacks substantive documentation", subject: contract.name,
+      reason: `The source contract for ${contract.name} and its retrieved documentation received ${Math.round(verdict.sameConcept * 100)}% support for incomplete coverage and ${Math.round(verdict.differentConcept * 100)}% opposition. Relevant passages: ${passages.map(item => item.file + ":" + item.line).join(", ")}.`,
+      suggestion: "Explain the significant public behaviour, constraints and observable effects established by the related source declaration.", related: contract.source});
+    return;
+  }
+  if (!supportsReuse({sameConcept: verdict.differentConcept, differentConcept: verdict.sameConcept}, 0.78)) reportUnresolvedContract(contract, first.file, "CG409 coverage");
+}
+
+async function reviewContractClaim(contract: ModuleContract, passage: ContractPassage, score: SemanticScorer, findings: Finding[]): Promise<void> {
+  const docs = passageEvidence(passage);
+  const verdict = await score(comparisonQuestion({
+    premise: `Public implementation:\n${contract.evidence}\nDocumentation claim:\n${docs}`,
+    same: "the documentation makes a concrete assertion about this exported contract that is contradicted by the actual implementation or compiler type",
+    different: "the documentation is consistent with the supplied source or the supplied evidence cannot establish a contradiction"
+  }, {name: "public implementation", evidence: contract.evidence}, {name: "documentation claim", evidence: docs}));
+  if (supportsReuse(verdict, 0.78)) {
+    issue(findings, {code: "CG413", file: passage.file, line: passage.line,
+      title: "Documented contract may contradict implementation", subject: passage.text.slice(0, 110),
+      reason: `The source-located claim about ${contract.name} received ${Math.round(verdict.sameConcept * 100)}% support for contradiction and ${Math.round(verdict.differentConcept * 100)}% opposition. Verify the exact claim against the related declaration; model support is not proof.`,
+      suggestion: "Correct the specific behavioural claim or implement the stated contract, preserving the public API.", related: contract.source});
+    return;
+  }
+  if (!supportsReuse({sameConcept: verdict.differentConcept, differentConcept: verdict.sameConcept}, 0.78)) reportUnresolvedContract(contract, passage.file, "CG413 claim");
+}
+
+async function reviewModuleContracts(project: Project, files: Set<string>, score: SemanticScorer, findings: Finding[]): Promise<void> {
+  // Symbol retrieval traverses every scanned module and searches its own page
+  // and directly linked in-scope pages. Missing retrieval is not proof of absence.
+  for (const source of sourceModules(project)) {
+    const relative = path.relative(project.root, source.fileName).replace(/\\/g, "/");
+    const doc = moduleDocs(relative).find(candidate => files.has(candidate)) ?? null;
+    if (!doc) continue;
+    const passages = contractPassages(project, doc, files);
+    for (const contract of moduleContracts(project, source)) {
+      const relevant = passages.filter(passage => matchesContract(passage, contract.name));
+      if (!relevant.length) reportUnresolvedContract(contract, doc, "CG409 retrieval");
+      await reviewContractCoverage(contract, relevant, score, findings);
+      for (const passage of relevant) await reviewContractClaim(contract, passage, score, findings);
+    }
   }
 }
 
@@ -569,7 +678,8 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
 
 // Markdown is not part of TypeScript's source graph, so inspect the target
 // repository directly when validating user-facing usage and module coverage.
-export async function documentation(project: Project, score: SemanticScorer = zeroShot, expert: ProseExpert | null = null): Promise<Finding[]> {
+export async function documentation(project: Project, score: SemanticScorer = zeroShot, expert: ProseExpert | null = null,
+  verifyContracts = (process.env.CODE_GUARDS_EXPERIMENTAL_CONTRACTS ?? "") === "1"): Promise<Finding[]> {
   const findings: Finding[] = [];
   const root = project.root;
   const fileNames = markdownFiles(root);
@@ -578,6 +688,7 @@ export async function documentation(project: Project, score: SemanticScorer = ze
     reason: "The repository has no top-level entry point explaining how to install, run or maintain it.",
     suggestion: "Add a short README with purpose, prerequisites, working installation commands, example output, limitations and a link to docs/index.md."});
   checkModuleCoverage(project, files, findings);
+  if (verifyContracts) await reviewModuleContracts(project, files, score, findings);
   const readme = read(root, "README.md");
   if (readme && project.files.some(file => path.relative(root, file.fileName).startsWith("src/")) && !readme.includes("docs/index.md")) issue(findings, {
     code: "CG407", file: "README.md", line: 1, title: "README does not point developers to module docs", subject: "README.md",
