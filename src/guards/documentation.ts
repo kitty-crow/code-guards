@@ -1,4 +1,4 @@
-import { withoutIgnored } from "../model.ts";
+import { location, withoutIgnored } from "../model.ts";
 import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -167,6 +167,106 @@ function issue(findings: Finding[], item: DocIssue | RelatedDocIssue): void {
   });
 }
 
+type PublicSignature = {
+  name: string;
+  parameters: string[];
+  minimum: number;
+  maximum: number;
+  result: string;
+  location: Location;
+};
+
+// Only compare primitive type claims that the compiler can resolve without
+// interpreting a potentially ambiguous imported alias in Markdown.
+function primitiveType(type: ts.Type): string {
+  const primitive = [
+    [ts.TypeFlags.String, "string"], [ts.TypeFlags.Number, "number"],
+    [ts.TypeFlags.Boolean, "boolean"], [ts.TypeFlags.Void, "void"],
+    [ts.TypeFlags.BigInt, "bigint"], [ts.TypeFlags.Never, "never"],
+    [ts.TypeFlags.Null, "null"]
+  ] as const;
+  const match = primitive.find(([flag]) => type.flags === flag) ?? null;
+  return match ? match[1] : "";
+}
+
+function signatureEvidence(project: Project, source: ts.SourceFile): PublicSignature[] {
+  const module = project.checker.getSymbolAtLocation(source) ?? null;
+  if (!module) return [];
+  const result: PublicSignature[] = [];
+  for (const exported of project.checker.getExportsOfModule(module)) {
+    const target = exported.flags & ts.SymbolFlags.Alias ? project.checker.getAliasedSymbol(exported) : exported;
+    const declaration = target.valueDeclaration ?? null;
+    if (!declaration) continue;
+    const type = project.checker.getTypeOfSymbolAtLocation(target, declaration);
+    for (const signature of type.getCallSignatures()) {
+      const signatureNode = signature.declaration ?? null;
+      if (!signatureNode || !ts.isFunctionLike(signatureNode)) continue;
+      const parameters = signatureNode.parameters;
+      const minimum = parameters.filter(parameter => !(parameter.questionToken ?? null) && !(parameter.initializer ?? null) && !(parameter.dotDotDotToken ?? null) && parameter.name.getText() !== "this").length;
+      const ordinary = parameters.filter(parameter => parameter.name.getText() !== "this");
+      const maximum = ordinary.some(parameter => (parameter.dotDotDotToken ?? null) !== null) ? Infinity : ordinary.length;
+      result.push({
+        name: exported.name, minimum, maximum,
+        parameters: ordinary.map(parameter => primitiveType(project.checker.getTypeAtLocation(parameter))),
+        result: primitiveType(project.checker.getReturnTypeOfSignature(signature)),
+        location: location(project.root, signatureNode)
+      });
+    }
+  }
+  return result;
+}
+
+function documentedSignature(text: string): ts.FunctionDeclaration | null {
+  // A typed signature is an explicit API claim. Ordinary call examples,
+  // pseudocode, and fenced implementation examples are not declarations.
+  if (!/^(?:export\s+)?function\s+[A-Za-z_$][\w$]*\s*\(/.test(text)) return null;
+  const parsed = ts.createSourceFile("documented-api.ts", text + ";", ts.ScriptTarget.Latest, true);
+  const statement = parsed.statements[0] ?? null;
+  if (!statement || !ts.isFunctionDeclaration(statement) || (statement.body ?? null) !== null || !(statement.type ?? null)) return null;
+  return statement;
+}
+
+function contradictsSignature(claim: ts.FunctionDeclaration, actual: PublicSignature): boolean {
+  const ordinary = claim.parameters.filter(parameter => parameter.name.getText() !== "this");
+  const minimum = ordinary.filter(parameter => !(parameter.questionToken ?? null) && !(parameter.initializer ?? null) && !(parameter.dotDotDotToken ?? null)).length;
+  const maximum = ordinary.some(parameter => (parameter.dotDotDotToken ?? null) !== null) ? Infinity : ordinary.length;
+  if (minimum !== actual.minimum || maximum !== actual.maximum) return true;
+  const result = claim.type ?? null;
+  const primitives = /^(?:string|number|boolean|void|bigint|never|null)$/;
+  const resultText = result ? result.getText() : "";
+  if (actual.result && primitives.test(resultText) && resultText !== actual.result) return true;
+  return ordinary.some((parameter, index) => {
+    const type = parameter.type ?? null;
+    const declared = type ? type.getText() : "";
+    const implemented = actual.parameters[index] ?? "";
+    return implemented.length > 0 && primitives.test(declared) && declared !== implemented;
+  });
+}
+
+function checkDocumentedSignatures(project: Project, source: ts.SourceFile, doc: string, content: string, findings: Finding[]): void {
+  const signatures = signatureEvidence(project, source);
+  const names = new Set(exportedNames(project, source));
+  for (const block of paragraphs(content.split(/\r?\n/))) {
+    for (const match of block.text.matchAll(/\x60([^\x60]+)\x60/g)) {
+      const claim = documentedSignature(match[1] ?? "");
+      if (!claim) continue;
+      const identifier = claim.name ?? null;
+      const name = identifier ? identifier.text : "";
+      if (!name) continue;
+      const candidates = signatures.filter(item => item.name === name);
+      const contradicted = candidates.length > 0 && candidates.every(candidate => contradictsSignature(claim, candidate));
+      if (names.has(name) && !contradicted) continue;
+      const first = candidates[0] ?? null;
+      const base = {code: "CG413", file: doc, line: block.line, title: "Documented API signature conflicts with source",
+        subject: match[0], reason: names.has(name)
+          ? `No compiler-resolved overload of ${name} matches the documented required parameters, maximum arity and concrete primitive types.`
+          : `The linked module does not export ${name}.`,
+        suggestion: "Update the explicit signature to match an exported compiler-resolved overload, or implement the documented API."};
+      issue(findings, first ? {...base, related: first.location} : base);
+    }
+  }
+}
+
 function checkModuleCoverage(project: Project, files: Set<string>, findings: Finding[]): void {
   const index = read(project.root, "docs/index.md");
   const moduleFiles = project.files.filter(file => {
@@ -193,12 +293,14 @@ function checkModuleCoverage(project: Project, files: Set<string>, findings: Fin
     }
     const content = read(project.root, doc) ?? "";
     checkImplementationClaim(project.root, source, doc, findings);
+    checkDocumentedSignatures(project, source, doc, content, findings);
     if (content.replace(/```[\s\S]*?```/g, "").trim().length < 100) issue(findings, {
       code: "CG409", file: doc, line: 1, title: "Module documentation lacks practical detail",
       subject: doc, reason: `The document contains fewer than 100 characters of explanatory content outside code fences.`,
       suggestion: `Explain ${sourcePath}'s responsibilities, public API, usage and relevant limitations in plain language.`
     });
-    const missing = exports.filter(name => !content.includes(name));
+    const identifiers = new Set(content.match(/[A-Za-z_$][\w$]*/g) ?? []);
+    const missing = exports.filter(name => !identifiers.has(name));
     if (missing.length) issue(findings, {
       code: "CG409", file: doc, line: 1, title: "Documented module omits public exports",
       subject: doc, reason: `The module exports ${missing.join(", ")}, but its documentation does not mention these identifiers.`,

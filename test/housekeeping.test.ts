@@ -485,3 +485,23 @@ test("CG411 retains the condition preceding a dependent alternative", async () =
   assert.ok(examined.some(item => item.includes("Sentence to review: Keep the output when validation succeeds; otherwise remove it.")));
   assert.ok(examined.every(item => !item.includes("Sentence to review: otherwise remove it.")));
 });
+
+test("CG413 compares explicit API signatures against actual overloads and primitive types", async () => {
+  const project = fixture({
+    "src/converter.ts": "export function convert(value: string): number; export function convert(value: number): string; export function convert(value: string | number): string | number { return typeof value === 'string' ? Number(value) : String(value); } export function scale(value: number, factor: number): number { return value * factor; }",
+    "docs/modules/converter.md": "# Converter\n\n`function convert(value: string): number` converts text into a number.\n\n`function convert(value: boolean): number` converts a boolean.\n\n`function scale(value: number): number` scales a value.\n\n`function obsolete(value: number): number` describes a removed export.\n\n`scale(2, 3)` is an example call."
+  });
+  const claims = (await documentation(project, reject)).filter(item => item.code === "CG413");
+  assert.equal(claims.length, 3);
+  assert.deepEqual(claims.map(item => item.location.line), [5, 7, 9]);
+  assert.ok(claims.some(item => "related" in item && item.related.file === "src/converter.ts"));
+});
+
+test("CG409 does not count a substring in another identifier as export coverage", async () => {
+  const project = fixture({
+    "src/reader.ts": "export function read(value: string): string { return value; }",
+    "docs/modules/reader.md": "# Reader\n\nThe readCache operation is an internal description of the data available from the current component. It accepts configured paths and returns the stored records for inspection."
+  });
+  const findings = await documentation(project, reject);
+  assert.ok(findings.some(item => item.code === "CG409" && item.reason.includes("exports read,")));
+});
