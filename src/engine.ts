@@ -4,7 +4,8 @@ import {
   documentation, repoHygiene, enterpriseLookingNaming, reviewPractices
 } from "./guards/index.ts";
 import { guards, resolveExpectations, type Finding, type GuardName } from "./model.ts";
-import { observeSemanticProgress, observeSemanticTimings, semanticExecutionProvider } from "./semantic.ts";
+import { observeSemanticProgress, observeSemanticTimings, semanticExecutionProvider, zeroShot } from "./semantic.ts";
+import { configuredProseExpert, guardCapabilities } from "./experts.ts";
 
 export type AnalysisOptions = {
   enabled: Set<GuardName>;
@@ -51,6 +52,8 @@ export async function analyse(
   report(`[Code Guards] Loaded ${project.files.length} source files; ${selected.length} rules enabled`);
   telemetry({ type: "project", files: project.files.length, rules: selected.length });
 
+  const needsProse = selected.some(guard => guardCapabilities(guard).includes("prose-retrieval"));
+  const proseExpert = needsProse ? configuredProseExpert() : null;
   const stages: Stage[] = [
     {name: "no-nested-if", includes: ["no-nested-if"], run: () => noNestedIf(project)},
     {name: "type-reuse", includes: ["type-reuse"], run: () => typeReuse(project, config.includeTests)},
@@ -60,7 +63,7 @@ export async function analyse(
       codeHealth(project, config.includeTests).filter(item => config.enabled.has(item.guard))},
     {name: "cross-module (2 rules)", includes: crossModuleGuards, run: () =>
       crossModule(project).filter(item => config.enabled.has(item.guard))},
-    {name: "documentation", includes: ["documentation"], run: () => documentation(project)},
+    {name: "documentation", includes: ["documentation"], run: () => documentation(project, zeroShot, proseExpert)},
     {name: "repo-hygiene", includes: ["repo-hygiene"], run: () => repoHygiene(project.root)},
     {name: "enterprise-looking-naming", includes: ["enterprise-looking-naming"], run: () =>
       enterpriseLookingNaming(project, config.includeTests)},
@@ -122,6 +125,10 @@ export async function analyse(
   } finally {
     restoreTimings();
     restore();
+    if (proseExpert) {
+      await proseExpert.close();
+      report("[Code Guards] Prose expert: " + JSON.stringify(proseExpert.metrics));
+    }
   }
   const resolved = resolveExpectations(project.root, project.files, findings);
   report(`[Code Guards] Completed: ${resolved.length} findings in ${((Date.now() - started) / 1000).toFixed(1)}s, ${semanticWindows} inference windows`);

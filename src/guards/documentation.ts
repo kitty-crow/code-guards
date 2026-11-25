@@ -6,6 +6,7 @@ import { isVendoredPath, vendoredPaths, type Project } from "../project.ts";
 import type { Finding, Location } from "../model.ts";
 import { readScripts } from "../scripts.ts";
 import { supportsReuse, zeroShot, type SemanticScorer } from "../semantic.ts";
+import type { ProseExpert } from "../experts.ts";
 
 type Paragraph = { line: number; text: string };
 type DocIssue = {
@@ -338,7 +339,30 @@ async function checkReadmeIntroduction(file: string, prose: Paragraph[], finding
   });
 }
 
-async function checkProse(file: string, content: string, findings: Finding[], score: SemanticScorer): Promise<void> {
+async function checkSemanticRedundancy(file: string, prose: Paragraph[], findings: Finding[], score: SemanticScorer, expert: ProseExpert): Promise<void> {
+  const retrieval = await expert.rank(prose.map(paragraph => ({
+    location: {file, line: paragraph.line, column: 1}, text: paragraph.text
+  })));
+  for (const passage of retrieval.unresolved) {
+    console.error(`[Code Guards] Prose retrieval could not encode the complete paragraph at ${passage.location.file}:${passage.location.line}; lexical redundancy checks still apply.`);
+  }
+  for (const match of retrieval.matches) {
+    if (findings.some(item => item.code === "CG403" && item.location.file === file && item.location.line === match.later.location.line)) continue;
+    const verdict = await score({
+      premise: `Earlier paragraph: ${match.earlier.text}\nLater paragraph: ${match.later.text}`,
+      same: "the later paragraph needlessly repeats the same information as the earlier paragraph without adding useful details",
+      different: "the later paragraph adds distinct information or serves a useful summary, reminder, example or different context"
+    });
+    if (!supportsReuse(verdict, 0.81) || verdict.differentConcept > 0.35) continue;
+    issue(findings, {code: "CG403", file, line: match.later.location.line,
+      title: "Semantically repeated documentation", subject: match.later.text.slice(0, 110),
+      reason: `Prose retrieval linked this paragraph to line ${match.earlier.location.line}; NLI favoured redundant information over a distinct purpose (${Math.round(verdict.sameConcept * 100)}% support, ${Math.round(verdict.differentConcept * 100)}% opposition).`,
+      suggestion: "Keep the distinct technical details and consolidate only repeated information.",
+      related: match.earlier.location});
+  }
+}
+
+async function checkProse(file: string, content: string, findings: Finding[], score: SemanticScorer, expert: ProseExpert | null): Promise<void> {
   const lines = content.split(/\r?\n/);
   let inFence = false;
   for (const [i, line] of lines.entries()) {
@@ -377,11 +401,12 @@ async function checkProse(file: string, content: string, findings: Finding[], sc
       reason: `The local NLI model favoured vague language over concrete usage (${Math.round(verdict.sameConcept * 100)}% entailment). This is a recommendation, not a factuality verdict.`,
       suggestion: "Replace the broad claim with an actual CLI invocation, API example, constraints, or a reproducible observation."});
   }
+  if (expert) await checkSemanticRedundancy(file, prose, findings, score, expert);
 }
 
 // Markdown is not part of TypeScript's source graph, so inspect the target
 // repository directly when validating user-facing usage and module coverage.
-export async function documentation(project: Project, score: SemanticScorer = zeroShot): Promise<Finding[]> {
+export async function documentation(project: Project, score: SemanticScorer = zeroShot, expert: ProseExpert | null = null): Promise<Finding[]> {
   const findings: Finding[] = [];
   const root = project.root;
   const fileNames = markdownFiles(root);
@@ -401,7 +426,7 @@ export async function documentation(project: Project, score: SemanticScorer = ze
     if (!content) continue;
     checkCommands(file, content, packageScripts(root, file), findings);
     checkLinks(root, file, content, findings);
-    await checkProse(file, content, findings, score);
+    await checkProse(file, content, findings, score, expert);
     if (path.basename(file).toLowerCase() !== "readme.md" || content.length < 180) continue;
     if (/\b(?:bun|npm|pnpm|yarn) (?:install|run|test|x)\b/.test(content)) continue;
     issue(findings, {code: "CG402", file, line: 1, title: "README has no runnable setup or usage command", subject: "README.md",

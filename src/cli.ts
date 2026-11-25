@@ -2,7 +2,7 @@
 import { analyse } from "./engine.ts";
 import { estimateInference, formatInferencePreflight } from "./preflight.ts";
 import { parseAccelerationFlags, type AccelerationConfig } from "./acceleration.ts";
-import { configureSemanticAcceleration, relaySemanticWorkerEvent, useRemoteSemanticScorer } from "./semantic.ts";
+import { configureSemanticAcceleration, disposeLocalSemanticModel, relaySemanticWorkerEvent, useRemoteSemanticScorer } from "./semantic.ts";
 import { createGpuWorkerPool, createNativeCpuWorkerPool } from "./inference-workers.ts";
 import { synchroniseInferenceCache } from "./inference-cache-git.ts";
 import { realpathSync } from "node:fs";
@@ -163,7 +163,8 @@ export async function run(argv: string[]): Promise<number> {
     } finally {
       restoreRemote();
       if (pool) pool.close();
-      restore();
+      try { await disposeLocalSemanticModel(); }
+      finally { restore(); }
       if (config.syncInferenceCache) {
         synchroniseInferenceCache("push", config.inferenceCacheDir ?? "", config.cacheRemote ?? "",
           message => console.error(message));

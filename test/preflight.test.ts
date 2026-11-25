@@ -163,7 +163,7 @@ test("disabled neural guards do not submit any semantic questions", async () => 
   const root = fixture({"src/main.ts": "export const value = 42;"});
   const result = await estimateInference({
     project: root, includeTests: true, enabled: new Set(["no-nested-if"] as const)
-  }, parseAccelerationFlags([]).acceleration, testTokenizer());
+  }, parseAccelerationFlags([]).acceleration);
   assert.deepEqual(result.stages, []);
   assert.equal(result.maximum.windows, 0);
   assert.equal(result.maximum.modelCallsMaximum, 0);

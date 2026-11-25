@@ -110,3 +110,5 @@ session options. CPU, CUDA and WebGPU remain selectable independently.
 `premiseWindowCount(question, tokenizer)` counts the exact windows from the same token plan as `premiseWindows` without decoding or running them, allowing preflight to avoid inference. `configureSemanticAcceleration(config)` scopes backend settings to a scan and returns a restoration callback; `semanticConcurrency()` reports its maximum independent pending comparisons. `semanticExecutionProvider()` reports the active device and precision.
 
 `useRemoteSemanticScorer(scorer)` temporarily binds an external GPU pool to the ordinary semantic API. `relaySemanticWorkerEvent(event)` forwards real GPU worker timing and readiness events to observers. Preflight supplies a counting scorer directly to the guards.
+
+`disposeLocalSemanticModel()` drains accepted local questions before releasing the Transformers.js session. The CLI awaits disposal before restoring scan settings. This does not establish that the native allocator releases physical GPU memory immediately.

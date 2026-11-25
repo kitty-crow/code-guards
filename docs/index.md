@@ -15,6 +15,7 @@ Code Guards runs locally; the source entry point is `src/cli.ts`. These pages de
 - [TypeScript project loader](modules/project.md)
 - [Package commands](modules/scripts.md)
 - [Local entailment scoring](modules/semantic.md)
+- [Inference experts](modules/experts.md)
 - [Read-only inference preflight](modules/preflight.md)
 - [Git-backed persistent inference cache](modules/inference-cache-git.md)
 - [Hard-stop throughput benchmark](modules/throughput.md)

@@ -41,6 +41,9 @@ export type SemanticProgressEvent = "loading" | "ready" | "inference";
 let progressObserver: (event: SemanticProgressEvent) => void = () => {};
 let timingObserver: (event: SemanticTimingEvent) => void = () => {};
 let classifierPromise: Promise<Classifier> | null = null;
+let disposeClassifier: (() => Promise<void>) | null = null;
+const pendingLocal = new Set<Promise<WindowVerdict>>();
+let closingClassifier = false;
 let questionBatcher: ReturnType<typeof createQuestionBatcher> | null = null;
 let acceleration: AccelerationConfig = NO_ACCELERATION;
 let activeDevice: "cpu" | "webgpu" | "cuda" | "dml" = "cpu";
@@ -169,6 +172,7 @@ async function loadClassifier(): Promise<Classifier> {
         }
         return results;
       };
+      disposeClassifier = async () => { await classifier.dispose(); };
       activeDevice = device;
       timingObserver({ phase: "model-load", milliseconds: performance.now() - started });
       progressObserver("ready");
@@ -445,6 +449,7 @@ export function createQuestionBatcher(classifier: Classifier, batchSize: number)
 
 export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdict> {
   if (remoteScorer) return remoteScorer(question);
+  if (closingClassifier) throw new Error("Semantic model is shutting down.");
   const enabled = acceleration.features.has("cache");
   const key = enabled ? JSON.stringify([MODEL, question.premise, question.same, question.different]) : "";
   const previous = enabled ? (cache.get(key) ?? null) : null;
@@ -462,6 +467,12 @@ export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdic
     return assessWindows(question, classifier, acceleration.features.has("batch") ? acceleration.batchSize : 1);
   };
   const promise = compute();
+  pendingLocal.add(promise);
+  try { return await retainVerdict(key, enabled, promise); }
+  finally { pendingLocal.delete(promise); }
+}
+
+async function retainVerdict(key: string, enabled: boolean, promise: Promise<WindowVerdict>): Promise<WindowVerdict> {
   if (!enabled) return promise;
   const oldest = cache.size >= 512 ? ([...cache.keys()][0] ?? null) : null;
   if (oldest !== null) cache.delete(oldest);
@@ -471,6 +482,20 @@ export async function zeroShot(question: SemanticQuestion): Promise<WindowVerdic
     if ((cache.get(key) ?? null) === promise) cache.delete(key);
     throw error instanceof Error ? error : new Error("Semantic inference failed.");
   }
+}
+
+/** Drain accepted work before disposing the local model session. */
+export async function disposeLocalSemanticModel(): Promise<void> {
+  closingClassifier = true;
+  try {
+    await Promise.allSettled([...pendingLocal]);
+    const dispose = disposeClassifier;
+    disposeClassifier = null;
+    classifierPromise = null;
+    questionBatcher = null;
+    cache.clear();
+    if (dispose) await dispose();
+  } finally { closingClassifier = false; }
 }
 
 export function supportsReuse(verdict: SimilarityVerdict, minimum = 0.78): boolean {

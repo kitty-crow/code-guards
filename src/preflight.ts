@@ -8,6 +8,8 @@ import { performance } from "node:perf_hooks";
 import { type AccelerationConfig, accelerationNames } from "./acceleration.ts";
 import { documentation } from "./guards/documentation.ts";
 import { functionQuality } from "./guards/function-quality.ts";
+import { moduleCohesion } from "./guards/module-cohesion.ts";
+import { guardCapabilities } from "./experts.ts";
 import { typeReuse } from "./guards/type-reuse.ts";
 import type { AnalysisOptions } from "./engine.ts";
 import { loadProject } from "./project.ts";
@@ -24,7 +26,7 @@ export type InferenceWork = {
 };
 
 export type PreflightStage = {
-  guard: "type-reuse" | "function-quality" | "documentation";
+  guard: "type-reuse" | "function-quality" | "module-cohesion" | "documentation";
   minimum: InferenceWork;
   maximum: InferenceWork;
 };
@@ -181,26 +183,36 @@ export async function estimateInference(
   const started = performance.now();
   progress("[Code Guards] Preflight: loading TypeScript project");
   const project = loadProject(config.project);
-  const tokeniser = tokenizer ?? await loadPreflightTokenizer();
   const enabled = [...config.enabled];
+  const needsModel = enabled.some(guard => guardCapabilities(guard).includes("semantic-judgement"));
+  const tokeniser = tokenizer ?? (needsModel ? await loadPreflightTokenizer() : null);
   const stages: PreflightStage[] = [];
   const restore = configureSemanticAcceleration(acceleration);
   try {
-    if (config.enabled.has("type-reuse")) {
+    if (tokeniser && config.enabled.has("type-reuse")) {
       progress("[Code Guards] Preflight: enumerating type-reuse candidates");
       const counter = new InferenceCounter(tokeniser, acceleration);
       await typeReuse(project, config.includeTests, counter.reject);
       const result = counter.snapshot();
       stages.push({guard: "type-reuse", minimum: result, maximum: result});
     }
-    if (config.enabled.has("function-quality")) {
+    if (tokeniser && config.enabled.has("function-quality")) {
       progress("[Code Guards] Preflight: enumerating function-quality candidates");
       const counter = new InferenceCounter(tokeniser, acceleration);
       await functionQuality(project, config.includeTests, counter.reject);
       const result = counter.snapshot();
       stages.push({guard: "function-quality", minimum: result, maximum: result});
     }
-    if (config.enabled.has("documentation")) {
+    if (tokeniser && config.enabled.has("module-cohesion")) {
+      progress("[Code Guards] Preflight: enumerating module-cohesion candidates");
+      const minimum = new InferenceCounter(tokeniser, acceleration);
+      const maximum = new InferenceCounter(tokeniser, acceleration);
+      await moduleCohesion(project, config.includeTests, minimum.reject);
+      await moduleCohesion(project, config.includeTests, async question =>
+        question.same.includes("this module combines") ? maximum.accept(question) : maximum.reject(question));
+      stages.push({guard: "module-cohesion", minimum: minimum.snapshot(), maximum: maximum.snapshot()});
+    }
+    if (tokeniser && config.enabled.has("documentation")) {
       progress("[Code Guards] Preflight: enumerating documentation questions");
       const maximum = new InferenceCounter(tokeniser, acceleration);
       await documentation(project, maximum.reject);
@@ -228,8 +240,9 @@ export async function estimateInference(
     "No semantic predictions are performed. Existing deterministic candidate selection is reused.",
     "The projected model-call range reflects batching compatibility, not GPU scheduling or runtime occupancy.",
     "Tokenizer-only preparation excludes model weight loading, native GPU workers and neural execution.",
+    ...((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") === "1" && config.enabled.has("documentation") ? ["Experimental prose retrieval is not included in these counts; it requires embedding inference."] : []),
     ...(conditional ? [
-      "README handover verdicts control later style questions. The minimum and maximum are possible workloads; the actual path cannot be known without neural inference."
+      "Semantic decisions control later documentation and module-cohesion questions. The minimum and maximum are possible workloads; the actual path cannot be known without neural inference."
     ] : []),
     ...(rate === null ? [
       "No matching measured WebGPU calibration was supplied for these settings, so no runtime duration is claimed."

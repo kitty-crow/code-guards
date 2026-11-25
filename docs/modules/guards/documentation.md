@@ -27,3 +27,5 @@ The warnings concern writing quality, not authorship.
 Command examples use the nearest enclosing package.json, including packages in submodules. A missing script is reported against the documentation file's own package.
 
 Place module pages under docs/modules using the same relative path as src and ending in .md, then link them from docs/index.md. This is a consistency and evidence check, not a model-provided guarantee that every prose claim is factually true.
+
+Set `CODE_GUARDS_EXPERIMENTAL_PROSE=1` to enable the optional prose retrieval expert for CG403. It proposes related paragraphs for MobileBERT to compare. Retrieval does not establish redundancy by itself. The [expert module](../experts.md) describes its resource limits and output.
