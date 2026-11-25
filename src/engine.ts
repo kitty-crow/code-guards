@@ -5,7 +5,7 @@ import {
 } from "./guards/index.ts";
 import { guards, resolveExpectations, type Finding, type GuardName } from "./model.ts";
 import { observeSemanticProgress, observeSemanticTimings, semanticExecutionProvider, zeroShot } from "./semantic.ts";
-import { configuredCodeExpert, configuredProseExpert, guardCapabilities } from "./experts.ts";
+import { CODE_EXPERT, PROSE_EXPERT, configuredCodeExpert, configuredProseExpert, guardCapabilities, type ExpertMetrics } from "./experts.ts";
 
 export type AnalysisOptions = {
   enabled: Set<GuardName>;
@@ -23,6 +23,7 @@ export type ScanTelemetry =
   | { type: "inference"; windows: number; gpuId: number | null; questions: number }
   | { type: "verdict"; windows: number }
   | { type: "cache-hit" }
+  | { type: "expert-complete"; model: string; revision: string; device: string; metrics: ExpertMetrics }
   | { type: "provider-proof"; gpuId: number; gpuNodes: number; cpuNodes: number;
       gpuOps: string[]; gpuTimeMs: number; cpuTimeMs: number };
 
@@ -39,13 +40,14 @@ const codeHealthGuards: readonly GuardName[] = [
 ];
 const crossModuleGuards: readonly GuardName[] = ["single-source", "project-conventions"];
 
-async function analyseFunctions(project: Project, includeTests: boolean, report: (message: string) => void): Promise<Finding[]> {
+async function analyseFunctions(project: Project, includeTests: boolean, report: (message: string) => void, telemetry: (event: ScanTelemetry) => void): Promise<Finding[]> {
   const expert = configuredCodeExpert();
   try { return await functionQuality(project, includeTests, zeroShot, expert); }
   finally {
     if (expert) {
       await expert.close();
       report("[Code Guards] Code expert: " + JSON.stringify(expert.metrics));
+      telemetry({type: "expert-complete", model: CODE_EXPERT.model, revision: CODE_EXPERT.revision, device: CODE_EXPERT.provider, metrics: expert.metrics});
     }
   }
 }
@@ -68,7 +70,7 @@ export async function analyse(
   const stages: Stage[] = [
     {name: "no-nested-if", includes: ["no-nested-if"], run: () => noNestedIf(project)},
     {name: "type-reuse", includes: ["type-reuse"], run: () => typeReuse(project, config.includeTests)},
-    {name: "function-quality", includes: ["function-quality"], run: () => analyseFunctions(project, config.includeTests, report)},
+    {name: "function-quality", includes: ["function-quality"], run: () => analyseFunctions(project, config.includeTests, report, telemetry)},
     {name: "module-cohesion", includes: ["module-cohesion"], run: () => moduleCohesion(project, config.includeTests)},
     {name: "code-health (13 rules)", includes: codeHealthGuards, run: () =>
       codeHealth(project, config.includeTests).filter(item => config.enabled.has(item.guard))},
@@ -139,6 +141,7 @@ export async function analyse(
     if (proseExpert) {
       await proseExpert.close();
       report("[Code Guards] Prose expert: " + JSON.stringify(proseExpert.metrics));
+      telemetry({type: "expert-complete", model: PROSE_EXPERT.model, revision: PROSE_EXPERT.revision, device: PROSE_EXPERT.provider, metrics: proseExpert.metrics});
     }
   }
   const resolved = resolveExpectations(project.root, project.files, findings);

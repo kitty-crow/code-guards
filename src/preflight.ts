@@ -160,10 +160,12 @@ export async function loadPreflightTokenizer(): Promise<Tokenizer> {
 }
 
 function gpuReferenceRate(config: AccelerationConfig): number | null {
-  if (!config.features.has("webgpu")) return null;
-  if (config.gpuIds.length === 1) return 1569 / 60;
-  if (config.gpuIds.length === 2) return 3372 / 60;
-  return null;
+  if (!config.features.has("webgpu") || !config.gpuIds.length) return null;
+  const supplied = process.env.CODE_GUARDS_MEASURED_WINDOWS_PER_SECOND ?? "";
+  if (!supplied) return null;
+  const rate = Number(supplied);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error("Measured windows per second must be positive.");
+  return rate;
 }
 
 /**
@@ -233,6 +235,8 @@ export async function estimateInference(
   };
   const conditional = minimum.questions !== maximum.questions ||
     minimum.windows !== maximum.windows;
+  const adaptiveExperts = ((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") === "1" && config.enabled.has("documentation")) ||
+    ((process.env.CODE_GUARDS_EXPERIMENTAL_CODE ?? "") === "1" && config.enabled.has("function-quality"));
   const limitations = [
     "No semantic predictions are performed. Existing deterministic candidate selection is reused.",
     "The projected model-call range reflects batching compatibility, not GPU scheduling or runtime occupancy.",
@@ -245,7 +249,7 @@ export async function estimateInference(
     ...(rate === null ? [
       "No matching measured WebGPU calibration was supplied for these settings, so no runtime duration is claimed."
     ] : [
-      "Warm-inference seconds use the supplied 60-second native WebGPU benchmark and exclude model loading, tokenisation, queue latency and resource contention."
+      "Warm-inference seconds use the caller-supplied measured throughput and exclude model loading, tokenisation, queue latency and resource contention."
     ])
   ];
 
@@ -259,12 +263,9 @@ export async function estimateInference(
     concurrency: acceleration.features.has("parallel") ? acceleration.concurrency : 1,
     gpuIds: [...acceleration.gpuIds],
     stages, minimum, maximum,
-    exactQuestionCount: !conditional,
-    estimatedWarmInferenceSeconds: projected,
-    calibration: rate === null ? null :
-      (acceleration.gpuIds.length === 2
-        ? "3,372 windows / 60 s; two RTX 2080 Ti, native WebGPU"
-        : "1,569 windows / 60 s; one RTX 2080 Ti, native WebGPU"),
+    exactQuestionCount: !conditional && !adaptiveExperts,
+    estimatedWarmInferenceSeconds: adaptiveExperts ? null : projected,
+    calibration: rate === null || adaptiveExperts ? null : `${rate} measured windows/s supplied for the selected configuration`,
     limitations,
     preparationMilliseconds: Math.round((performance.now() - started) * 100) / 100
   };

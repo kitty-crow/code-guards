@@ -127,9 +127,9 @@ test("documentation bounds account for handover-dependent README style questions
   assert.ok(result.maximum.questions > result.minimum.questions);
   assert.equal(result.exactQuestionCount, false);
   assert.ok(result.maximum.windows >= result.minimum.windows);
-  assert.equal((result.calibration ?? "").includes("3,372"), true);
+  assert.equal(result.calibration, null);
   assert.equal(result.gpuIds.length, 2);
-  assert.equal(result.estimatedWarmInferenceSeconds !== null, true);
+  assert.equal(result.estimatedWarmInferenceSeconds, null);
 });
 
 test("batching estimates compatible calls without conflating different hypotheses", async () => {

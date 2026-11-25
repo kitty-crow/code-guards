@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { homedir } from "node:os";
 import type { GuardName, Location } from "./model.ts";
 import { MODEL, MAX_MODEL_TOKENS, loadTransformers } from "./semantic.ts";
 
@@ -64,7 +65,7 @@ export type EmbeddingRuntime = {
   dispose: () => Promise<void>;
 };
 export type ExpertMetrics = {
-  loads: number; batches: number; cacheHits: number; persistentHits: number; loadMilliseconds: number;
+  loads: number; batches: number; cacheHits: number; persistentHits: number; encodedInputs: number; loadMilliseconds: number; inferenceMilliseconds: number;
   sampledPeakRssBytes: number; rssAfterDisposalBytes: number;
 };
 
@@ -173,7 +174,7 @@ export class EmbeddingExpert {
   private closed = false;
   private readonly persistent: PersistentEmbeddingCache | null;
   readonly metrics: ExpertMetrics = {
-    loads: 0, batches: 0, cacheHits: 0, persistentHits: 0, loadMilliseconds: 0,
+    loads: 0, batches: 0, cacheHits: 0, persistentHits: 0, encodedInputs: 0, loadMilliseconds: 0, inferenceMilliseconds: 0,
     sampledPeakRssBytes: 0, rssAfterDisposalBytes: 0
   };
 
@@ -227,11 +228,15 @@ export class EmbeddingExpert {
     const keys = group.map(item => contentKey(this.profile, item.text));
     const completed = new Map<string, number[] | null>();
     for (const key of keys) this.cached(key, completed);
-    const missing = group.filter(item => !completed.has(contentKey(this.profile, item.text)));
+    const uncached = group.filter(item => !completed.has(contentKey(this.profile, item.text)));
+    const missing = [...new Map(uncached.map(item => [contentKey(this.profile, item.text), item])).values()];
     this.metrics.cacheHits += group.length - missing.length;
     if (!missing.length) return keys.map(key => completed.get(key) ?? null);
     const session = await this.session();
+    const started = performance.now();
     const vectors = await session.embed(missing.map(item => item.text));
+    this.metrics.inferenceMilliseconds += performance.now() - started;
+    this.metrics.encodedInputs += missing.length;
     if (vectors.length !== missing.length) throw new Error("Incomplete embedding expert batch.");
     for (const [index, item] of missing.entries()) {
       const key = contentKey(this.profile, item.text);
@@ -296,16 +301,26 @@ export class CodeExpert extends EmbeddingExpert {
   }
 }
 
+/** Resolve a private cache outside the target source and published Git snapshot. */
+export function expertCacheDirectory(settings: Readonly<Record<string, string | undefined>> = process.env): string {
+  const explicit = settings.CODE_GUARDS_EXPERT_CACHE_DIR ?? "";
+  if (explicit) return path.resolve(explicit);
+  const inference = settings.CODE_GUARDS_INFERENCE_CACHE_DIR ?? "";
+  if (inference) return path.resolve(inference) + ".experts";
+  const base = settings.LOCALAPPDATA ?? settings.XDG_CACHE_HOME ?? path.join(homedir(), ".cache");
+  return path.resolve(base, "code-guards", "experts");
+}
+
 function configuredBudget(): number {
   return Number(process.env.CODE_GUARDS_EXPERT_RAM_MIB ?? "2048") * 1048576;
 }
 
 export function configuredProseExpert(): ProseExpert | null {
   if ((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") !== "1") return null;
-  return new ProseExpert(() => loadEmbeddingRuntime(PROSE_EXPERT), configuredBudget(), process.env.CODE_GUARDS_EXPERT_CACHE_DIR ?? "");
+  return new ProseExpert(() => loadEmbeddingRuntime(PROSE_EXPERT), configuredBudget(), expertCacheDirectory());
 }
 
 export function configuredCodeExpert(): CodeExpert | null {
   if ((process.env.CODE_GUARDS_EXPERIMENTAL_CODE ?? "") !== "1") return null;
-  return new CodeExpert(() => loadEmbeddingRuntime(CODE_EXPERT), configuredBudget(), process.env.CODE_GUARDS_EXPERT_CACHE_DIR ?? "");
+  return new CodeExpert(() => loadEmbeddingRuntime(CODE_EXPERT), configuredBudget(), expertCacheDirectory());
 }

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { guardCapabilities, ProseExpert, EmbeddingExpert, PROSE_EXPERT, type SourceEvidence, type EmbeddingRuntime } from "../src/experts.ts";
+import { guardCapabilities, expertCacheDirectory, ProseExpert, EmbeddingExpert, PROSE_EXPERT, type SourceEvidence, type EmbeddingRuntime } from "../src/experts.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -85,4 +85,26 @@ test("persistent expert cache reuses unchanged inputs across sessions and isolat
     assert.equal(revised.metrics.persistentHits, 0);
     await revised.close();
   } finally { rmSync(directory, {recursive: true, force: true}); }
+});
+
+test("configured experts use a persistent cache independently of source and Git snapshots", () => {
+  const local = path.resolve("local-cache");
+  const inference = path.resolve("inference-cache");
+  assert.equal(expertCacheDirectory({CODE_GUARDS_EXPERT_CACHE_DIR: local, CODE_GUARDS_INFERENCE_CACHE_DIR: inference}), local);
+  assert.equal(expertCacheDirectory({CODE_GUARDS_INFERENCE_CACHE_DIR: inference}), inference + ".experts");
+  assert.equal(expertCacheDirectory({XDG_CACHE_HOME: local}), path.join(local, "code-guards", "experts"));
+});
+
+test("identical uncached expert inputs are encoded only once per batch", async () => {
+  let encoded = 0;
+  const expert = new ProseExpert(async () => ({
+    embed: async inputs => { encoded += inputs.length; return inputs.map(() => [1, 0]); },
+    dispose: async () => {}
+  }));
+  try {
+    await expert.rank([passage("same", 1), passage("same", 2), passage("other", 3)]);
+    assert.equal(encoded, 2);
+    assert.equal(expert.metrics.encodedInputs, 2);
+    assert.equal(expert.metrics.cacheHits, 1);
+  } finally { await expert.close(); }
 });

@@ -25,3 +25,5 @@ records for project loading, stage start/completion and completed semantic
 inference. Timing observers restore in a `finally` block and do not
 change guard selection or findings. This is separate from human-readable
 progress reporting and is consumed by the hard-stop benchmark supervisor.
+
+The `expert-complete` telemetry event records the checkpoint, revision, execution device and completed expert metrics. It is additive to MobileBERT events.
