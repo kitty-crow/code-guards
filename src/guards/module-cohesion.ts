@@ -9,25 +9,30 @@ type Unit = {
   name: string;
   node: ts.Node;
   operations: string[];
-  localCalls: Set<string>;
+  references: Set<ts.Symbol>;
+  symbol: ts.Symbol | null;
+  implementation: string;
   detail: string;
 };
 
 
-function inspect(file: ts.SourceFile, name: string, node: ts.Node, body: ts.Node): Unit {
+function inspect(project: Project, file: ts.SourceFile, name: string, node: ts.Node, body: ts.Node): Unit {
   const operations = new Set<string>();
-  const localCalls = new Set<string>();
+  const references = new Set<ts.Symbol>();
   const recordCall = (expression: ts.LeftHandSideExpression): void => {
     if (operations.size < 10) operations.add(expression.getText(file).slice(0, 64));
-    if (ts.isIdentifier(expression)) localCalls.add(expression.text);
+
   };
   const walk = (current: ts.Node): void => {
     if (ts.isCallExpression(current) || ts.isNewExpression(current)) recordCall(current.expression);
+    const symbol = ts.isIdentifier(current) ? project.checker.getSymbolAtLocation(current) ?? null : null;
+    if (symbol) references.add(symbol.flags & ts.SymbolFlags.Alias ? project.checker.getAliasedSymbol(symbol) : symbol);
     ts.forEachChild(current, walk);
   };
   walk(body);
   const preview = body.getText(file).replace(/\s+/g, " ").slice(0, 210);
-  return {name, node, operations: [...operations], localCalls, detail: preview};
+  const symbol = project.checker.getSymbolAtLocation(node) ?? null;
+  return {name, node, operations: [...operations], references, symbol, implementation: body.getText(file), detail: preview};
 }
 
 function implemented(member: ts.ClassElement): boolean {
@@ -38,12 +43,12 @@ function implemented(member: ts.ClassElement): boolean {
   return false;
 }
 
-function classUnit(file: ts.SourceFile, statement: ts.ClassDeclaration): Unit[] {
+function classUnit(project: Project, file: ts.SourceFile, statement: ts.ClassDeclaration): Unit[] {
   const name = statement.name ?? null;
   if (!name) return [];
   const implementations = statement.members.filter(implemented);
   if (!implementations.length) return [];
-  const unit = inspect(file, name.text, name, statement);
+  const unit = inspect(project, file, name.text, name, statement);
   const methods = implementations.flatMap(member => {
     if (ts.isMethodDeclaration(member) || ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
       return [member.name.getText(file)];
@@ -54,46 +59,50 @@ function classUnit(file: ts.SourceFile, statement: ts.ClassDeclaration): Unit[] 
   return [unit];
 }
 
-function variableUnits(file: ts.SourceFile, statement: ts.VariableStatement): Unit[] {
+function variableUnits(project: Project, file: ts.SourceFile, statement: ts.VariableStatement): Unit[] {
   const result: Unit[] = [];
   for (const declaration of statement.declarationList.declarations) {
     const initializer = declaration.initializer ?? null;
     if (!initializer || !ts.isIdentifier(declaration.name)) continue;
     if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
-      result.push(inspect(file, declaration.name.text, declaration.name, initializer.body));
+      result.push(inspect(project, file, declaration.name.text, declaration.name, initializer.body));
       continue;
     }
     if (ts.isCallExpression(initializer) || ts.isNewExpression(initializer) || ts.isAwaitExpression(initializer)) {
-      result.push(inspect(file, `initialisation of ${declaration.name.text}`, declaration.name, initializer));
+      result.push(inspect(project, file, `initialisation of ${declaration.name.text}`, declaration.name, initializer));
     }
   }
   return result;
 }
 
-function functionUnit(file: ts.SourceFile, statement: ts.FunctionDeclaration): Unit[] {
+function functionUnit(project: Project, file: ts.SourceFile, statement: ts.FunctionDeclaration): Unit[] {
   const name = statement.name ?? null;
   const body = statement.body ?? null;
-  return name && body ? [inspect(file, name.text, name, body)] : [];
+  return name && body ? [inspect(project, file, name.text, name, body)] : [];
 }
 
-function statementUnits(file: ts.SourceFile, statement: ts.Statement): Unit[] {
-  if (ts.isFunctionDeclaration(statement)) return functionUnit(file, statement);
-  if (ts.isClassDeclaration(statement)) return classUnit(file, statement);
-  if (ts.isVariableStatement(statement)) return variableUnits(file, statement);
+function statementUnits(project: Project, file: ts.SourceFile, statement: ts.Statement): Unit[] {
+  if (ts.isFunctionDeclaration(statement)) return functionUnit(project, file, statement);
+  if (ts.isClassDeclaration(statement)) return classUnit(project, file, statement);
+  if (ts.isVariableStatement(statement)) return variableUnits(project, file, statement);
   if (!ts.isExpressionStatement(statement)) return [];
   if (!ts.isCallExpression(statement.expression) && !ts.isAwaitExpression(statement.expression)) return [];
   const line = file.getLineAndCharacterOfPosition(statement.getStart(file)).line + 1;
-  return [inspect(file, `top-level operation at line ${line}`, statement, statement.expression)];
+  return [inspect(project, file, `top-level operation at line ${line}`, statement, statement.expression)];
 }
 
 // A declaration is collected by its implementation shape, so helpers, classes
 // and script initialisation remain separate units without nesting AST tests.
-function operations(file: ts.SourceFile): Unit[] {
-  return file.statements.flatMap(statement => statementUnits(file, statement));
+function operations(project: Project, file: ts.SourceFile): Unit[] {
+  return file.statements.flatMap(statement => statementUnits(project, file, statement));
+}
+
+function dependsOn(left: Unit, right: Unit): boolean {
+  return right.symbol !== null && left.references.has(right.symbol);
 }
 
 function related(left: Unit, right: Unit): boolean {
-  return left.localCalls.has(right.name) || right.localCalls.has(left.name);
+  return dependsOn(left, right) || dependsOn(right, left);
 }
 
 function evidence(unit: Unit): string {
@@ -117,7 +126,7 @@ function overview(units: Unit[]): string {
 
 function breakout(anchor: Unit, other: Unit, all: Unit[]): string {
   const members = all.filter(unit => unit === anchor || (
-    anchor.localCalls.has(unit.name) && unit !== other && !other.localCalls.has(unit.name)
+    dependsOn(anchor, unit) && unit !== other && !dependsOn(other, unit)
   ));
   const names = members.map(unit => unit.name).join(", ");
   const actions = anchor.operations.slice(0, 4).join(", ");
@@ -137,7 +146,7 @@ export async function moduleCohesion(
   for (const file of project.files) {
     const relative = path.relative(project.root, file.fileName).replace(/\\/g, "/");
     if (!includeTests && isTestFile(relative)) continue;
-    const units = operations(file);
+    const units = operations(project, file);
     const pairs: {left: Unit; right: Unit}[] = [];
     for (const [index, left] of units.entries()) {
       for (const right of units.slice(index + 1)) {
@@ -157,10 +166,10 @@ export async function moduleCohesion(
     // A large, cohesive module receives no warning merely for its size.
     for (const {left, right} of pairs.sort((a, b) => Math.abs(b.right.node.pos - b.left.node.pos) - Math.abs(a.right.node.pos - a.left.node.pos)).slice(0, 24)) {
       const verdict = await score(comparisonQuestion({
-        premise: `Two implementations in one TypeScript module. First: ${evidence(left)}. Second: ${evidence(right)}.`,
+        premise: `Two implementations in one TypeScript module. First: ${left.name}: ${left.implementation}. Second: ${right.name}: ${right.implementation}.`,
         same: "these implementations have independent responsibilities and should be placed in distinct focused modules",
         different: "these implementations are related parts of one responsibility, share a contract, or deliberately coordinate a single workflow"
-      }, {name: left.name, evidence: evidence(left)}, {name: right.name, evidence: evidence(right)}));
+      }, {name: left.name, evidence: left.implementation}, {name: right.name, evidence: right.implementation}));
       if (!supportsReuse(verdict, 0.82) || verdict.differentConcept > 0.38) continue;
       const leftGroup = breakout(left, right, units);
       const rightGroup = breakout(right, left, units);

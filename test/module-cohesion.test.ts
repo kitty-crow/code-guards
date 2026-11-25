@@ -161,3 +161,20 @@ test("CG206 represents operations across the entire file rather than only the op
   assert.ok(initial.includes("dataStep0"));
   assert.ok(initial.includes("deliverNotification"), "the module overview must include the end of a large file");
 });
+
+test("CG206 resolves aliased function references rather than equating text names", async () => {
+  const project = fixture({"src/formatter.ts": [
+    "function normalise(value: string): string { return value.trim(); }",
+    "export function format(value: string): string { const alias = normalise; return alias(value); }"
+  ].join("\n")});
+  const noScoring: SemanticScorer = async () => { throw new Error("Resolved reference connects these operations"); };
+  assert.deepEqual(await moduleCohesion(project, false, noScoring), []);
+});
+
+test("CG206 does not confuse a shadowed parameter with a module function", async () => {
+  const project = fixture({"src/formatter.ts": [
+    "function normalise(value: string): string { return value.trim(); }",
+    "export function dispatch(normalise: (value: number) => void): void { normalise(42); }"
+  ].join("\n")});
+  assert.equal((await moduleCohesion(project, false, endorse)).length, 1);
+});

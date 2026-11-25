@@ -538,3 +538,16 @@ test("CG205 does not treat a numeric measurement and boolean predicate as equiva
   const result = await functionQuality(sample, false, endorse, expert);
   assert.equal(result.filter(item => item.code === "CG205").length, 0);
 });
+
+test("CG202 reviews actual comments and does not treat comment markers inside strings as explanations", async () => {
+  const steps = Array.from(Array<number>(28).keys(), i => `if (i === ${i}) { i += 1; }`).join("\n");
+  const sample = project({"functions.ts": `export function confusing(i: number) {\nconst url = "https://example.org";\n// Check the condition\n${steps}\nreturn i + url.length;\n}`});
+  const seen: string[] = [];
+  const scorer: SemanticScorer = async question => {
+    seen.push(question.premise);
+    return question.same.includes("non-obvious decision or invariant") ? endorse(question) : reject(question);
+  };
+  assert.ok((await functionQuality(sample, false, scorer)).some(item => item.code === "CG202"));
+  assert.ok(seen.some(item => item.includes("Source-located comments: line 3: // Check the condition")));
+  assert.ok(seen.every(item => !item.includes("Source-located comments: line 2:")));
+});

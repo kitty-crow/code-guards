@@ -16,3 +16,5 @@ Large cohesive modules, barrel files and single-purpose coordinators are valid. 
 bun run guards:bun module-cohesion --path ../my-project
 bun run guards:strict:bun module-cohesion --path ../my-project
 ```
+
+CG206 identifies relationships through compiler-resolved declaration references rather than matching call names. Its paired hypotheses include complete compared implementations, with source-located diagnostics retaining compact explanations. A reference establishes a possible dependency, not proof of a transitive side effect.

@@ -29,7 +29,7 @@ type FunctionInfo = {
   calls: Set<string>;
   callTargets: string[];
   contract: boolean;
-  comments: boolean;
+  comments: string[];
   arguments: number;
   fingerprint: string;
   behaviour: BehaviourFacts;
@@ -143,6 +143,13 @@ function recordEffects(node: ts.Node, facts: BehaviourFacts): void {
       (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) facts.writes += 1;
 }
 
+function leadingExplanations(file: ts.SourceFile, node: ts.Node): string[] {
+  return (ts.getLeadingCommentRanges(file.text, node.getFullStart()) ?? []).map(range => {
+    const line = file.getLineAndCharacterOfPosition(range.pos).line + 1;
+    return `line ${line}: ${file.text.slice(range.pos, range.end)}`;
+  });
+}
+
 function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
   const result: FunctionInfo[] = [];
   for (const file of project.files) {
@@ -155,17 +162,17 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
       const info: FunctionInfo = {
         name, node, body, lines: 0, branches: 0, branchClauses: [], statements: 0,
         dependencies: new Set(), calls: new Set(), callTargets: [], contract: requiredMethod(node, project.checker),
-        comments: false, arguments: node.parameters.length, fingerprint: "", behaviour: behaviourFacts(project, node)
+        comments: leadingExplanations(file, node), arguments: node.parameters.length, fingerprint: "", behaviour: behaviourFacts(project, node)
       };
       const start = file.getLineAndCharacterOfPosition(body.getStart(file)).line;
       const end = file.getLineAndCharacterOfPosition(body.getEnd()).line;
       info.lines = end - start + 1;
-      const text = body.getText(file);
-      const leadingComments = ts.getLeadingCommentRanges(file.text, node.getFullStart()) ?? [];
-      info.comments = /\/\/|\/\*/.test(text) || leadingComments.length > 0;
       const visitBody = (current: ts.Node): void => {
         if (current !== body && ts.isFunctionLike(current)) return;
-        if (ts.isStatement(current) && current !== body) info.statements += 1;
+        if (ts.isStatement(current) && current !== body) {
+          info.statements += 1;
+          info.comments.push(...leadingExplanations(file, current));
+        }
         if (ts.isIfStatement(current) || ts.isConditionalExpression(current) || ts.isForStatement(current) || ts.isForOfStatement(current) || ts.isForInStatement(current) || ts.isWhileStatement(current) || ts.isCaseClause(current) || ts.isCatchClause(current)) info.branches += 1;
         const clause = info.branchClauses.length < 5 ? branchClause(current) : "";
         if (clause) {
@@ -190,8 +197,7 @@ function getInfo(project: Project, includeTests: boolean): FunctionInfo[] {
 }
 
 function evidence(info: FunctionInfo): string {
-  const excerpt = info.body.getText().replace(/\s+/g, " ").slice(0, 360);
-  return `The TypeScript function ${info.name} is ${info.lines} lines long, contains ${info.branches} decision branches, ${info.statements} statements, takes ${info.arguments} arguments, and calls ${[...info.calls].slice(0, 12).join(", ") || "nothing"}. It uses ${info.dependencies.size} external source modules. ${info.comments ? "It contains comments." : "It has no explanatory comments."} Example clauses: ${info.branchClauses.join("; ")}. Implementation excerpt: ${excerpt}`;
+  return `Function ${info.name}: ${info.lines} lines, ${info.branches} decisions, ${info.statements} statements. Dependency modules: ${[...info.dependencies].map(file => path.basename(file)).join(", ") || "none"}. Example decisions: ${info.branchClauses.join("; ")}. Source-located comments: ${[...new Set(info.comments)].join("\n") || "none"}. ${behaviouralEvidence(info)}`;
 }
 
 function behaviouralEvidence(info: FunctionInfo): string {
@@ -213,9 +219,9 @@ type Emit = (info: FunctionInfo, code: string, similarity: number, related: Func
 
 async function reviewFunction(info: FunctionInfo, score: SemanticScorer, emit: Emit): Promise<void> {
   const checks = [
-    { trigger: info.lines >= 45 && info.branches >= 4, code: "CG201", suggestion: "this function has multiple responsibilities and should be split into smaller focused functions", opposite: "this function is cohesive and should remain one function" },
-    { trigger: info.lines >= 25 && info.branches >= 3 && !info.comments, code: "CG202", suggestion: "this function needs explanatory comments describing non-obvious decisions and invariants", opposite: "this function is self-explanatory and needs no comments" },
-    { trigger: info.dependencies.size >= 4, code: "CG203", suggestion: "this function depends on too many external modules and may belong in a different module", opposite: "the function has appropriate modular dependencies" },
+    { trigger: info.lines >= 45 && info.branches >= 4, code: "CG201", suggestion: "this function has distinct separable responsibilities whose extraction into focused functions would preserve execution order, data flow and invariants", opposite: "the implementation coordinates a cohesive responsibility or its shared invariants and state require the current organisation" },
+    { trigger: info.lines >= 25 && info.branches >= 3, code: "CG202", suggestion: "this function has a non-obvious decision or invariant whose purpose is not explained by the code or its existing comments", opposite: "the important decisions are self-explanatory or existing comments explain their purpose and invariants" },
+    { trigger: info.dependencies.size >= 4, code: "CG203", suggestion: "the resolved external dependencies cross unrelated ownership boundaries and a clearer coordinating module or narrower interface would improve the design", opposite: "the resolved dependencies are necessary to the function responsibility or are appropriate for deliberate orchestration" },
     { trigger: ts.isMethodDeclaration(info.node) && !info.contract && info.lines <= 6 && info.statements <= 2 && !/\b(?:this|super)\b/.test(info.body.getText()), code: "CG204", suggestion: "this short stateless method could be a standalone helper or arrow function instead of a class method", opposite: "this method belongs to the class and needs its own method declaration" }
   ];
   for (const check of checks) {
@@ -340,7 +346,7 @@ function explain(info: FunctionInfo, code: string, related: FunctionInfo | null)
   };
   if (code === "CG202") return {
     title: `Unexplained decisions in ${info.name}`,
-    reason: `${info.name} contains ${info.branches} decision points across ${info.lines} lines, but no explanatory comment was detected. Example clauses: ${clauses}. The model agreed that a comment could help.`,
+    reason: `${info.name} contains ${info.branches} decision points across ${info.lines} lines, and the evidence indicates that a non-obvious decision is not adequately explained. Example clauses: ${clauses}. The model agreed that a comment could help.`,
     suggestion: `Add a short comment or JSDoc immediately before ${info.name} describing the non-obvious rule or invariant behind its branches. Explain why the condition matters, not what each statement does.`
   };
   if (code === "CG203") {
