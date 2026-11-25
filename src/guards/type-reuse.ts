@@ -404,7 +404,7 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
     }, {name: a.name, evidence: independentA.map(p => `${p.name} (${p.fingerprint})`).join(", ")},
     {name: b.name, evidence: independentB.map(p => `${p.name} (${p.fingerprint})`).join(", ")});
     const verdict = await investigateComparison(score, question, {
-      enabled: adaptiveComparisonEnabled(), minimum: 0.78,
+      enabled: adaptiveComparisonEnabled(), minimum: 0.78, maximumOpposition: 1,
       context: `type reuse ${a.node.getSourceFile().fileName}:${a.name} / ${b.node.getSourceFile().fileName}:${b.name}`,
       refine: () => refineTypeContract(localA, localB)
     });

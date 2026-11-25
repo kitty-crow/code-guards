@@ -571,7 +571,7 @@ export type InvestigationOptions = {
   context: string;
   refine: () => SemanticQuestion;
   minimum: number;
-  maximumOpposition?: number;
+  maximumOpposition: number;
 };
 
 /** Retain the existing decisive result; ask a narrower question only on ambiguity. */
@@ -584,7 +584,7 @@ export async function investigateComparison(score: SemanticScorer, question: Sem
 }
 
 function decisive(verdict: SimilarityVerdict, options: InvestigationOptions): boolean {
-  const ceiling = options.maximumOpposition ?? 1;
+  const ceiling = options.maximumOpposition;
   return (supportsReuse(verdict, options.minimum) && verdict.differentConcept <= ceiling) ||
     (supportsReuse({sameConcept: verdict.differentConcept, differentConcept: verdict.sameConcept}, options.minimum) && verdict.sameConcept <= ceiling);
 }

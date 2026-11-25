@@ -71,14 +71,20 @@ export type ExpertMetrics = {
 };
 
 async function loadEmbeddingRuntime(profile: ExpertProfile): Promise<EmbeddingRuntime> {
-  const { pipeline } = await loadTransformers();
-  const extractor = await pipeline("feature-extraction", profile.model, {
-    revision: profile.revision, device: profile.provider, dtype: profile.precision
+  // Transformers.js 4.3.2 pipeline discovery probes the default revision
+  // even when a pinned revision is supplied. Load the two required components
+  // directly so offline operation uses the exact revision's cached files.
+  const { AutoTokenizer, AutoModel, FeatureExtractionPipeline } = await loadTransformers();
+  const local = (process.env.CODE_GUARDS_OFFLINE ?? "") === "1";
+  const tokenizer = await AutoTokenizer.from_pretrained(profile.model, {revision: profile.revision, local_files_only: local});
+  const model = await AutoModel.from_pretrained(profile.model, {
+    revision: profile.revision, local_files_only: local, device: profile.provider, dtype: profile.precision
   });
+  const extractor = new FeatureExtractionPipeline({task: "feature-extraction", model, tokenizer});
   return {
     embed: async passages => {
       const accepted = passages.map(text =>
-        extractor.tokenizer.encode(text, {add_special_tokens: false}).length <= profile.contextTokens - 2);
+        tokenizer.encode(text, {add_special_tokens: false}).length <= profile.contextTokens - 2);
       const inputs = passages.filter((_, index) => accepted[index] ?? false);
       if (!inputs.length) return passages.map(() => null);
       const tensor = await extractor(inputs, {pooling: "mean", normalize: true});

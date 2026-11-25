@@ -228,7 +228,7 @@ function refineBehaviour(left: FunctionInfo, right: FunctionInfo) {
 
 function assessBehaviour(left: FunctionInfo, right: FunctionInfo, score: SemanticScorer) {
   return investigateComparison(score, compareBehaviour(left, right), {
-    enabled: adaptiveComparisonEnabled(), minimum: 0.78,
+    enabled: adaptiveComparisonEnabled(), minimum: 0.78, maximumOpposition: 1,
     context: `CG205 ${left.node.getSourceFile().fileName}:${left.name} / ${right.node.getSourceFile().fileName}:${right.name}`,
     refine: () => refineBehaviour(left, right)
   });
@@ -259,7 +259,7 @@ async function reviewFunction(info: FunctionInfo, score: SemanticScorer, emit: E
     if (!check.trigger) continue;
     const premise = evidence(info);
     const verdict = await investigateComparison(score, {premise, same: check.suggestion, different: check.opposite}, {
-      enabled: adaptiveComparisonEnabled(), minimum: 0.75,
+      enabled: adaptiveComparisonEnabled(), minimum: 0.75, maximumOpposition: 1,
       context: `${check.code} ${info.node.getSourceFile().fileName}:${info.name}`,
       refine: () => ({
         premise: `${premise}\nComplete declaration, including modifiers, parameters and annotations:\n${info.node.getText()}`,

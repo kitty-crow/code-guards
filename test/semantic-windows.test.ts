@@ -116,7 +116,7 @@ test("adaptive investigation retains decisive verdicts and refines ambiguous com
     {name: "a", evidence: "left"}, {name: "b", evidence: "right"});
   const refinement = comparisonQuestion({premise: "complete declarations", same: "shared behaviour", different: "distinct behaviour"},
     {name: "a", evidence: "left including constraints"}, {name: "b", evidence: "right including constraints"});
-  const options = {enabled: true, minimum: 0.78, context: "test", refine: () => refinement};
+  const options = {enabled: true, minimum: 0.78, maximumOpposition: 1, context: "test", refine: () => refinement};
   const seen: string[] = [];
   const result = await investigateComparison(async item => {
     seen.push(item.premise);

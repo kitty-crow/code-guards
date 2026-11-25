@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - scripts/verify-experts.ts
+      - src/experts.ts
+      - src/semantic.ts
       - examples/coverage/check-quality.mts
       - .github/workflows/specialist-smoke.yml
 permissions:
