@@ -417,7 +417,9 @@ test("type reuse retains independent contracts beyond an implemented interface",
   });
   const findings = await typeReuse(sample, false, endorse);
   assert.deepEqual(findings.map(item => item.code), ["CG103"]);
-  assert.match(findings[0]?.reason ?? "", /2 independently declared matching field/);
+  const finding = findings[0] ?? null;
+  assert.ok(finding);
+  assert.match(finding.reason, /2 independently declared matching field/);
 });
 
 test("type reuse does not conflate unrelated structurally identical interfaces", async () => {
