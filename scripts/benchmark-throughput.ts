@@ -150,6 +150,16 @@ export function decodeEvent(line: string): ScanTelemetry {
   }
 }
 
+function recordInference(result: ScanResult, event: Extract<ScanTelemetry, {type: "inference"}>): void {
+  result.completedInferenceWindows += event.windows;
+  result.completedInferenceCalls += 1;
+  result.maximumBatchSize = Math.max(result.maximumBatchSize, event.windows);
+  if (event.questions > 1) result.crossQuestionBatches += 1;
+  if (event.gpuId === null) return;
+  const key = String(event.gpuId);
+  result.gpuWindows[key] = (result.gpuWindows[key] ?? 0) + event.windows;
+}
+
 function consumeEvent(result: ScanResult, event: ScanTelemetry): void {
   switch (event.type) {
     case "project":
@@ -168,14 +178,7 @@ function consumeEvent(result: ScanResult, event: ScanTelemetry): void {
       result.provider = event.device;
       return;
     case "inference":
-      result.completedInferenceWindows += event.windows;
-      result.completedInferenceCalls += 1;
-      result.maximumBatchSize = Math.max(result.maximumBatchSize, event.windows);
-      if (event.questions > 1) result.crossQuestionBatches += 1;
-      if (event.gpuId !== null) {
-        const key = String(event.gpuId);
-        result.gpuWindows[key] = (result.gpuWindows[key] ?? 0) + event.windows;
-      }
+      recordInference(result, event);
       return;
     case "verdict":
       result.completedSemanticQuestions += 1;
