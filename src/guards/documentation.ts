@@ -5,8 +5,8 @@ import ts from "typescript";
 import { isVendoredPath, vendoredPaths, type Project } from "../project.ts";
 import type { Finding, Location } from "../model.ts";
 import { readScripts } from "../scripts.ts";
-import { supportsReuse, zeroShot, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
-import type { ProseExpert, CodeExpert, SourceEvidence } from "../experts.ts";
+import { supportsReuse, zeroShot, comparisonQuestion, investigateComparison, adaptiveComparisonEnabled, type SemanticScorer, type SemanticQuestion, type InvestigationOptions } from "../semantic.ts";
+import type { ProseExpert, CodeExpert, SourceEvidence, ProseMatch } from "../experts.ts";
 
 type Paragraph = { line: number; text: string; section: string; kind: "paragraph" | "heading" | "list" | "table" };
 type DocIssue = {
@@ -34,7 +34,9 @@ const narrative = [
   /\b(?:has|have)\s+(?:now\s+)?(?:been\s+)?(?:added|introduced|updated|rewritten|refactored|replaced|migrated|improved|fixed|changed|enhanced|removed)\b/i,
   /\b(?:previously|formerly|before this change|unlike before|in the previous version)\b.{0,120}\b(?:now|currently|instead|no longer)\b/i,
   /\b(?:instead of|rather than)\b.{0,120}\b(?:we now|now (?:uses|supports|does|performs)|have replaced|has replaced)\b/i,
-  /\b(?:no longer)\b.{0,120}\b(?:instead|rather than|previously)\b/i
+  /\b(?:no longer)\b.{0,120}\b(?:instead|rather than|previously)\b/i,
+  /\b(?:this (?:session|remediation pass|review round)|today.s remediation)\b.{0,100}\b(?:fixed|resolved|remaining|outstanding|findings|violations)\b/i,
+  /\b\d+\s+(?:findings|violations|issues)\s+(?:fixed|resolved|remaining|outstanding)\b/i
 ];
 
 // Before-and-after descriptions belong in migration notes and release history.
@@ -569,12 +571,26 @@ export const handoverQuestion = {
 
 // The shortlist is structural (Markdown prose), never a vocabulary heuristic.
 // Require strong support and little contradictory evidence from the local model.
+type PassageReview = {file: string; paragraph: Paragraph; question: SemanticQuestion; inquiry: {same: string; different: string}; minimum: number; maximumOpposition: number};
+
+function investigatePassage(score: SemanticScorer, review: PassageReview) {
+  const options: InvestigationOptions = {
+    enabled: adaptiveComparisonEnabled(), context: `documentation ${review.file}:${review.paragraph.line}`,
+    minimum: review.minimum, maximumOpposition: review.maximumOpposition,
+    refine: () => ({
+      premise: `${review.question.premise}\nSection: ${review.paragraph.section}\nRole: ${review.paragraph.kind}\nComplete passage: ${review.paragraph.text}`,
+      ...review.inquiry
+    })
+  };
+  return investigateComparison(score, review.question, options);
+}
+
 async function checkHandover(file: string, paragraph: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
   if (releaseFile.test(file) || path.posix.basename(file).toLowerCase() !== "readme.md") return;
-  const verdict = await score({
-    premise: `Documentation paragraph: ${paragraph.text}`,
-    same: handoverQuestion.same,
-    different: handoverQuestion.different
+  const verdict = await investigatePassage(score, {file, paragraph, minimum: 0.85, maximumOpposition: 0.35,
+    question: {premise: `Documentation paragraph: ${paragraph.text}`, ...handoverQuestion},
+    inquiry: {same: "this passage records temporary development progress or a delivery handover instead of explaining current software usage",
+      different: "this passage records lasting usage, constraints or relevant project history rather than transient development progress"}
   });
   if (!supportsReuse(verdict, 0.85) || verdict.differentConcept > 0.35) return;
   issue(findings, {
@@ -619,12 +635,20 @@ async function checkStyle(file: string, paragraph: Paragraph, findings: Finding[
   if (releaseFile.test(file)) return;
   for (const sentence of sentencesIn(paragraph)) {
     const premise = `Section: ${paragraph.section}\nMarkdown role: ${paragraph.kind}\nDocumentation paragraph: ${paragraph.text}\nSentence to review: ${sentence}`;
-    const verdict = await score({premise, ...styleQuestion});
+    const verdict = await investigatePassage(score, {file, paragraph, minimum: 0.81, maximumOpposition: 0.35,
+      question: {premise, ...styleQuestion},
+      inquiry: {same: "the highlighted sentence uses mechanical repetition, defensive phrasing or a formulaic transition rather than direct wording",
+        different: "the highlighted sentence uses direct explanatory wording appropriate to its technical context"}
+    });
     traceStyle(file, paragraph.line, sentence, verdict);
     if (!supportsReuse(verdict, 0.81) || verdict.differentConcept > 0.35) continue;
     // Style and information value answer different questions. Investigate
     // the actual contribution before treating a writing pattern as a defect.
-    const information = await score({premise, ...informationQuestion});
+    const information = await investigatePassage(score, {file, paragraph, minimum: 0.75, maximumOpposition: 1,
+      question: {premise, ...informationQuestion},
+      inquiry: {same: "removing the highlighted sentence would lose a distinct instruction, condition, technical fact or necessary explanation",
+        different: "removing the highlighted sentence would preserve the concrete information conveyed by the surrounding passage"}
+    });
     if (supportsReuse(information, 0.75)) continue;
     if (!supportsReuse({sameConcept: information.differentConcept, differentConcept: information.sameConcept}, 0.75)) {
       console.error(`[Code Guards] Unresolved CG411 information value at ${file}:${paragraph.line}: ${sentence}`);
@@ -674,6 +698,30 @@ async function checkReadmeIntroduction(file: string, prose: Paragraph[], finding
   });
 }
 
+function redundancyVerdict(match: ProseMatch, prose: Paragraph[], score: SemanticScorer) {
+  const left = {name: `earlier paragraph at line ${match.earlier.location.line}`, evidence: match.earlier.text};
+  const right = {name: `later paragraph at line ${match.later.location.line}`, evidence: match.later.text};
+  const question = comparisonQuestion({
+    premise: `Earlier paragraph: ${left.evidence}\nLater paragraph: ${right.evidence}`,
+    same: "the later paragraph needlessly repeats the same information as the earlier paragraph without adding useful details",
+    different: "the later paragraph adds distinct information or serves a useful summary, reminder, example or different context"
+  }, left, right);
+  return investigateComparison(score, question, {
+    enabled: adaptiveComparisonEnabled(), minimum: 0.81, maximumOpposition: 0.35,
+    context: `CG403 ${match.later.location.file}:${match.later.location.line}`,
+    refine: () => {
+      const context = (line: number): string => prose.filter(item => Math.abs(item.line - line) <= 8)
+        .map(item => item.section + "\n" + item.text).join("\n");
+      const a = left.evidence + "\nContext:\n" + context(match.earlier.location.line);
+      const b = right.evidence + "\nContext:\n" + context(match.later.location.line);
+      return comparisonQuestion({premise: `Earlier passage: ${a}\nLater passage: ${b}`,
+        same: "removing the later passage would preserve all useful information and its section's operational purpose",
+        different: "the later passage adds a necessary condition, example, warning, summary or distinct technical information"
+      }, {...left, evidence: a}, {...right, evidence: b});
+    }
+  });
+}
+
 async function checkSemanticRedundancy(file: string, prose: Paragraph[], findings: Finding[], score: SemanticScorer, expert: ProseExpert): Promise<void> {
   const retrieval = await expert.rank(prose.map(paragraph => ({
     location: {file, line: paragraph.line, column: 1}, text: paragraph.text
@@ -683,12 +731,7 @@ async function checkSemanticRedundancy(file: string, prose: Paragraph[], finding
   }
   for (const match of retrieval.matches) {
     if (findings.some(item => item.code === "CG403" && item.location.file === file && item.location.line === match.later.location.line)) continue;
-    const verdict = await score(comparisonQuestion({
-      premise: `Earlier paragraph: ${match.earlier.text}\nLater paragraph: ${match.later.text}`,
-      same: "the later paragraph needlessly repeats the same information as the earlier paragraph without adding useful details",
-      different: "the later paragraph adds distinct information or serves a useful summary, reminder, example or different context"
-    }, {name: `earlier paragraph at line ${match.earlier.location.line}`, evidence: match.earlier.text},
-    {name: `later paragraph at line ${match.later.location.line}`, evidence: match.later.text}));
+    const verdict = await redundancyVerdict(match, prose, score);
     if (!supportsReuse(verdict, 0.81) || verdict.differentConcept > 0.35) continue;
     issue(findings, {code: "CG403", file, line: match.later.location.line,
       title: "Semantically repeated documentation", subject: match.later.text.slice(0, 110),
@@ -705,9 +748,17 @@ export const vagueQuestion = {
 
 async function checkVague(file: string, candidate: Paragraph, findings: Finding[], score: SemanticScorer): Promise<void> {
   const premise = `Documentation paragraph: ${candidate.text}\nSection: ${candidate.section}`;
-  const verdict = await score({premise, ...vagueQuestion});
+  const verdict = await investigatePassage(score, {file, paragraph: candidate, minimum: 0.75, maximumOpposition: 1,
+    question: {premise, ...vagueQuestion},
+    inquiry: {same: "the passage gives no specific behaviour, input, output, command or testable limitation that a reader can act on",
+      different: "the passage gives at least one concrete operational fact, example or meaningful technical constraint"}
+  });
   if (!supportsReuse(verdict, 0.75)) return;
-  const information = await score({premise: `${premise}\nSentence to review: ${candidate.text}`, ...informationQuestion});
+  const information = await investigatePassage(score, {file, paragraph: candidate, minimum: 0.75, maximumOpposition: 1,
+    question: {premise: `${premise}\nSentence to review: ${candidate.text}`, ...informationQuestion},
+    inquiry: {same: "the paragraph supplies a distinct technical fact, instruction or relevant explanation needed by the reader",
+      different: "the paragraph only restates context or makes generic claims without concrete information"}
+  });
   if (supportsReuse(information, 0.75)) return;
   if (!supportsReuse({sameConcept: information.differentConcept, differentConcept: information.sameConcept}, 0.75)) {
     console.error(`[Code Guards] Unresolved CG410 information value at ${file}:${candidate.line}: ${candidate.text}`);

@@ -3,7 +3,7 @@ import path from "node:path";
 import ts from "typescript";
 import { location, type Finding } from "../model.ts";
 import { isTestFile, type Project } from "../project.ts";
-import { supportsReuse, zeroShot, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
+import { supportsReuse, zeroShot, comparisonQuestion, investigateComparison, adaptiveComparisonEnabled, type SemanticScorer } from "../semantic.ts";
 
 type Unit = {
   name: string;
@@ -134,6 +134,49 @@ function breakout(anchor: Unit, other: Unit, all: Unit[]): string {
   return `module focused on ${purpose} (declarations: ${names}; operations: ${actions || "local computation"})`;
 }
 
+function graphEvidence(units: Unit[]): string {
+  return units.map(unit => {
+    const dependencies = units.filter(other => other !== unit && dependsOn(unit, other)).map(other => other.name);
+    return `${unit.name}: calls ${unit.operations.join(", ") || "none"}; local references ${dependencies.join(", ") || "none"}`;
+  }).join("\n");
+}
+
+function moduleQuestion(units: Unit[], relative: string, score: SemanticScorer) {
+  return investigateComparison(score, {
+    premise: `TypeScript module ${relative} contains these implemented operations: ${overview(units)}`,
+    same: "this module combines separate operational responsibilities that could be maintained as focused modules with distinct purposes",
+    different: "these operations implement a single cohesive responsibility or deliberately coordinate one workflow"
+  }, {
+    enabled: adaptiveComparisonEnabled(), minimum: 0.8, maximumOpposition: 0.4, context: `CG206 ${relative}`,
+    refine: () => ({
+      premise: `Module ${relative} has these compiler-resolved operation relationships:\n${graphEvidence(units)}`,
+      same: "the operations form independent responsibilities rather than a single workflow through shared local dependencies",
+      different: "the operations cooperate through dependencies or a cohesive domain responsibility"
+    })
+  });
+}
+
+function pairQuestion(left: Unit, right: Unit, units: Unit[], score: SemanticScorer) {
+  const question = comparisonQuestion({
+    premise: `Two implementations in one TypeScript module. First: ${left.name}: ${left.implementation}. Second: ${right.name}: ${right.implementation}.`,
+    same: "these implementations have independent responsibilities and should be placed in distinct focused modules",
+    different: "these implementations are related parts of one responsibility, share a contract, or deliberately coordinate a single workflow"
+  }, {name: left.name, evidence: left.implementation}, {name: right.name, evidence: right.implementation});
+  return investigateComparison(score, question, {
+    enabled: adaptiveComparisonEnabled(), minimum: 0.82, maximumOpposition: 0.38,
+    context: `CG206 ${left.node.getSourceFile().fileName}:${left.name} / ${right.name}`,
+    refine: () => {
+      const a = left.implementation + "\n" + breakout(left, right, units);
+      const b = right.implementation + "\n" + breakout(right, left, units);
+      return comparisonQuestion({
+        premise: `First responsibility: ${a}\nSecond responsibility: ${b}`,
+        same: "each responsibility has a distinct purpose and can retain its required local dependencies in a separate module",
+        different: "the responsibilities depend on a common invariant or shared local workflow and belong together"
+      }, {name: left.name, evidence: a}, {name: right.name, evidence: b});
+    }
+  });
+}
+
 /**
  * Detect independently useful responsibilities in the same source module.
  * Source length, branch count and declaration count do not determine a warning.
@@ -155,21 +198,13 @@ export async function moduleCohesion(
     }
     if (!pairs.length) continue;
 
-    const moduleVerdict = await score({
-      premise: `TypeScript module ${relative} contains these implemented operations: ${overview(units)}`,
-      same: "this module combines separate operational responsibilities that could be maintained as focused modules with distinct purposes",
-      different: "these operations implement a single cohesive responsibility or deliberately coordinate one workflow"
-    });
+    const moduleVerdict = await moduleQuestion(units, relative, score);
     if (!supportsReuse(moduleVerdict, 0.8) || moduleVerdict.differentConcept > 0.4) continue;
 
     // A second, concrete judgement must identify separable operations.
     // A large, cohesive module receives no warning merely for its size.
     for (const {left, right} of pairs.sort((a, b) => Math.abs(b.right.node.pos - b.left.node.pos) - Math.abs(a.right.node.pos - a.left.node.pos)).slice(0, 24)) {
-      const verdict = await score(comparisonQuestion({
-        premise: `Two implementations in one TypeScript module. First: ${left.name}: ${left.implementation}. Second: ${right.name}: ${right.implementation}.`,
-        same: "these implementations have independent responsibilities and should be placed in distinct focused modules",
-        different: "these implementations are related parts of one responsibility, share a contract, or deliberately coordinate a single workflow"
-      }, {name: left.name, evidence: left.implementation}, {name: right.name, evidence: right.implementation}));
+      const verdict = await pairQuestion(left, right, units, score);
       if (!supportsReuse(verdict, 0.82) || verdict.differentConcept > 0.38) continue;
       const leftGroup = breakout(left, right, units);
       const rightGroup = breakout(right, left, units);

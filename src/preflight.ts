@@ -236,7 +236,7 @@ export async function estimateInference(
   const conditional = minimum.questions !== maximum.questions ||
     minimum.windows !== maximum.windows;
   const adaptiveContracts = (process.env.CODE_GUARDS_EXPERIMENTAL_CONTRACTS ?? "") === "1" && config.enabled.has("documentation");
-  const adaptiveComparisons = (process.env.CODE_GUARDS_EXPERIMENTAL_ADAPTIVE ?? "") === "1" && (config.enabled.has("type-reuse") || config.enabled.has("function-quality"));
+  const adaptiveComparisons = (process.env.CODE_GUARDS_EXPERIMENTAL_ADAPTIVE ?? "") === "1" && enabled.some(guard => guard === "type-reuse" || guard === "function-quality" || guard === "module-cohesion" || guard === "documentation");
   const adaptiveExperts = adaptiveContracts || adaptiveComparisons || ((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") === "1" && config.enabled.has("documentation")) ||
     ((process.env.CODE_GUARDS_EXPERIMENTAL_CODE ?? "") === "1" && config.enabled.has("function-quality"));
   const limitations = [

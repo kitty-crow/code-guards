@@ -277,11 +277,15 @@ export function premiseWindows(question: SemanticQuestion, tokenizer: Tokenizer)
 }
 
 function scores(result: Classification, question: SemanticQuestion): SimilarityVerdict {
-  const byLabel = new Map(result.labels.map((label, i) => [label, result.scores[i] ?? 0]));
-  return {
-    sameConcept: byLabel.get(question.same) ?? 0,
-    differentConcept: byLabel.get(question.different) ?? 0
-  };
+  if (result.labels.length !== 2 || result.scores.length !== 2 || question.same === question.different ||
+      new Set(result.labels).size !== 2 || result.scores.some(value => !Number.isFinite(value) || value < 0 || value > 1)) {
+    throw new Error("Invalid zero-shot classification.");
+  }
+  const byLabel = new Map(result.labels.map((label, i) => [label, result.scores[i] ?? -1]));
+  const sameConcept = byLabel.get(question.same) ?? -1;
+  const differentConcept = byLabel.get(question.different) ?? -1;
+  if (sameConcept < 0 || differentConcept < 0) throw new Error("Missing zero-shot hypothesis score.");
+  return {sameConcept, differentConcept};
 }
 
 /** Combine evidence without ignoring contradicting windows or averaging away strong evidence. */
@@ -565,22 +569,24 @@ export function supportsReuse(verdict: SimilarityVerdict, minimum = 0.78): boole
 export type InvestigationOptions = {
   enabled: boolean;
   context: string;
-  refine: () => ComparisonQuestion;
+  refine: () => SemanticQuestion;
   minimum: number;
+  maximumOpposition?: number;
 };
 
 /** Retain the existing decisive result; ask a narrower question only on ambiguity. */
-export async function investigateComparison(score: SemanticScorer, question: ComparisonQuestion, options: InvestigationOptions): Promise<SimilarityVerdict> {
+export async function investigateComparison(score: SemanticScorer, question: SemanticQuestion, options: InvestigationOptions): Promise<SimilarityVerdict> {
   const initial = await score(question);
-  if (!options.enabled || decisive(initial, options.minimum)) return initial;
+  if (!options.enabled || decisive(initial, options)) return initial;
   const refined = await score(options.refine());
-  if (!decisive(refined, options.minimum)) console.error(`[Code Guards] Unresolved ${options.context}: initial ${initial.sameConcept}/${initial.differentConcept}, refined ${refined.sameConcept}/${refined.differentConcept}`);
+  if (!decisive(refined, options)) console.error(`[Code Guards] Unresolved ${options.context}: initial ${initial.sameConcept}/${initial.differentConcept}, refined ${refined.sameConcept}/${refined.differentConcept}`);
   return refined;
 }
 
-function decisive(verdict: SimilarityVerdict, minimum: number): boolean {
-  return supportsReuse(verdict, minimum) ||
-    supportsReuse({sameConcept: verdict.differentConcept, differentConcept: verdict.sameConcept}, minimum);
+function decisive(verdict: SimilarityVerdict, options: InvestigationOptions): boolean {
+  const ceiling = options.maximumOpposition ?? 1;
+  return (supportsReuse(verdict, options.minimum) && verdict.differentConcept <= ceiling) ||
+    (supportsReuse({sameConcept: verdict.differentConcept, differentConcept: verdict.sameConcept}, options.minimum) && verdict.sameConcept <= ceiling);
 }
 
 export function adaptiveComparisonEnabled(): boolean {

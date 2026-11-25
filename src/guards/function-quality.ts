@@ -236,6 +236,18 @@ function assessBehaviour(left: FunctionInfo, right: FunctionInfo, score: Semanti
 
 type Emit = (info: FunctionInfo, code: string, similarity: number, related: FunctionInfo | null) => void;
 
+function functionInquiry(code: string): {same: string; different: string} {
+  const questions: Record<string, {same: string; different: string}> = {
+    CG201: {same: "the implementation contains a separable responsibility with its own inputs and outputs that can move without disrupting the existing control flow or shared state", different: "the operations share data flow, ordering or a common invariant that makes them one responsibility"},
+    CG202: {same: "a consequential branch, state transition or error condition has a non-obvious rationale not explained by the comments or the declaration", different: "the existing code or comments explain the consequential decisions and invariants"},
+    CG203: {same: "the resolved calls and state dependencies belong to distinct ownership boundaries and the function combines unrelated responsibilities", different: "the dependencies implement a coherent operation or intentional orchestration boundary"},
+    CG204: {same: "the declaration is a stateless internal method without a required contract or class-specific ownership and could be a helper", different: "the method's declaration, API ownership or required contract gives it a legitimate class boundary"}
+  };
+  const question = questions[code] ?? null;
+  if (!question) throw new Error("Missing function investigation hypothesis.");
+  return question;
+}
+
 async function reviewFunction(info: FunctionInfo, score: SemanticScorer, emit: Emit): Promise<void> {
   const checks = [
     { trigger: info.lines >= 45 && info.branches >= 4, code: "CG201", suggestion: "this function has distinct separable responsibilities whose extraction into focused functions would preserve execution order, data flow and invariants", opposite: "the implementation coordinates a cohesive responsibility or its shared invariants and state require the current organisation" },
@@ -245,7 +257,15 @@ async function reviewFunction(info: FunctionInfo, score: SemanticScorer, emit: E
   ];
   for (const check of checks) {
     if (!check.trigger) continue;
-    const verdict = await score({ premise: evidence(info), same: check.suggestion, different: check.opposite });
+    const premise = evidence(info);
+    const verdict = await investigateComparison(score, {premise, same: check.suggestion, different: check.opposite}, {
+      enabled: adaptiveComparisonEnabled(), minimum: 0.75,
+      context: `${check.code} ${info.node.getSourceFile().fileName}:${info.name}`,
+      refine: () => ({
+        premise: `${premise}\nComplete declaration, including modifiers, parameters and annotations:\n${info.node.getText()}`,
+        ...functionInquiry(check.code)
+      })
+    });
     if (supportsReuse(verdict, 0.75)) emit(info, check.code, verdict.sameConcept, null);
   }
 }

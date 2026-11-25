@@ -583,3 +583,20 @@ test("contract retrieval finds an implicit claim through a multi-hop local link"
   assert.ok(findings.some(item => item.code === "CG413" && item.location.file === "docs/limits.md"));
   await assert.rejects(expert.rank([{location: {file: "a", line: 1, column: 1}, text: "one"}]), /closed/);
 });
+
+test("CG314 rejects assertions that cannot execute after unconditional exits", async () => {
+  const project = fixture({"src/tests.test.ts": [
+    "import {test} from 'node:test'; import assert from 'node:assert/strict';",
+    "test('dead assertion', () => { return; assert.ok(true); });",
+    "test('dead alternative', () => { if (true) { console.log('run'); } else { assert.ok(true); } });",
+    "test('return assertion', () => { return assert.equal(2 + 2, 4); });"
+  ].join("\n")});
+  const findings = codeHealth(project, true).filter(item => item.code === "CG314");
+  assert.deepEqual(findings.map(item => item.location.line), [2, 3]);
+});
+
+test("CG404 detects transient remediation counts outside release notes", async () => {
+  const project = fixture({"README.md": "# Tool\n\nThis remediation pass resolved the remaining findings.\n\n14 violations remaining.\n\n## Release notes\n\n14 violations resolved.\n"});
+  const findings = (await documentation(project, reject)).filter(item => item.code === "CG404");
+  assert.deepEqual(findings.map(item => item.location.line), [3, 5]);
+});

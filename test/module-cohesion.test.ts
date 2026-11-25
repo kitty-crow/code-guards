@@ -178,3 +178,19 @@ test("CG206 does not confuse a shadowed parameter with a module function", async
   ].join("\n")});
   assert.equal((await moduleCohesion(project, false, endorse)).length, 1);
 });
+
+test("adaptive cohesion uses the resolved dependency graph when the overview is inconclusive", async () => {
+  const previous = process.env.CODE_GUARDS_EXPERIMENTAL_ADAPTIVE ?? "";
+  process.env.CODE_GUARDS_EXPERIMENTAL_ADAPTIVE = "1";
+  try {
+    const project = fixture({"src/utility.ts": "export function parse(value: string) { return value.trim(); }\nexport function notify(value: number) { console.log(value); }"});
+    const seen: string[] = [];
+    const scorer: SemanticScorer = async question => {
+      seen.push(question.premise);
+      if (question.premise.startsWith("TypeScript module")) return {sameConcept: 0.6, differentConcept: 0.6};
+      return endorse(question);
+    };
+    assert.equal((await moduleCohesion(project, false, scorer)).length, 1);
+    assert.ok(seen.some(item => item.includes("compiler-resolved operation relationships") && item.includes("local references")));
+  } finally { process.env.CODE_GUARDS_EXPERIMENTAL_ADAPTIVE = previous; }
+});

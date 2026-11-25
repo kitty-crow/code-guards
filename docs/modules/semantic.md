@@ -121,4 +121,4 @@ session options. CPU, CUDA and WebGPU remain selectable independently.
 
 `semanticAccelerationConfig` exposes the active selection to the specialist scheduler so it can reject overlapping or ambiguous GPU assignments.
 
-`investigateComparison` accepts `InvestigationOptions` with a narrower evidence-backed question. `adaptiveComparisonEnabled` selects additional investigation of ambiguous type reuse and whole-function comparisons via `CODE_GUARDS_EXPERIMENTAL_ADAPTIVE=1`. Decisive initial scores are retained. Ambiguous refinements identify their source context and opposing scores on stderr.
+`investigateComparison` accepts `InvestigationOptions` with a narrower evidence-backed question. `adaptiveComparisonEnabled` selects additional investigation of ambiguous type, function, cohesion and documentation assessments via `CODE_GUARDS_EXPERIMENTAL_ADAPTIVE=1`. Decisive initial scores are retained. Ambiguous refinements identify their source context and opposing scores on stderr.

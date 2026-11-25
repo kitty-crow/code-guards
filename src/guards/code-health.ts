@@ -271,6 +271,17 @@ function callHasAssertion(
   return directAssertion(node, checker) || arrayCallbackAssertion(node, checker, active, remaining);
 }
 
+// A later assertion cannot execute after an unconditional block exit.
+// Inspect the exit expression itself, which may call an assertion helper.
+function reachableAssertion(block: ts.Block, inspect: (node: ts.Node) => boolean): boolean {
+  for (const statement of block.statements) {
+    if (inspect(statement)) return true;
+    if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement) ||
+        ts.isBreakStatement(statement) || ts.isContinueStatement(statement)) return false;
+  }
+  return false;
+}
+
 function hasAssertionCall(
     root: ts.Node, checker: ts.TypeChecker, active: Set<ts.Node>,
     remaining: number, helper: boolean): boolean {
@@ -278,6 +289,8 @@ function hasAssertionCall(
   active.add(root);
   const inspect = (node: ts.Node): boolean => {
     if (ts.isFunctionLike(node)) return false;
+    if (ts.isBlock(node)) return reachableAssertion(node, inspect);
+    if (ts.isIfStatement(node) && node.expression.kind === ts.SyntaxKind.TrueKeyword) return inspect(node.thenStatement);
     if (ts.isIfStatement(node) && node.expression.kind === ts.SyntaxKind.FalseKeyword) {
       const alternate = node.elseStatement ?? null;
       return alternate !== null && inspect(alternate);

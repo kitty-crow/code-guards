@@ -130,3 +130,25 @@ test("adaptive investigation retains decisive verdicts and refines ambiguous com
   }, question, options);
   assert.ok(!supportsReuse(decisive));
 });
+
+test("missing or duplicate model labels fail instead of silently becoming zero scores", async () => {
+  const runtime = fakeRuntime(() => ({same: 0.9, different: 0.1}));
+  const bad: Classifier = Object.assign(async () => ({labels: ["wrong", "wrong"], scores: [0.9, 0.1]}),
+    {tokenizer: runtime.tokenizer, classifyBatch: null});
+  await assert.rejects(assessWindows(question("source evidence"), bad), /classification/);
+  const missing: Classifier = Object.assign(async () => ({labels: ["wrong", question("source evidence").different], scores: [0.9, 0.1]}),
+    {tokenizer: runtime.tokenizer, classifyBatch: null});
+  await assert.rejects(assessWindows(question("source evidence"), missing), /hypothesis score/);
+});
+
+test("adaptive investigation honours the caller's opposing evidence limit", async () => {
+  const initial = question("first");
+  const refined = question("additional evidence");
+  const seen: string[] = [];
+  const verdict = await investigateComparison(async item => {
+    seen.push(item.premise);
+    return item.premise === "first" ? {sameConcept: 0.92, differentConcept: 0.5} : {sameConcept: 0.1, differentConcept: 0.93};
+  }, initial, {enabled: true, minimum: 0.81, maximumOpposition: 0.35, context: "fixture", refine: () => refined});
+  assert.deepEqual(seen, ["first", "additional evidence"]);
+  assert.equal(verdict.differentConcept, 0.93);
+});
