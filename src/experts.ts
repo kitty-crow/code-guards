@@ -58,7 +58,8 @@ async function loadProseRuntime(): Promise<EmbeddingRuntime> {
       if (!inputs.length) return passages.map(() => null);
       const tensor = await extractor(inputs, {pooling: "mean", normalize: true});
       try {
-        const { data }: { data: object | null } = tensor;
+        const output: { readonly data: object | null } = tensor;
+        const data = output.data;
         if (!(data instanceof Float32Array) || data.length !== inputs.length * 384) throw new Error("Unexpected prose embedding shape.");
         const rows = inputs.map((_, index) => Array.from(data.slice(index * 384, (index + 1) * 384)));
         let cursor = 0;
