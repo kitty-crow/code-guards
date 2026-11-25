@@ -294,6 +294,8 @@ function checkModulePage(project: Project, source: ts.SourceFile, doc: string, i
   });
 }
 
+// Module discovery handles absent pages separately: without a corresponding
+// page there is no documentation claim or coverage evidence to validate.
 function checkModuleCoverage(project: Project, files: Set<string>, findings: Finding[]): void {
   const index = read(project.root, "docs/index.md");
   const moduleFiles = project.files.filter(file => {

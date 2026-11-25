@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { GuardName, Location } from "./model.ts";
 import { MODEL, MAX_MODEL_TOKENS, loadTransformers } from "./semantic.ts";
 
@@ -62,7 +64,7 @@ export type EmbeddingRuntime = {
   dispose: () => Promise<void>;
 };
 export type ExpertMetrics = {
-  loads: number; batches: number; cacheHits: number; loadMilliseconds: number;
+  loads: number; batches: number; cacheHits: number; persistentHits: number; loadMilliseconds: number;
   sampledPeakRssBytes: number; rssAfterDisposalBytes: number;
 };
 
@@ -94,12 +96,51 @@ async function loadEmbeddingRuntime(profile: ExpertProfile): Promise<EmbeddingRu
 function contentKey(profile: ExpertProfile, text: string): string {
   return createHash("sha256").update(JSON.stringify([
     profile.model, profile.revision, profile.provider,
-    profile.precision, profile.cacheNamespace, profile.contextTokens, profile.dimensions, text
+    profile.precision, profile.cacheNamespace, profile.contextTokens, profile.dimensions,
+    "transformers-4.3.2:embedding-f64-le-v1", process.platform, process.arch, process.versions.bun ?? "node", text
   ])).digest("hex");
 }
 
+// Private, local-only storage. A complete checksummed record is renamed into
+// place atomically; interruption can leave a temporary file but not a partial hit.
+class PersistentEmbeddingCache {
+  constructor(private readonly directory: string, private readonly dimensions: number) {}
+
+  private filename(key: string): string {
+    return path.join(this.directory, key.slice(0, 2), key + ".bin");
+  }
+
+  read(key: string): number[] | null {
+    const filename = this.filename(key);
+    if (!existsSync(filename)) return null;
+    const record = readFileSync(filename);
+    const payload = record.subarray(32);
+    if (payload.length !== this.dimensions * 8 || !createHash("sha256").update(payload).digest().equals(record.subarray(0, 32))) {
+      console.error("[Code Guards] Recomputing corrupt local embedding: " + key);
+      return null;
+    }
+    const values = Array.from(Array<number>(this.dimensions).keys(), index => payload.readDoubleLE(index * 8));
+    if (values.some(value => !Number.isFinite(value))) throw new Error("Non-finite persisted embedding.");
+    return values;
+  }
+
+  write(key: string, vector: number[]): void {
+    if (vector.length !== this.dimensions || vector.some(value => !Number.isFinite(value))) throw new Error("Invalid embedding for persistent storage.");
+    const filename = this.filename(key);
+    mkdirSync(path.dirname(filename), {recursive: true, mode: 0o700});
+    const payload = Buffer.alloc(vector.length * 8);
+    vector.forEach((value, index) => { payload.writeDoubleLE(value, index * 8); });
+    const record = Buffer.concat([createHash("sha256").update(payload).digest(), payload]);
+    const temporary = filename + "." + randomUUID() + ".tmp";
+    try {
+      writeFileSync(temporary, record, {mode: 0o600, flag: "wx"});
+      renameSync(temporary, filename);
+    } finally { rmSync(temporary, {force: true}); }
+  }
+}
+
 function cosine(left: number[], right: number[]): number {
-  if (!left.length || left.length !== right.length) throw new Error("Incompatible expert embeddings.");
+  if (!left.length || left.length !== right.length || [...left, ...right].some(value => !Number.isFinite(value))) throw new Error("Incompatible expert embeddings.");
   const dot = left.reduce((sum, value, index) => sum + value * (right[index] ?? 0), 0);
   const leftNorm = Math.sqrt(left.reduce((sum, value) => sum + value * value, 0));
   const rightNorm = Math.sqrt(right.reduce((sum, value) => sum + value * value, 0));
@@ -130,14 +171,16 @@ export class EmbeddingExpert {
   private readonly vectors = new Map<string, number[] | null>();
   private busy: Promise<RetrievalResult> | null = null;
   private closed = false;
+  private readonly persistent: PersistentEmbeddingCache | null;
   readonly metrics: ExpertMetrics = {
-    loads: 0, batches: 0, cacheHits: 0, loadMilliseconds: 0,
+    loads: 0, batches: 0, cacheHits: 0, persistentHits: 0, loadMilliseconds: 0,
     sampledPeakRssBytes: 0, rssAfterDisposalBytes: 0
   };
 
   constructor(private readonly profile: ExpertProfile, private readonly load: () => Promise<EmbeddingRuntime>,
-    private readonly rssBudgetBytes: number) {
+    private readonly rssBudgetBytes: number, cacheDirectory = "") {
     if (!Number.isSafeInteger(rssBudgetBytes) || rssBudgetBytes <= 0) throw new Error("Expert RSS budget must be a positive integer.");
+    this.persistent = cacheDirectory ? new PersistentEmbeddingCache(path.resolve(cacheDirectory), profile.dimensions) : null;
   }
 
   private sampleMemory(): void {
@@ -164,12 +207,26 @@ export class EmbeddingExpert {
     this.vectors.set(key, vector);
   }
 
+  private cached(key: string, completed: Map<string, number[] | null>): void {
+    if (this.vectors.has(key)) {
+      completed.set(key, this.vectors.get(key) ?? null);
+      return;
+    }
+    const vector = this.persistent ? this.persistent.read(key) : null;
+    if (!vector) return;
+    this.metrics.persistentHits += 1;
+    completed.set(key, vector);
+    this.remember(key, vector);
+  }
+
+  private persist(key: string, vector: number[] | null): void {
+    if (this.persistent && vector) this.persistent.write(key, vector);
+  }
+
   private async embedGroup(group: SourceEvidence[]): Promise<(number[] | null)[]> {
     const keys = group.map(item => contentKey(this.profile, item.text));
     const completed = new Map<string, number[] | null>();
-    for (const key of keys) {
-      if (this.vectors.has(key)) completed.set(key, this.vectors.get(key) ?? null);
-    }
+    for (const key of keys) this.cached(key, completed);
     const missing = group.filter(item => !completed.has(contentKey(this.profile, item.text)));
     this.metrics.cacheHits += group.length - missing.length;
     if (!missing.length) return keys.map(key => completed.get(key) ?? null);
@@ -179,6 +236,7 @@ export class EmbeddingExpert {
     for (const [index, item] of missing.entries()) {
       const key = contentKey(this.profile, item.text);
       const vector = vectors[index] ?? null;
+      this.persist(key, vector);
       completed.set(key, vector);
       this.remember(key, vector);
     }
@@ -212,6 +270,7 @@ export class EmbeddingExpert {
   }
 
   async close(): Promise<void> {
+    if (this.closed) return;
     this.closed = true;
     const pending = this.busy;
     if (pending) await Promise.allSettled([pending]);
@@ -225,15 +284,15 @@ export class EmbeddingExpert {
 
 export class ProseExpert extends EmbeddingExpert {
   constructor(load: () => Promise<EmbeddingRuntime> = () => loadEmbeddingRuntime(PROSE_EXPERT),
-    rssBudgetBytes = 2147483648) {
-    super(PROSE_EXPERT, load, rssBudgetBytes);
+    rssBudgetBytes = 2147483648, cacheDirectory = "") {
+    super(PROSE_EXPERT, load, rssBudgetBytes, cacheDirectory);
   }
 }
 
 export class CodeExpert extends EmbeddingExpert {
   constructor(load: () => Promise<EmbeddingRuntime> = () => loadEmbeddingRuntime(CODE_EXPERT),
-    rssBudgetBytes = 2147483648) {
-    super(CODE_EXPERT, load, rssBudgetBytes);
+    rssBudgetBytes = 2147483648, cacheDirectory = "") {
+    super(CODE_EXPERT, load, rssBudgetBytes, cacheDirectory);
   }
 }
 
@@ -243,10 +302,10 @@ function configuredBudget(): number {
 
 export function configuredProseExpert(): ProseExpert | null {
   if ((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") !== "1") return null;
-  return new ProseExpert(() => loadEmbeddingRuntime(PROSE_EXPERT), configuredBudget());
+  return new ProseExpert(() => loadEmbeddingRuntime(PROSE_EXPERT), configuredBudget(), process.env.CODE_GUARDS_EXPERT_CACHE_DIR ?? "");
 }
 
 export function configuredCodeExpert(): CodeExpert | null {
   if ((process.env.CODE_GUARDS_EXPERIMENTAL_CODE ?? "") !== "1") return null;
-  return new CodeExpert(() => loadEmbeddingRuntime(CODE_EXPERT), configuredBudget());
+  return new CodeExpert(() => loadEmbeddingRuntime(CODE_EXPERT), configuredBudget(), process.env.CODE_GUARDS_EXPERT_CACHE_DIR ?? "");
 }

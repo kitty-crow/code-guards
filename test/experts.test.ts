@@ -1,6 +1,9 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { guardCapabilities, ProseExpert, type SourceEvidence, type EmbeddingRuntime } from "../src/experts.ts";
+import { guardCapabilities, ProseExpert, EmbeddingExpert, PROSE_EXPERT, type SourceEvidence, type EmbeddingRuntime } from "../src/experts.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 function passage(text: string, line: number): SourceEvidence {
   return {text, location: {file: "guide.md", line, column: 1}};
@@ -47,4 +50,39 @@ test("prose expert releases an allocated runtime when inference fails", async ()
     await assert.rejects(expert.rank([passage("one", 1), passage("two", 2)]), /inference failed/);
   } finally { await expert.close(); }
   assert.equal(disposals, 1);
+});
+
+test("persistent expert cache reuses unchanged inputs across sessions and isolates model revisions", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "guards-expert-cache-"));
+  const profile = {...PROSE_EXPERT, dimensions: 2};
+  let loads = 0;
+  let encoded = 0;
+  let disposed = 0;
+  const load = async (): Promise<EmbeddingRuntime> => {
+    loads += 1;
+    return {embed: async inputs => {
+      encoded += inputs.length;
+      return inputs.map(text => text === "unrelated" ? [0, 1] : [1, 0]);
+    }, dispose: async () => { disposed += 1; }};
+  };
+  const inputs = [passage("first", 1), passage("paraphrase", 2), passage("unrelated", 3)];
+  try {
+    const first = new EmbeddingExpert(profile, load, 2147483648, directory);
+    const initial = await first.rank(inputs);
+    await first.close();
+    await first.close();
+    assert.equal(disposed, 1);
+    const warm = new EmbeddingExpert(profile, load, 2147483648, directory);
+    assert.deepEqual(await warm.rank(inputs), initial);
+    assert.equal(loads, 1);
+    assert.equal(warm.metrics.persistentHits, 3);
+    await warm.rank([passage("first", 1), passage("changed", 2), passage("unrelated", 3)]);
+    assert.equal(encoded, 4);
+    await warm.close();
+    const revised = new EmbeddingExpert({...profile, revision: "different-revision"}, load, 2147483648, directory);
+    await revised.rank(inputs);
+    assert.equal(encoded, 7);
+    assert.equal(revised.metrics.persistentHits, 0);
+    await revised.close();
+  } finally { rmSync(directory, {recursive: true, force: true}); }
 });
