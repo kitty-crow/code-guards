@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 15
     env:
       CODE_GUARDS_EXPERT_RAM_MIB: '4096'
-      CODE_GUARDS_MODEL_CACHE: ${{ runner.temp }}/code-guards-models
+      CODE_GUARDS_MODEL_CACHE: ${{ github.workspace }}/.cache/specialist-models
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
