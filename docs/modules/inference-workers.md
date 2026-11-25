@@ -51,7 +51,7 @@ Install an isolated Python environment with the published matching versions
 supports `adapterIndex` and is distinct from the Node WebGPU binding.
 Model sessions disable implicit CPU execution-provider fallback.
 
-In PowerShell on KittyWin, create the environment (Python 3.12 required
+In PowerShell, create the environment (Python 3.12 required
 for this example):
 
 ```powershell
@@ -67,12 +67,11 @@ benchmarks, prepopulate the cache before running the timed comparison.
 
 
 The operation is **experimental**: native adapter enumeration, plugin
-installation, verify ONNX operator support and score parity on KittyWin. A missing provider terminates the scan with an error.
+installation, verify ONNX operator support and score parity on the selected hardware. A missing provider terminates the scan with an error.
 
 ## Native WebGPU smoke test
 
-After installing the Python plugin, run `bun run probe:dual-webgpu` on
-KittyWin before any deadline-bounded TensorFlow scan. It sends an independent
+After installing the Python plugin, run `bun run probe:dual-webgpu` before any deadline-bounded project scan. It sends an independent
 semantic question to each adapter and prints the two verdicts. It now
 propagates native stderr and handles worker stdin pipe closure safely, so
 an adapter failure is reported rather than crashing Bun with EPIPE.
@@ -112,3 +111,5 @@ their assigned questions independently; no NVLink communication occurs.
 ## Hosted CPU worker
 
 `createNativeCpuWorkerPool(config, event)` starts one native FP32 CPU worker. It accepts semantic questions through the same JSON-lines protocol, without requiring GPU adapters. Use `--native-cpu` on a runner without a GPU. Install ONNX Runtime, Hugging Face Hub, tokenizers and NumPy in the environment selected by `CODE_GUARDS_WEBGPU_PYTHON`. The worker reads matching WebGPU cache entries first; CPU misses are stored under distinct provider-versioned keys. It reports CPU execution, never GPU execution.
+
+`ManagedWorkerPool` adds `drainAndClose()` to the existing immediate-close interface. `createLazyWorkerPool` allocates workers only when the first question arrives. Normal CLI shutdown closes stdin, waits for accepted requests and the workers' exit, and fails explicitly if they cannot drain within 120 seconds. `decodeSemanticQuestion` preserves paired evidence through the CUDA and DirectML IPC boundary. Process exit releases the worker's session; physical VRAM release still requires device telemetry.

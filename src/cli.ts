@@ -3,7 +3,7 @@ import { analyse } from "./engine.ts";
 import { estimateInference, formatInferencePreflight } from "./preflight.ts";
 import { parseAccelerationFlags, type AccelerationConfig } from "./acceleration.ts";
 import { configureSemanticAcceleration, disposeLocalSemanticModel, relaySemanticWorkerEvent, useRemoteSemanticScorer } from "./semantic.ts";
-import { createGpuWorkerPool, createNativeCpuWorkerPool } from "./inference-workers.ts";
+import { createGpuWorkerPool, createNativeCpuWorkerPool, createLazyWorkerPool } from "./inference-workers.ts";
 import { synchroniseInferenceCache } from "./inference-cache-git.ts";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -141,9 +141,9 @@ export async function run(argv: string[]): Promise<number> {
     try {
       const gpuIds = config.acceleration.gpuIds;
       if (gpuIds.length || config.nativeCpu) {
-        pool = config.nativeCpu
+        pool = createLazyWorkerPool(() => config.nativeCpu
           ? createNativeCpuWorkerPool(config.acceleration, relaySemanticWorkerEvent)
-          : createGpuWorkerPool(gpuIds, config.acceleration, relaySemanticWorkerEvent);
+          : createGpuWorkerPool(gpuIds, config.acceleration, relaySemanticWorkerEvent));
         const workerPool = pool;
         restoreRemote = useRemoteSemanticScorer(question => workerPool.score(question));
       }
@@ -162,9 +162,12 @@ export async function run(argv: string[]): Promise<number> {
       return failed(findings, config.strict) ? 1 : 0;
     } finally {
       restoreRemote();
-      if (pool) pool.close();
-      try { await disposeLocalSemanticModel(); }
-      finally { restore(); }
+      try {
+        if (pool) await pool.drainAndClose();
+      } finally {
+        try { await disposeLocalSemanticModel(); }
+        finally { restore(); }
+      }
       if (config.syncInferenceCache) {
         synchroniseInferenceCache("push", config.inferenceCacheDir ?? "", config.cacheRemote ?? "",
           message => console.error(message));

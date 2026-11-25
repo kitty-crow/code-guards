@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { AccelerationConfig } from "./acceleration.ts";
 import { parseRecord, JsonRecord } from "./json.ts";
-import type { SemanticQuestion, SemanticTimingEvent, WindowVerdict, NativeWindowVerdict, NliLogits, RawNliWindow } from "./semantic.ts";
+import { comparisonQuestion, type SemanticQuestion, type SemanticTimingEvent, type WindowVerdict, type NativeWindowVerdict, type NliLogits, type RawNliWindow } from "./semantic.ts";
 
 type WorkerEvent = { type: "loading" | "ready"; gpuId: number; backend: "cuda" | "dml" | "webgpu" | "cpu" } |
   { type: "timing"; gpuId: number; timing: SemanticTimingEvent };
@@ -17,12 +17,36 @@ type Worker = {
   requests: Map<number, Pending>;
   failed: Error | null;
   diagnostics: string[];
+  exit: Promise<boolean>;
 };
 
 export type GpuWorkerPool = {
   score: (question: SemanticQuestion) => Promise<WindowVerdict>;
   close: () => void;
 };
+
+export type ManagedWorkerPool = GpuWorkerPool & { drainAndClose: () => Promise<void> };
+
+/** Delay worker allocation until a semantic question actually needs a model. */
+export function createLazyWorkerPool(factory: () => ManagedWorkerPool): ManagedWorkerPool {
+  let pool: ManagedWorkerPool | null = null;
+  let closed = false;
+  return {
+    score: async question => {
+      if (closed) throw new Error("GPU worker pool has closed.");
+      pool ??= factory();
+      return pool.score(question);
+    },
+    close: () => {
+      closed = true;
+      if (pool) pool.close();
+    },
+    drainAndClose: async () => {
+      closed = true;
+      if (pool) await pool.drainAndClose();
+    }
+  };
+}
 
 /**
  * Select the worker with the fewest unfinished questions. Rotate ties so that
@@ -47,6 +71,17 @@ export function leastPendingWorkerIndex(counts: readonly number[], start: number
     }
   }
   return selected;
+}
+
+export function decodeSemanticQuestion(payload: JsonRecord): SemanticQuestion {
+  const question = {premise: payload.text("premise"), same: payload.text("same"), different: payload.text("different")};
+  const comparison = payload.get("comparison");
+  if (comparison === null) return question;
+  if (!(comparison instanceof JsonRecord)) throw new Error("Invalid paired semantic evidence.");
+  const left = comparison.record("left");
+  const right = comparison.record("right");
+  return comparisonQuestion(question, {name: left.text("name"), evidence: left.text("evidence")},
+    {name: right.text("name"), evidence: right.text("evidence")});
 }
 
 function decodeTiming(data: JsonRecord, gpuId: number | null): SemanticTimingEvent {
@@ -106,12 +141,37 @@ function decodeVerdict(data: JsonRecord): WindowVerdict | NativeWindowVerdict {
   return {...verdict, rawEvidence};
 }
 
+// EOF lets workers finish accepted requests, dispose the model and commit
+// completed cache entries. The timeout is a failure boundary, not a success.
+async function drainWorkers(workers: Worker[], reject: (worker: Worker, failure: Error) => void): Promise<void> {
+  for (const worker of workers) {
+    const input = worker.child.stdin;
+    if (input) input.end();
+  }
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const deadline = new Promise<boolean[]>(resolve => {
+    timer = setTimeout(() => resolve([]), 120000);
+  });
+  try {
+    const results = await Promise.race([Promise.all(workers.map(worker => worker.exit)), deadline]);
+    if (results.length === workers.length && results.every(Boolean) && workers.every(worker => !worker.failed && !worker.requests.size)) return;
+    const failure = new Error("Inference workers did not drain and exit successfully.");
+    for (const worker of workers) {
+      reject(worker, failure);
+      worker.child.kill("SIGKILL");
+    }
+    throw failure;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
 /** Bind each worker to a selected GPU adapter through native execution providers. */
 export function createGpuWorkerPool(
   ids: readonly number[],
   config: AccelerationConfig,
   event: (message: WorkerEvent) => void
-): GpuWorkerPool {
+): ManagedWorkerPool {
   const backend = config.features.has("webgpu") ? "webgpu"
     : process.platform === "win32" ? "dml"
     : process.platform === "linux" ? "cuda" : null;
@@ -129,7 +189,7 @@ export function createGpuWorkerPool(
 /** Explicit CPU FP32 worker using the native model and portable cache. */
 export function createNativeCpuWorkerPool(
   config: AccelerationConfig, event: (message: WorkerEvent) => void
-): GpuWorkerPool {
+): ManagedWorkerPool {
   return createWorkerPool([0], config, "cpu", event);
 }
 
@@ -137,7 +197,7 @@ function createWorkerPool(
   ids: readonly number[], config: AccelerationConfig,
   backend: "cuda" | "dml" | "webgpu" | "cpu",
   event: (message: WorkerEvent) => void
-): GpuWorkerPool {
+): ManagedWorkerPool {
   const native = backend === "webgpu" || backend === "cpu";
   const sourceDir = dirname(fileURLToPath(import.meta.url));
   const extension = fileURLToPath(import.meta.url).endsWith(".js") ? "js" : "ts";
@@ -154,6 +214,7 @@ function createWorkerPool(
   let nextId = 0;
   let nextWorker = 0;
   let closed = false;
+  let draining: Promise<void> | null = null;
 
   function rejectWorker(worker: Worker, failure: Error): void {
     if (worker.failed) return;
@@ -183,7 +244,11 @@ function createWorkerPool(
       },
       stdio: ["pipe", "pipe", "pipe"], windowsHide: true
     });
-    const worker: Worker = { child, id, requests: new Map<number, Pending>(), failed: null, diagnostics: [] };
+    const exit = new Promise<boolean>(resolve => {
+      child.once("close", code => resolve(code === 0));
+      child.once("error", () => resolve(false));
+    });
+    const worker: Worker = { child, id, requests: new Map<number, Pending>(), failed: null, diagnostics: [], exit };
     workers.push(worker);
     // The native ONNX model worker can terminate during initialisation.
     // Without a listener, EPIPE on Bun's Writable stdin can become an
@@ -249,7 +314,7 @@ function createWorkerPool(
     child.once("error", error => rejectWorker(worker,
       new Error("GPU " + id + " worker process failed: " + error.message)));
     child.once("close", (code, signal) => {
-      if (!closed && !worker.failed) {
+      if (!worker.failed && (!closed || worker.requests.size > 0 || code !== 0)) {
         const detail = worker.diagnostics.slice(-12).join(" | ");
         rejectWorker(worker, new Error("GPU " + id + " worker exited: " +
           String(code ?? signal) + (detail ? ". Native stderr: " + detail : "")));
@@ -292,6 +357,13 @@ function createWorkerPool(
         rejectWorker(worker, new Error("GPU worker pool closed."));
         worker.child.kill("SIGKILL");
       }
+    },
+    drainAndClose(): Promise<void> {
+      if (draining) return draining;
+      if (closed) return Promise.resolve();
+      closed = true;
+      draining = drainWorkers(workers, rejectWorker);
+      return draining;
     }
   };
 }

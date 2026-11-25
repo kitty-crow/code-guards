@@ -1,11 +1,11 @@
 /** Dedicated DirectML or CUDA model worker with explicit adapter affinity. */
 import { createInterface } from "node:readline";
 import {
-  configureSemanticAcceleration, observeSemanticProgress, observeSemanticTimings, zeroShot,
-  type SemanticQuestion
+  configureSemanticAcceleration, disposeLocalSemanticModel, observeSemanticProgress, observeSemanticTimings, zeroShot
 } from "./semantic.ts";
 import type { Acceleration } from "./acceleration.ts";
 import { parseRecord } from "./json.ts";
+import { decodeSemanticQuestion } from "./inference-workers.ts";
 
 const gpuId = Number(process.env.CODE_GUARDS_GPU_WORKER_ID ?? "-1");
 if (!Number.isSafeInteger(gpuId) || gpuId < 0) throw new Error("Worker requires a valid GPU identifier.");
@@ -34,10 +34,7 @@ for await (const line of lines) {
     const request = parseRecord(line);
     const id = request.number("id");
     if (!Number.isSafeInteger(id)) throw new Error("Invalid GPU worker request ID.");
-    const payload = request.record("question");
-    const question: SemanticQuestion = {
-      premise: payload.text("premise"), same: payload.text("same"), different: payload.text("different")
-    };
+    const question = decodeSemanticQuestion(request.record("question"));
     const verdict = await zeroShot(question);
     send({ type: "result", id, gpuId, verdict });
   } catch (error) {
@@ -46,3 +43,5 @@ for await (const line of lines) {
     break;
   }
 }
+
+await disposeLocalSemanticModel();
