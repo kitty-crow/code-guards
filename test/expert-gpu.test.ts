@@ -9,7 +9,7 @@ test("expert GPU shares explicitly mapped native judge adapters without disablin
   const judge = parseAccelerationFlags(["--accelerate", "parallel,webgpu", "--gpu-ids", "0"]).acceleration;
   validateExpertAdapter(1, "GPU-b2", judge, "0=GPU-a1");
   validateExpertAdapter(0, "GPU-a1", judge, "0=GPU-a1");
-  const dual = parseAccelerationFlags(["--accelerate", "parallel,webgpu", "--gpu-ids", "0,1"]).acceleration;
+  const dual = parseAccelerationFlags(["--accelerate", "parallel,webgpu", "--gpu-ids", "0,1", "--concurrency", "4"]).acceleration;
   validateExpertAdapter(1, "GPU-b2", dual, "0=GPU-a1,1=GPU-b2");
   assert.deepEqual(dual.gpuIds, [0, 1]);
   assert.throws(() => validateExpertAdapter(0, "GPU-b2", judge, "0=GPU-a1"), /contradicts/);

@@ -156,7 +156,8 @@ async function drainWorkers(workers: Worker[], reject: (worker: Worker, failure:
   try {
     const results = await Promise.race([Promise.all(workers.map(worker => worker.exit)), deadline]);
     if (results.length === workers.length && results.every(Boolean) && workers.every(worker => !worker.failed && !worker.requests.size)) return;
-    const original = workers.find(worker => worker.failed !== null)?.failed ?? null;
+    const failedWorker = workers.find(worker => worker.failed !== null) ?? null;
+    const original = failedWorker ? failedWorker.failed : null;
     const failure = original ?? new Error("Inference workers did not drain and exit successfully.");
     for (const worker of workers) {
       reject(worker, failure);
