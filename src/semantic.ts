@@ -561,3 +561,28 @@ export async function disposeLocalSemanticModel(): Promise<void> {
 export function supportsReuse(verdict: SimilarityVerdict, minimum = 0.78): boolean {
   return verdict.sameConcept >= minimum && verdict.sameConcept >= verdict.differentConcept + 0.12;
 }
+
+export type InvestigationOptions = {
+  enabled: boolean;
+  context: string;
+  refine: () => ComparisonQuestion;
+  minimum: number;
+};
+
+/** Retain the existing decisive result; ask a narrower question only on ambiguity. */
+export async function investigateComparison(score: SemanticScorer, question: ComparisonQuestion, options: InvestigationOptions): Promise<SimilarityVerdict> {
+  const initial = await score(question);
+  if (!options.enabled || decisive(initial, options.minimum)) return initial;
+  const refined = await score(options.refine());
+  if (!decisive(refined, options.minimum)) console.error(`[Code Guards] Unresolved ${options.context}: initial ${initial.sameConcept}/${initial.differentConcept}, refined ${refined.sameConcept}/${refined.differentConcept}`);
+  return refined;
+}
+
+function decisive(verdict: SimilarityVerdict, minimum: number): boolean {
+  return supportsReuse(verdict, minimum) ||
+    supportsReuse({sameConcept: verdict.differentConcept, differentConcept: verdict.sameConcept}, minimum);
+}
+
+export function adaptiveComparisonEnabled(): boolean {
+  return (process.env.CODE_GUARDS_EXPERIMENTAL_ADAPTIVE ?? "") === "1";
+}

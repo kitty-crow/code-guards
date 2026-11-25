@@ -236,7 +236,8 @@ export async function estimateInference(
   const conditional = minimum.questions !== maximum.questions ||
     minimum.windows !== maximum.windows;
   const adaptiveContracts = (process.env.CODE_GUARDS_EXPERIMENTAL_CONTRACTS ?? "") === "1" && config.enabled.has("documentation");
-  const adaptiveExperts = adaptiveContracts || ((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") === "1" && config.enabled.has("documentation")) ||
+  const adaptiveComparisons = (process.env.CODE_GUARDS_EXPERIMENTAL_ADAPTIVE ?? "") === "1" && (config.enabled.has("type-reuse") || config.enabled.has("function-quality"));
+  const adaptiveExperts = adaptiveContracts || adaptiveComparisons || ((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") === "1" && config.enabled.has("documentation")) ||
     ((process.env.CODE_GUARDS_EXPERIMENTAL_CODE ?? "") === "1" && config.enabled.has("function-quality"));
   const limitations = [
     "No semantic predictions are performed. Existing deterministic candidate selection is reused.",
@@ -244,6 +245,7 @@ export async function estimateInference(
     "Tokenizer-only preparation excludes model weight loading, native GPU workers and neural execution.",
     ...((process.env.CODE_GUARDS_EXPERIMENTAL_PROSE ?? "") === "1" && config.enabled.has("documentation") ? ["Experimental prose retrieval is not included in these counts; it requires embedding inference."] : []),
     ...((process.env.CODE_GUARDS_EXPERIMENTAL_CODE ?? "") === "1" && config.enabled.has("function-quality") ? ["Experimental code retrieval is not included in these counts; it requires embedding inference."] : []),
+    ...(adaptiveComparisons ? ["Adaptive comparison follow-up questions depend on initial model scores and are not included in these estimates."] : []),
     ...(adaptiveContracts ? ["Adaptive contract retrieval and investigation depend on semantic results; these additional questions are not bounded by the tokenizer-only estimates."] : []),
     ...(conditional ? [
       "Semantic decisions control later documentation and module-cohesion questions. The minimum and maximum are possible workloads; the actual path cannot be known without neural inference."

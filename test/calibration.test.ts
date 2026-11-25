@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { applyCalibration, evaluateCalibration, fitCalibration, type CalibrationSample } from "../src/calibration.ts";
+import { applyCalibration, evaluateCalibration, fitCalibration, readCalibrationDataset, calibrateDataset, type CalibrationSample } from "../src/calibration.ts";
 
 function sample(revisionFamily: string, score: number, correct: boolean, windows = 1): CalibrationSample {
   return {task: "CG205", revisionFamily, score, correct, windows};
@@ -28,4 +28,17 @@ test("calibration keeps revision families separate and measures held-out reliabi
 test("calibration rejects unsupported samples and one-label training data", () => {
   assert.throws(() => fitCalibration("CG205", [sample("a", 1, true), sample("b", 0.9, true)]), /both correctness labels/);
   assert.throws(() => fitCalibration("CG205", [sample("a", 2, false), sample("b", 0.9, true)]), /Invalid/);
+});
+
+test("calibration datasets retain exact review provenance and prevent revision leakage", () => {
+  const row = (revision: string, family: string, correct: boolean, anchor: string) =>
+    ({sourceRevision: revision.repeat(40), revisionFamily: family, anchor, correct, score: 0.9, windows: 1});
+  const data = {task: "CG205", detectorRevision: "a".repeat(40), modelIdentity: "checkpoint/provider/scoring-abi",
+    training: [row("b", "train1", true, "a"), row("c", "train2", false, "b")],
+    evaluation: [row("d", "eval1", true, "c"), row("e", "eval2", false, "d")]};
+  const dataset = readCalibrationDataset(JSON.stringify(data));
+  const result = calibrateDataset(dataset);
+  assert.equal(result.detectorRevision, data.detectorRevision);
+  assert.equal(result.metrics.raw.count, 2);
+  assert.throws(() => readCalibrationDataset(JSON.stringify({...data, evaluation: [row("b", "eval2", true, "different-anchor")]})), /revisions overlap/);
 });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { location, type Finding, type Location } from "../model.ts";
 import type { CodeExpert, SourceEvidence, ProseMatch } from "../experts.ts";
 import { isTestFile, type Project } from "../project.ts";
-import { supportsReuse, zeroShot, semanticConcurrency, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
+import { supportsReuse, zeroShot, semanticConcurrency, comparisonQuestion, investigateComparison, adaptiveComparisonEnabled, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
 type BehaviourFacts = {
@@ -215,6 +215,25 @@ function compareBehaviour(left: FunctionInfo, right: FunctionInfo) {
   }, {name: left.name, evidence: a}, {name: right.name, evidence: b});
 }
 
+function refineBehaviour(left: FunctionInfo, right: FunctionInfo) {
+  const describe = (info: FunctionInfo): string => info.node.getText() + "\n" + behaviouralEvidence(info);
+  const a = describe(left);
+  const b = describe(right);
+  return comparisonQuestion({
+    premise: `First declaration ${left.name}: ${a}\nSecond declaration ${right.name}: ${b}`,
+    same: "the complete declarations perform equivalent observable transformations, state updates and failure behaviour for equivalent inputs, so one shared implementation would preserve the contracts",
+    different: "the declarations differ in an observable transformation, state update, failure condition or input contract that would be lost by sharing one implementation"
+  }, {name: left.name, evidence: a}, {name: right.name, evidence: b});
+}
+
+function assessBehaviour(left: FunctionInfo, right: FunctionInfo, score: SemanticScorer) {
+  return investigateComparison(score, compareBehaviour(left, right), {
+    enabled: adaptiveComparisonEnabled(), minimum: 0.78,
+    context: `CG205 ${left.node.getSourceFile().fileName}:${left.name} / ${right.node.getSourceFile().fileName}:${right.name}`,
+    refine: () => refineBehaviour(left, right)
+  });
+}
+
 type Emit = (info: FunctionInfo, code: string, similarity: number, related: FunctionInfo | null) => void;
 
 async function reviewFunction(info: FunctionInfo, score: SemanticScorer, emit: Emit): Promise<void> {
@@ -260,7 +279,7 @@ async function reviewSimilarFunctions(functions: FunctionInfo[], score: Semantic
         emit(right, "CG205", 1, left);
         continue;
       }
-      const verdict = await score(compareBehaviour(left, right));
+      const verdict = await assessBehaviour(left, right, score);
       if (supportsReuse(verdict)) emit(right, "CG205", verdict.sameConcept, left);
     }
   }
@@ -320,7 +339,7 @@ async function reviewRetrievedFunctions(functions: FunctionInfo[], project: Proj
     const left = indexed.get(evidenceKey(pair.earlier.location)) ?? null;
     const right = indexed.get(evidenceKey(pair.later.location)) ?? null;
     if (!left || !right) throw new Error("Code retrieval returned an unknown source location.");
-    const verdict = await score(compareBehaviour(left, right));
+    const verdict = await assessBehaviour(left, right, score);
     if (supportsReuse(verdict)) emit(right, "CG205", verdict.sameConcept, left);
   }
 }

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { assessWindows, MAX_MODEL_TOKENS, observeSemanticTimings, premiseWindows, premiseWindowCount, comparisonQuestion, semanticQuestionKey, supportsReuse, type SemanticQuestion, type SemanticTimingEvent, type Classifier } from "../src/semantic.ts";
+import { assessWindows, MAX_MODEL_TOKENS, observeSemanticTimings, premiseWindows, premiseWindowCount, comparisonQuestion, semanticQuestionKey, supportsReuse, investigateComparison, type SemanticQuestion, type SemanticTimingEvent, type Classifier } from "../src/semantic.ts";
 
 function fakeRuntime(assess: (window: string) => { same: number; different: number }) {
   const dictionary = new Map<string, number>();
@@ -109,4 +109,24 @@ test("paired windows preserve distant evidence from both compared entities", asy
   assert.notEqual(semanticQuestionKey(paired), semanticQuestionKey(plain));
   const verdict = await assessWindows(paired, runtime.classify);
   assert.ok(!supportsReuse(verdict));
+});
+
+test("adaptive investigation retains decisive verdicts and refines ambiguous comparisons", async () => {
+  const question = comparisonQuestion({premise: "initial", same: "same", different: "different"},
+    {name: "a", evidence: "left"}, {name: "b", evidence: "right"});
+  const refinement = comparisonQuestion({premise: "complete declarations", same: "shared behaviour", different: "distinct behaviour"},
+    {name: "a", evidence: "left including constraints"}, {name: "b", evidence: "right including constraints"});
+  const options = {enabled: true, minimum: 0.78, context: "test", refine: () => refinement};
+  const seen: string[] = [];
+  const result = await investigateComparison(async item => {
+    seen.push(item.premise);
+    return item.premise === "initial" ? {sameConcept: 0.6, differentConcept: 0.6} : {sameConcept: 0.95, differentConcept: 0.05};
+  }, question, options);
+  assert.ok(supportsReuse(result));
+  assert.deepEqual(seen, ["initial", "complete declarations"]);
+  const decisive = await investigateComparison(async item => {
+    assert.equal(item.premise, "initial");
+    return {sameConcept: 0.05, differentConcept: 0.95};
+  }, question, options);
+  assert.ok(!supportsReuse(decisive));
 });

@@ -3,7 +3,7 @@ import ts from "typescript";
 import path from "node:path";
 import { location, type Finding } from "../model.ts";
 import { isTestFile, type Project } from "../project.ts";
-import { zeroShot, supportsReuse, semanticConcurrency, comparisonQuestion, type SemanticScorer } from "../semantic.ts";
+import { zeroShot, supportsReuse, semanticConcurrency, comparisonQuestion, investigateComparison, adaptiveComparisonEnabled, type SemanticScorer } from "../semantic.ts";
 import { orderedConcurrentMap } from "../inference-scheduler.ts";
 
 type Property = { name: string; fingerprint: string; origin: ts.Declaration | null; contracts: Set<ts.Declaration> };
@@ -355,6 +355,19 @@ function independentProperties(left: Definition, right: Definition): Property[] 
   });
 }
 
+function refineTypeContract(a: Definition, b: Definition) {
+  const describe = (definition: Definition): string =>
+    "Independent fields: " + definition.properties.map(property => property.name + ": " + property.fingerprint).join(", ") +
+    "\nComplete declaration: " + definition.node.getText();
+  const left = describe(a);
+  const right = describe(b);
+  return comparisonQuestion({
+    premise: `First declaration ${a.name}: ${left}\nSecond declaration ${b.name}: ${right}`,
+    same: "the independent fields denote the same domain data and constraints and form a reusable contract beyond the inherited or implemented obligations",
+    different: "the independent fields have distinct domain meanings, constraints or existing contractual obligations despite structural similarity"
+  }, {name: a.name, evidence: left}, {name: b.name, evidence: right});
+}
+
 async function compareDefinitions(project: Project, a: Definition, b: Definition, score: SemanticScorer): Promise<Finding | null> {
   if (a.node.getSourceFile() === b.node.getSourceFile()) return null;
   const independentA = independentProperties(a, b);
@@ -384,12 +397,17 @@ async function compareDefinitions(project: Project, a: Definition, b: Definition
   let confidence = 1;
   if (!exactMatch) {
     const premise = `Two TypeScript declarations are being reviewed for reuse. The first is named ${a.name} with fields ${independentA.map(p => `${p.name} (${p.fingerprint})`).join(", ")}. The second is named ${b.name} with fields ${independentB.map(p => `${p.name} (${p.fingerprint})`).join(", ")}.`;
-    const verdict = await score(comparisonQuestion({
+    const question = comparisonQuestion({
       premise,
       same: "the independently declared fields duplicate a semantic contract not already represented by a shared abstraction, and extracting that contract would provide meaningful reuse",
       different: "the fields serve distinct responsibilities or are already represented by an existing abstraction, so another shared contract would not provide meaningful reuse"
     }, {name: a.name, evidence: independentA.map(p => `${p.name} (${p.fingerprint})`).join(", ")},
-    {name: b.name, evidence: independentB.map(p => `${p.name} (${p.fingerprint})`).join(", ")}));
+    {name: b.name, evidence: independentB.map(p => `${p.name} (${p.fingerprint})`).join(", ")});
+    const verdict = await investigateComparison(score, question, {
+      enabled: adaptiveComparisonEnabled(), minimum: 0.78,
+      context: `type reuse ${a.node.getSourceFile().fileName}:${a.name} / ${b.node.getSourceFile().fileName}:${b.name}`,
+      refine: () => refineTypeContract(localA, localB)
+    });
     confidence = supportsReuse(verdict) ? verdict.sameConcept : 0;
   }
   if (confidence === 0) return null;

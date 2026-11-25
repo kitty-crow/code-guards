@@ -50,3 +50,5 @@ Experimental code retrieval is excluded from the tokenizer-only question count b
 When experimental contract review is enabled, the preflight scorer counts the same compiler-retrieved coverage and claim questions without loading model weights.
 
 Adaptive contract retrieval and follow-up questions depend on model results, so the tokenizer-only estimates exclude this additional workload.
+
+Adaptive type and function investigations are score-dependent. With `CODE_GUARDS_EXPERIMENTAL_ADAPTIVE=1`, preflight does not claim a complete question count or duration.

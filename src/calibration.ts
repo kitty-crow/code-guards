@@ -1,4 +1,5 @@
 /** Task-specific calibration of binary finding correctness, independent of inference. */
+import { parseRecord, JsonRecord } from "./json.ts";
 export type CalibrationSample = {
   task: string;
   revisionFamily: string;
@@ -129,4 +130,53 @@ export function evaluateCalibration(fit: CalibrationFit, samples: readonly Calib
       calibrated: metrics(group.items, calibrated)
     }))
   };
+}
+
+export type ReviewedCalibrationSample = CalibrationSample & {sourceRevision: string; anchor: string};
+export type CalibrationDataset = {
+  task: string; detectorRevision: string; modelIdentity: string;
+  training: ReviewedCalibrationSample[]; evaluation: ReviewedCalibrationSample[];
+};
+
+function reviewedSample(record: JsonRecord, task: string): ReviewedCalibrationSample {
+  const correct = record.get("correct");
+  const sourceRevision = record.text("sourceRevision");
+  const anchor = record.text("anchor");
+  if (typeof correct !== "boolean" || !/^[a-f0-9]{40}$/.test(sourceRevision) || !anchor.trim()) throw new Error("Calibration requires a reviewed label, exact source revision and anchor.");
+  const result = {task, sourceRevision, anchor, correct, revisionFamily: record.text("revisionFamily"),
+    score: record.number("score"), windows: record.number("windows")};
+  validateSample(result, task);
+  return result;
+}
+
+function sampleList(record: JsonRecord, field: string, task: string): ReviewedCalibrationSample[] {
+  const values = record.get(field);
+  if (!Array.isArray(values) || !values.length) throw new Error("Missing calibration samples: " + field);
+  return values.map(value => {
+    if (!(value instanceof JsonRecord)) throw new Error("Invalid reviewed calibration sample.");
+    return reviewedSample(value, task);
+  });
+}
+
+/** Validate label provenance and prevent repeated anchors or split revision leakage. */
+export function readCalibrationDataset(input: string): CalibrationDataset {
+  const record = parseRecord(input);
+  const task = record.text("task");
+  const detectorRevision = record.text("detectorRevision");
+  const modelIdentity = record.text("modelIdentity");
+  if (!task.trim() || !/^[a-f0-9]{40}$/.test(detectorRevision) || !modelIdentity.trim()) throw new Error("Missing exact calibration provenance.");
+  const training = sampleList(record, "training", task);
+  const evaluation = sampleList(record, "evaluation", task);
+  const anchors = [...training, ...evaluation].map(sample => JSON.stringify([sample.sourceRevision, sample.anchor]));
+  if (new Set(anchors).size !== anchors.length) throw new Error("Duplicate reviewed calibration anchor.");
+  const revisions = new Set(training.map(sample => sample.sourceRevision));
+  if (evaluation.some(sample => revisions.has(sample.sourceRevision))) throw new Error("Calibration and evaluation source revisions overlap.");
+  return {task, detectorRevision, modelIdentity, training, evaluation};
+}
+
+/** Return a fit and independent evaluation together, without activating it. */
+export function calibrateDataset(dataset: CalibrationDataset) {
+  const fit = fitCalibration(dataset.task, dataset.training);
+  const metrics = evaluateCalibration(fit, dataset.evaluation);
+  return {detectorRevision: dataset.detectorRevision, modelIdentity: dataset.modelIdentity, fit, metrics};
 }
