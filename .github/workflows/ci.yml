@@ -61,3 +61,15 @@ jobs:
         run: bun run --bun build
       - name: Strict full self-check with progress
         run: bun dist/src/cli.js --strict --include-tests --progress
+
+  showcase:
+    name: Diagnostic showcase
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install dependencies with Bun
+        run: bun install --frozen-lockfile
+      - name: Build and test all diagnostic examples
+        run: bun run --bun test:showcase:bun

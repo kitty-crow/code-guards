@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** Probe two physical WebGPU adapters before running the full TensorFlow scan. */
+/** Probe two physical WebGPU adapters before running a project scan. */
 import { createGpuWorkerPool } from "../src/inference-workers.ts";
 import { parseAccelerationFlags } from "../src/acceleration.ts";
 
