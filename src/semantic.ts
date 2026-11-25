@@ -115,6 +115,9 @@ export function configureSemanticAcceleration(config: AccelerationConfig): () =>
   };
 }
 
+/** Read the selected provider and physical adapter configuration for expert scheduling. */
+export function semanticAccelerationConfig(): AccelerationConfig { return acceleration; }
+
 /** Maximum number of independent semantic questions allowed in flight. */
 export function semanticConcurrency(): number {
   return acceleration.features.has("parallel") ? acceleration.concurrency : 1;

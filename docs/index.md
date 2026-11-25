@@ -17,6 +17,7 @@ Code Guards runs locally; the source entry point is `src/cli.ts`. These pages de
 - [Package commands](modules/scripts.md)
 - [Local entailment scoring](modules/semantic.md)
 - [Inference experts](modules/experts.md)
+- [Physical embedding workers](modules/expert-gpu.md)
 - [Confidence calibration](modules/calibration.md)
 - [Detector evaluation](modules/evaluation.md)
 - [Read-only inference preflight](modules/preflight.md)

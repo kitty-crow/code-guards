@@ -4,6 +4,7 @@ import path from "node:path";
 import { homedir } from "node:os";
 import type { GuardName, Location } from "./model.ts";
 import { MODEL, MAX_MODEL_TOKENS, loadTransformers } from "./semantic.ts";
+import { configuredExpertGpu, openGpuEmbeddingRuntime } from "./expert-gpu.ts";
 
 export type Capability = "compiler-facts" | "semantic-judgement" | "prose-retrieval" | "code-retrieval";
 export type ExpertProfile = {
@@ -14,7 +15,7 @@ export type ExpertProfile = {
   modelContextTokens: number;
   dimensions: number;
   batchSize: number;
-  provider: "cpu";
+  provider: "cpu" | "webgpu";
   precision: "fp32";
   cacheNamespace: string;
   licence: string;
@@ -175,7 +176,7 @@ export class EmbeddingExpert {
     sampledPeakRssBytes: 0, rssAfterDisposalBytes: 0
   };
 
-  constructor(private readonly profile: ExpertProfile, private readonly load: () => Promise<EmbeddingRuntime>,
+  constructor(readonly profile: ExpertProfile, private readonly load: () => Promise<EmbeddingRuntime>,
     private readonly rssBudgetBytes: number, cacheDirectory = "") {
     if (!Number.isSafeInteger(rssBudgetBytes) || rssBudgetBytes <= 0) throw new Error("Expert RSS budget must be a positive integer.");
     this.persistent = cacheDirectory ? new PersistentEmbeddingCache(path.resolve(cacheDirectory), profile.dimensions) : null;
@@ -290,15 +291,15 @@ export class EmbeddingExpert {
 
 export class ProseExpert extends EmbeddingExpert {
   constructor(load: () => Promise<EmbeddingRuntime> = () => loadEmbeddingRuntime(PROSE_EXPERT),
-    rssBudgetBytes = 2147483648, cacheDirectory = "") {
-    super(PROSE_EXPERT, load, rssBudgetBytes, cacheDirectory);
+    rssBudgetBytes = 2147483648, cacheDirectory = "", profile = PROSE_EXPERT) {
+    super(profile, load, rssBudgetBytes, cacheDirectory);
   }
 }
 
 export class CodeExpert extends EmbeddingExpert {
   constructor(load: () => Promise<EmbeddingRuntime> = () => loadEmbeddingRuntime(CODE_EXPERT),
-    rssBudgetBytes = 2147483648, cacheDirectory = "") {
-    super(CODE_EXPERT, load, rssBudgetBytes, cacheDirectory);
+    rssBudgetBytes = 2147483648, cacheDirectory = "", profile = CODE_EXPERT) {
+    super(profile, load, rssBudgetBytes, cacheDirectory);
   }
 }
 
@@ -324,11 +325,17 @@ function configuredBudget(): number {
 }
 
 export function createProseExpert(cacheDirectory: string, rssBudgetBytes = configuredBudget()): ProseExpert {
-  return new ProseExpert(() => loadEmbeddingRuntime(PROSE_EXPERT), rssBudgetBytes, cacheDirectory);
+  const gpu = configuredExpertGpu();
+  if (!gpu) return new ProseExpert(() => loadEmbeddingRuntime(PROSE_EXPERT), rssBudgetBytes, cacheDirectory);
+  const profile: ExpertProfile = {...PROSE_EXPERT, provider: "webgpu", cacheNamespace: PROSE_EXPERT.cacheNamespace + ":" + gpu.identity};
+  return new ProseExpert(() => openGpuEmbeddingRuntime(profile, gpu), rssBudgetBytes, cacheDirectory, profile);
 }
 
 export function createCodeExpert(cacheDirectory: string, rssBudgetBytes = configuredBudget()): CodeExpert {
-  return new CodeExpert(() => loadEmbeddingRuntime(CODE_EXPERT), rssBudgetBytes, cacheDirectory);
+  const gpu = configuredExpertGpu();
+  if (!gpu) return new CodeExpert(() => loadEmbeddingRuntime(CODE_EXPERT), rssBudgetBytes, cacheDirectory);
+  const profile: ExpertProfile = {...CODE_EXPERT, provider: "webgpu", cacheNamespace: CODE_EXPERT.cacheNamespace + ":" + gpu.identity};
+  return new CodeExpert(() => openGpuEmbeddingRuntime(profile, gpu), rssBudgetBytes, cacheDirectory, profile);
 }
 
 export function configuredProseExpert(): ProseExpert | null {

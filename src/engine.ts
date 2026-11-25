@@ -5,7 +5,7 @@ import {
 } from "./guards/index.ts";
 import { guards, resolveExpectations, type Finding, type GuardName } from "./model.ts";
 import { observeSemanticProgress, observeSemanticTimings, semanticExecutionProvider, zeroShot } from "./semantic.ts";
-import { CODE_EXPERT, PROSE_EXPERT, configuredCodeExpert, configuredProseExpert, guardCapabilities, type ExpertMetrics } from "./experts.ts";
+import { configuredCodeExpert, configuredProseExpert, guardCapabilities, type ExpertMetrics } from "./experts.ts";
 
 export type AnalysisOptions = {
   enabled: Set<GuardName>;
@@ -47,7 +47,7 @@ async function analyseFunctions(project: Project, includeTests: boolean, report:
     if (expert) {
       await expert.close();
       report("[Code Guards] Code expert: " + JSON.stringify(expert.metrics));
-      telemetry({type: "expert-complete", model: CODE_EXPERT.model, revision: CODE_EXPERT.revision, device: CODE_EXPERT.provider, metrics: expert.metrics});
+      telemetry({type: "expert-complete", model: expert.profile.model, revision: expert.profile.revision, device: expert.profile.provider, metrics: expert.metrics});
     }
   }
 }
@@ -60,7 +60,7 @@ async function analyseDocumentation(project: Project, prose: ReturnType<typeof c
     if (code) {
       await code.close();
       report("[Code Guards] Contract retrieval expert: " + JSON.stringify(code.metrics));
-      telemetry({type: "expert-complete", model: CODE_EXPERT.model, revision: CODE_EXPERT.revision, device: CODE_EXPERT.provider, metrics: code.metrics});
+      telemetry({type: "expert-complete", model: code.profile.model, revision: code.profile.revision, device: code.profile.provider, metrics: code.metrics});
     }
   }
 }
@@ -154,7 +154,7 @@ export async function analyse(
     if (proseExpert) {
       await proseExpert.close();
       report("[Code Guards] Prose expert: " + JSON.stringify(proseExpert.metrics));
-      telemetry({type: "expert-complete", model: PROSE_EXPERT.model, revision: PROSE_EXPERT.revision, device: PROSE_EXPERT.provider, metrics: proseExpert.metrics});
+      telemetry({type: "expert-complete", model: proseExpert.profile.model, revision: proseExpert.profile.revision, device: proseExpert.profile.provider, metrics: proseExpert.metrics});
     }
   }
   const resolved = resolveExpectations(project.root, project.files, findings);

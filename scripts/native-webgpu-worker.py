@@ -49,13 +49,10 @@ def profile_prefix(adapter_index: int) -> str:
                f"code-guards-ort-gpu{adapter_index}-{os.getpid()}-{uuid.uuid4().hex}")
 
 
-def initialise(adapter_index: int) -> tuple[Any, Any, int, int, str]:
+def webgpu_session(model_path: str, adapter_index: int) -> Any:
     import onnxruntime as ort
     import onnxruntime_ep_webgpu as webgpu_ep
-    from tokenizers import Tokenizer
 
-    model_path, tokenizer_path, config = model_files()
-    tokenizer = Tokenizer.from_file(tokenizer_path)
     ort.register_execution_provider_library("code_guards_webgpu", webgpu_ep.get_library_path())
     matching = [item for item in ort.get_ep_devices() if item.ep_name == webgpu_ep.get_ep_name()]
     if not matching:
@@ -74,6 +71,14 @@ def initialise(adapter_index: int) -> tuple[Any, Any, int, int, str]:
     session.disable_fallback()
     if not any("webgpu" in provider.lower() for provider in session.get_providers()):
         raise RuntimeError("Native WebGPU provider was not activated.")
+    return session
+
+
+def initialise(adapter_index: int) -> tuple[Any, Any, int, int, str]:
+    from tokenizers import Tokenizer
+    model_path, tokenizer_path, config = model_files()
+    tokenizer = Tokenizer.from_file(tokenizer_path)
+    session = webgpu_session(model_path, adapter_index)
     labels = {str(name).lower(): int(index) for name, index in config["label2id"].items()}
     return session, tokenizer, labels["entailment"], labels["contradiction"], model_namespace(model_path, tokenizer_path, (labels["entailment"], labels["contradiction"]))
 
@@ -351,10 +356,85 @@ def classify(request: dict[str, Any], session: Any, tokenizer: Any, entailment: 
     }})
 
 
+def embedding_assets(model: str, revision: str) -> tuple[str, Any]:
+    from huggingface_hub import hf_hub_download
+    from tokenizers import Tokenizer
+    offline = os.environ.get("CODE_GUARDS_OFFLINE") == "1"
+    cache = os.environ.get("CODE_GUARDS_MODEL_CACHE") or None
+    model_path = hf_hub_download(model, filename="onnx/model.onnx", revision=revision,
+                                 local_files_only=offline, cache_dir=cache)
+    tokenizer_path = hf_hub_download(model, filename="tokenizer.json", revision=revision,
+                                     local_files_only=offline, cache_dir=cache)
+    tokenizer = Tokenizer.from_file(tokenizer_path)
+    tokenizer.no_truncation()
+    tokenizer.no_padding()
+    return model_path, tokenizer
+
+
+def embedding_rows(session: Any, tokenizer: Any, passages: list[str], capacity: int,
+                   dimensions: int) -> list[Any]:
+    import numpy as np
+    encoded = [tokenizer.encode(text) for text in passages]
+    positions = [i for i, item in enumerate(encoded) if len(item.ids) <= capacity]
+    output = [None] * len(passages)
+    if not positions:
+        return output
+    batch = [encoded[i] for i in positions]
+    width = max(len(item.ids) for item in batch)
+    fields = {
+        "input_ids": [item.ids + [0] * (width - len(item.ids)) for item in batch],
+        "attention_mask": [item.attention_mask + [0] * (width - len(item.ids)) for item in batch],
+        "token_type_ids": [item.type_ids + [0] * (width - len(item.ids)) for item in batch],
+    }
+    feeds = {}
+    for arg in session.get_inputs():
+        if arg.name not in fields or arg.type not in ("tensor(int32)", "tensor(int64)"):
+            raise RuntimeError("Unsupported embedding input: " + arg.name)
+        feeds[arg.name] = np.asarray(fields[arg.name], dtype=np.int32 if arg.type == "tensor(int32)" else np.int64)
+    hidden = session.run(["last_hidden_state"], feeds)[0]
+    if hidden.shape != (len(batch), width, dimensions):
+        raise RuntimeError("Unexpected specialist token embedding shape.")
+    mask = np.asarray(fields["attention_mask"], dtype=np.float32)[..., None]
+    pooled = (hidden * mask).sum(axis=1) / np.maximum(mask.sum(axis=1), 1)
+    norms = np.linalg.norm(pooled, axis=1, keepdims=True)
+    if not np.all(np.isfinite(pooled)) or np.any(norms == 0):
+        raise RuntimeError("Invalid specialist embedding.")
+    for index, row in zip(positions, pooled / norms):
+        output[index] = row.tolist()
+    return output
+
+
+def embedding_main(gpu_id: int) -> int:
+    model = os.environ["CODE_GUARDS_EMBEDDING_MODEL"]
+    revision = os.environ["CODE_GUARDS_EMBEDDING_REVISION"]
+    capacity = int(os.environ["CODE_GUARDS_EMBEDDING_CONTEXT"])
+    dimensions = int(os.environ["CODE_GUARDS_EMBEDDING_DIMENSIONS"])
+    batch_size = int(os.environ["CODE_GUARDS_GPU_BATCH_SIZE"])
+    model_path, tokenizer = embedding_assets(model, revision)
+    session = webgpu_session(model_path, gpu_id)
+    emit({"type": "ready", "gpuId": gpu_id})
+    verified = False
+    for line in sys.stdin:
+        request = json.loads(line)
+        passages = request["passages"]
+        if not isinstance(passages, list) or not 1 <= len(passages) <= batch_size or not all(
+                isinstance(text, str) for text in passages):
+            raise ValueError("Malformed embedding batch.")
+        rows = embedding_rows(session, tokenizer, passages, capacity, dimensions)
+        if not verified and any(row is not None for row in rows):
+            verify_webgpu_execution(session, gpu_id)
+            verified = True
+        emit({"type": "embeddings", "gpuId": gpu_id, "rows": rows})
+    del session
+    return 0
+
+
 def main() -> int:
     gpu_id = int(os.environ["CODE_GUARDS_GPU_WORKER_ID"])
     if not 0 <= gpu_id < 16:
         raise ValueError("GPU adapter index must be between 0 and 15.")
+    if os.environ.get("CODE_GUARDS_EMBEDDING_MODEL"):
+        return embedding_main(gpu_id)
     batch_size = int(os.getenv("CODE_GUARDS_GPU_BATCH_SIZE", "4")) if os.getenv("CODE_GUARDS_GPU_BATCH") == "1" else 1
     if not 1 <= batch_size <= 16:
         raise ValueError("Batch size must be 1..16.")
