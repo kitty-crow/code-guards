@@ -337,3 +337,64 @@ test("underscore and hyphen test filenames follow the include-tests option", asy
   assert.equal(codeHealth(sample, false).filter(item => item.code === "CG305").length, 0);
   assert.ok(codeHealth(sample, true).some(item => item.code === "CG305"));
 });
+
+
+test("type reuse does not report inherited members as independently duplicated", async () => {
+  const sample = project({
+    "base.ts": "export class Base { name = ''; id = 0; active = true; reset() { this.id = 0; } }",
+    "one.ts": "import { Base } from './base'; export class One extends Base { colour = ''; }",
+    "two.ts": "import { Base } from './base'; export class Two extends Base { count = 0; }",
+    "three.ts": "import { One } from './one'; export class Three extends One {}"
+  });
+  const forbidden: SemanticScorer = async () => { throw new Error("Inherited declarations are already reused"); };
+  assert.deepEqual(await typeReuse(sample, false, forbidden), []);
+});
+
+test("type reuse still compares independently declared members on subclasses", async () => {
+  const sample = project({
+    "base.ts": "export class Base { name = ''; id = 0; active = true; }",
+    "one.ts": "import { Base } from './base'; export class One extends Base { email = ''; phone = ''; }",
+    "two.ts": "import { Base } from './base'; export class Two extends Base { email = ''; phone = ''; }"
+  });
+  const findings = await typeReuse(sample, false, endorse);
+  assert.equal(findings.length, 1);
+  const finding = findings[0] ?? null;
+  assert.ok(finding);
+  assert.equal(finding.code, "CG103");
+  assert.match(finding.reason, /2 independently declared matching field/);
+});
+
+test("type reuse retains independent extensions of the same interface", async () => {
+  const sample = project({
+    "base.ts": "export interface Base { id: number; name: string; active: boolean }",
+    "one.ts": "import { Base } from './base'; export interface One extends Base { email: string; phone: string }",
+    "two.ts": "import { Base } from './base'; export interface Two extends Base { email: string; phone: string }"
+  });
+  const findings = await typeReuse(sample, false, endorse);
+  assert.deepEqual(findings.map(finding => finding.code), ["CG101"]);
+});
+
+
+test("CG314 follows actual assertion helpers across imports and aliases", () => {
+  const sample = project({
+    "assertions.ts": "export function expectEqual(actual: number, expected: number) { if (actual !== expected) throw new Error('different'); } export function expectResult(actual: number) { expectEqual(actual, 42); }",
+    "sample_test.ts": "import { expectResult as check } from './assertions'; declare function it(name: string, fn: () => void): void; it('checks result', () => { check(42); });"
+  });
+  assert.deepEqual(codeHealth(sample, true).filter(item => item.code === "CG314"), []);
+});
+
+test("CG314 still reports empty helpers and unused callbacks", () => {
+  const sample = project({
+    "assertions.ts": "export function expectNothing(value: number) { return value; } export function expectEqual(actual: number, expected: number) { if (actual !== expected) throw new Error('different'); }",
+    "sample_test.ts": "import { expectNothing, expectEqual } from './assertions'; declare function it(name: string, fn: () => void): void; it('noop', () => { expectNothing(42); }); it('unused', () => { const run = () => expectEqual(1, 2); });"
+  });
+  assert.equal(codeHealth(sample, true).filter(item => item.code === "CG314").length, 2);
+});
+
+test("CG314 handles recursive helper calls without assuming an assertion", () => {
+  const sample = project({
+    "assertions.ts": "export function expectLoop(value: number): number { return expectLoop(value); }",
+    "sample_test.ts": "import { expectLoop } from './assertions'; declare function it(name: string, fn: () => void): void; it('no assertion', () => { expectLoop(1); });"
+  });
+  assert.equal(codeHealth(sample, true).filter(item => item.code === "CG314").length, 1);
+});

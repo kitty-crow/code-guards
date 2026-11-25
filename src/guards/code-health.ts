@@ -172,7 +172,71 @@ function checkVariable(node: ts.Node, project: Project, report: Report, writes: 
   }
 }
 
-function checkTest(node: ts.Node, report: Report): void {
+// Resolve assertion helpers to real executable bodies; a suggestive name,
+// import alias or comment alone is not evidence of a failure expectation.
+function directThrow(statement: ts.Statement): boolean {
+  if (ts.isThrowStatement(statement)) return true;
+  return ts.isBlock(statement) && statement.statements.some(ts.isThrowStatement);
+}
+
+function variableCondition(expression: ts.Node): boolean {
+  if (ts.isIdentifier(expression)) return expression.text !== "undefined";
+  let found = false;
+  ts.forEachChild(expression, child => {
+    found = found || variableCondition(child);
+  });
+  return found;
+}
+
+function assertionHelperBody(call: ts.CallExpression, checker: ts.TypeChecker): ts.ConciseBody | null {
+  const signature = checker.getResolvedSignature(call) ?? null;
+  if (!signature) return null;
+  const declaration = signature.declaration ?? null;
+  if (!declaration || declaration.getSourceFile().isDeclarationFile) return null;
+  if (!ts.isFunctionDeclaration(declaration) && !ts.isMethodDeclaration(declaration)) return null;
+  const name = declaration.name ?? null;
+  if (!name || !ts.isIdentifier(name) || !/^(?:expect|assert|verify)[A-Z_]/.test(name.text)) return null;
+  return bodyOf(declaration);
+}
+
+function guardedThrow(node: ts.Node): boolean {
+  if (!ts.isIfStatement(node) || !variableCondition(node.expression)) return false;
+  const alternate = node.elseStatement ?? null;
+  return directThrow(node.thenStatement) ||
+    (alternate !== null && directThrow(alternate));
+}
+
+function callHasAssertion(
+    node: ts.Node, checker: ts.TypeChecker, active: Set<ts.Node>,
+    remaining: number): boolean {
+  if (!ts.isCallExpression(node)) return false;
+  const callee = node.expression.getText();
+  if (/^(?:assert|expect|should|throws|rejects|verify)(?:\.|$)/.test(callee)) return true;
+  const body = assertionHelperBody(node, checker);
+  return body !== null && hasAssertionCall(body, checker, active, remaining - 1, true);
+}
+
+function hasAssertionCall(
+    root: ts.Node, checker: ts.TypeChecker, active: Set<ts.Node>,
+    remaining: number, helper: boolean): boolean {
+  if (remaining < 0 || active.has(root)) return false;
+  active.add(root);
+  const inspect = (node: ts.Node): boolean => {
+    if (ts.isFunctionLike(node)) return false;
+    if (helper && guardedThrow(node)) return true;
+    if (callHasAssertion(node, checker, active, remaining)) return true;
+    let found = false;
+    ts.forEachChild(node, child => {
+      found = found || inspect(child);
+    });
+    return found;
+  };
+  const result = inspect(root);
+  active.delete(root);
+  return result;
+}
+
+function checkTest(node: ts.Node, project: Project, report: Report): void {
   if (!ts.isCallExpression(node)) return;
   const name = node.expression.getText();
   if (!/^(?:test|it|describe)(?:\.|$)/.test(name)) return;
@@ -180,8 +244,8 @@ function checkTest(node: ts.Node, report: Report): void {
   if (!callback) return;
   const text = callback.getText();
   const hasAssert = /\b(?:assert|expect|should|throws|rejects|spyOn|verify)\s*(?:\.|\()/.test(text);
-  if (hasAssert) return;
-  if (name === "describe") return;
+  if (hasAssert || name === "describe") return;
+  if (hasAssertionCall(callback.body, project.checker, new Set<ts.Node>(), 8, false)) return;
   report({guard: "test-quality", code: "CG314", node: node, message: "Test has no meaningful assertion", reason: `This ${name} callback contains no recognisable assertion or failure expectation.`, suggestion: "Assert a concrete result or side effect; avoid tests that only invoke functions and always pass."});
 }
 
@@ -237,11 +301,11 @@ export function codeHealth(project: Project, includeTests = false): Finding[] {
       checkSwitch(node, project, report);
       checkVariable(node, project, report, writes);
       inspectFunction(node, project, report);
-      if (isTest) checkTest(node, report);
+      if (isTest) checkTest(node, project, report);
     });
   }
   deterministicTypes(project, includeTests, report);
   // Test quality remains enabled for tests even if general code-quality excludes tests.
-  if (!includeTests) for (const file of testFiles(project)) visitAll(file, node => checkTest(node, report));
+  if (!includeTests) for (const file of testFiles(project)) visitAll(file, node => checkTest(node, project, report));
   return withoutIgnored(project.root, findings);
 }
