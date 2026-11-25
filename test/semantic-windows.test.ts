@@ -152,3 +152,15 @@ test("adaptive investigation honours the caller's opposing evidence limit", asyn
   assert.deepEqual(seen, ["first", "additional evidence"]);
   assert.equal(verdict.differentConcept, 0.93);
 });
+
+test("large paired declarations retain every evidence combination beyond 256 windows", () => {
+  const runtime = fakeRuntime(() => ({same: 0.9, different: 0.1}));
+  const left = Array.from(Array<number>(4000).keys(), index => `left${index}`).join(" ");
+  const right = Array.from(Array<number>(4000).keys(), index => `right${index}`).join(" ");
+  const pair = comparisonQuestion(question(left + " " + right), {name: "a", evidence: left}, {name: "b", evidence: right});
+  const windows = premiseWindows(pair, runtime.tokenizer);
+  assert.ok(windows.length > 256);
+  assert.equal(premiseWindowCount(pair, runtime.tokenizer), windows.length);
+  assert.ok(windows.some(window => window.includes("left0 ") && window.includes("right3999")));
+  assert.ok(windows.some(window => window.includes("left3999") && window.includes("right0 ")));
+});

@@ -160,6 +160,12 @@ export async function run(argv: string[]): Promise<number> {
       ) : findings;
       console.log(renderFindings(reported, { format: config.format, colour: config.colour, root }));
       return failed(findings, config.strict) ? 1 : 0;
+    } catch (error) {
+      // Report the primary scan error before cleanup, which can independently
+      // fail when the native worker has already terminated.
+      const failure = error instanceof Error ? error : new Error(String(error));
+      console.error("Scan failed before cleanup: " + failure.message);
+      throw failure;
     } finally {
       restoreRemote();
       try {

@@ -132,8 +132,6 @@ def paired_windows(comparison: Any, tokenizer: Any, capacity: int) -> list[str]:
         raise ValueError("Comparison labels exceed the paired evidence budget.")
     left_chunks = decode_windows(tokenizer.encode(left["evidence"], add_special_tokens=False).ids, budget, tokenizer)
     right_chunks = decode_windows(tokenizer.encode(right["evidence"], add_special_tokens=False).ids, budget, tokenizer)
-    if len(left_chunks) * len(right_chunks) > 256:
-        raise ValueError("Comparison exceeds 256 paired evidence windows; narrower evidence is required.")
     windows = [first + a + "\n" + second + b for a in left_chunks for b in right_chunks]
     if any(len(tokenizer.encode(window, add_special_tokens=False).ids) > capacity for window in windows):
         raise ValueError("Re-encoded comparison exceeds the model token budget.")

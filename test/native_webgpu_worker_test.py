@@ -1,6 +1,7 @@
 """Tests for fail-closed native WebGPU provider evidence without GPU access."""
 import importlib.util
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "native-webgpu-worker.py"
@@ -32,6 +33,27 @@ class ProviderProofTests(unittest.TestCase):
     def test_missing_profiling_evidence_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "no WebGPU kernels"):
             worker.summarise_provider_profile([])
+
+
+class LargeEvidenceTests(unittest.TestCase):
+    def test_full_pair_product_beyond_256_windows(self):
+        class Tokenizer:
+            def encode(self, text, add_special_tokens=False):
+                return SimpleNamespace(ids=text.split())
+
+            def decode(self, tokens, skip_special_tokens=True):
+                return " ".join(tokens)
+
+        left = " ".join(f"left{i}" for i in range(4000))
+        right = " ".join(f"right{i}" for i in range(4000))
+        windows = worker.paired_windows({
+            "left": {"name": "a", "evidence": left},
+            "right": {"name": "b", "evidence": right}
+        }, Tokenizer(), 450)
+        self.assertGreater(len(windows), 256)
+        self.assertTrue(any("left0 " in window and "right3999" in window for window in windows))
+        self.assertTrue(any("left3999" in window and "right0 " in window for window in windows))
+        self.assertTrue(all(len(window.split()) <= 450 for window in windows))
 
 
 if __name__ == "__main__":

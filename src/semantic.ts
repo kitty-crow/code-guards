@@ -252,7 +252,6 @@ function pairedPremises(question: ComparisonQuestion, tokenizer: Tokenizer, capa
   const rightChunks = decodeWindows(tokenizer.encode(right.evidence, {add_special_tokens: false}), budget, tokenizer);
   // Cross-product pairing prevents a decisive relationship from disappearing
   // merely because the two facts occupy distant positions in the source.
-  if (leftChunks.length * rightChunks.length > 256) throw new Error("Comparison exceeds 256 paired evidence windows; narrower evidence is required.");
   const windows = leftChunks.flatMap(a => rightChunks.map(b => first + a + "\n" + second + b));
   if (windows.some(window => tokenizer.encode(window, {add_special_tokens: false}).length > capacity)) {
     throw new Error("Re-encoded comparison exceeds the model token budget.");
