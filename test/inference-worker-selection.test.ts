@@ -1,6 +1,8 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { leastPendingWorkerIndex, createLazyWorkerPool, decodeSemanticQuestion } from "../src/inference-workers.ts";
+import { spawn } from "node:child_process";
+import type { AccelerationConfig } from "../src/acceleration.ts";
+import { leastPendingWorkerIndex, createLazyWorkerPool, createNativeCpuWorkerPool, decodeSemanticQuestion } from "../src/inference-workers.ts";
 import { parseRecord } from "../src/json.ts";
 import { comparisonQuestion } from "../src/semantic.ts";
 
@@ -53,4 +55,66 @@ test("lazy worker pool forwards paired evidence and drains allocated workers", a
   assert.equal(drained, 1);
   assert.deepEqual(decodeSemanticQuestion(parseRecord(JSON.stringify(question))), question);
   assert.throws(() => decodeSemanticQuestion(parseRecord('{"premise":"p","same":"s","different":"d","comparison":true}')), /paired/);
+});
+
+const retryConfig: AccelerationConfig = {features: new Set(), batchSize: 4, concurrency: 2, gpuIds: []};
+const retryQuestion = {premise: "same evidence", same: "same", different: "different"};
+const replyScript = `
+  const readline = require("node:readline");
+  const gpuId = Number(process.env.CODE_GUARDS_GPU_WORKER_ID);
+  readline.createInterface({input: process.stdin}).on("line", line => {
+    const request = JSON.parse(line);
+    if (request.question.premise !== "same evidence") process.exit(9);
+    console.log(JSON.stringify({type: "result", gpuId, id: request.id, verdict: {
+      sameConcept: 0.9, differentConcept: 0.1,
+      evidence: {windows: 1, supportWindow: 1, oppositionWindow: 1}
+    }}));
+  });
+`;
+
+test("native abnormal exit replays outstanding requests on the same adapter", async () => {
+  let launches = 0;
+  const pool = createNativeCpuWorkerPool(retryConfig, () => {}, (_exe, _args, options) => {
+    launches += 1;
+    const script = launches === 1
+      ? 'require("node:readline").createInterface({input: process.stdin}).once("line", () => process.exit(5));'
+      : replyScript;
+    return spawn(process.execPath, ["-e", script], options);
+  });
+  try {
+    const results = await Promise.all([pool.score(retryQuestion), pool.score(retryQuestion)]);
+    assert.deepEqual(results.map(result => result.sameConcept), [0.9, 0.9]);
+    assert.equal(launches, 2);
+    await pool.drainAndClose();
+  } finally { pool.close(); }
+});
+
+test("repeated native exits exhaust the restart budget without accepting a partial verdict", async () => {
+  let launches = 0;
+  const pool = createNativeCpuWorkerPool(retryConfig, () => {}, (_exe, _args, options) => {
+    launches += 1;
+    return spawn(process.execPath, ["-e",
+      'require("node:readline").createInterface({input: process.stdin}).once("line", () => process.exit(5));'], options);
+  });
+  try {
+    await assert.rejects(pool.score(retryQuestion), /worker exited: 5/);
+    assert.equal(launches, 3);
+    await assert.rejects(pool.drainAndClose(), /worker exited: 5/);
+  } finally { pool.close(); }
+});
+
+test("explicit fatal inference errors are never retried", async () => {
+  let launches = 0;
+  const pool = createNativeCpuWorkerPool(retryConfig, () => {}, (_exe, _args, options) => {
+    launches += 1;
+    return spawn(process.execPath, ["-e", `
+      require("node:readline").createInterface({input: process.stdin}).once("line", () => {
+        console.log(JSON.stringify({type: "fatal", gpuId: 0, message: "invalid evidence"}));
+      });
+    `], options);
+  });
+  try {
+    await assert.rejects(pool.score(retryQuestion), /invalid evidence/);
+    assert.equal(launches, 1);
+  } finally { pool.close(); }
 });

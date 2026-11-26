@@ -1,5 +1,5 @@
 /** Native DirectML / GPU affinity via isolated model child processes. */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
@@ -11,7 +11,8 @@ import { comparisonQuestion, type SemanticQuestion, type SemanticTimingEvent, ty
 
 type WorkerEvent = { type: "loading" | "ready"; gpuId: number; backend: "cuda" | "dml" | "webgpu" | "cpu" } |
   { type: "timing"; gpuId: number; timing: SemanticTimingEvent };
-type Pending = { resolve: (value: WindowVerdict) => void; reject: (reason: Error) => void };
+type WorkerLauncher = (executable: string, args: string[], options: SpawnOptions) => ChildProcess;
+type Pending = { question: SemanticQuestion; resolve: (value: WindowVerdict) => void; reject: (reason: Error) => void };
 type Worker = {
   child: ChildProcess;
   id: number;
@@ -191,15 +192,16 @@ export function createGpuWorkerPool(
 
 /** Explicit CPU FP32 worker using the native model and portable cache. */
 export function createNativeCpuWorkerPool(
-  config: AccelerationConfig, event: (message: WorkerEvent) => void
+  config: AccelerationConfig, event: (message: WorkerEvent) => void,
+  launch: WorkerLauncher = spawn
 ): ManagedWorkerPool {
-  return createWorkerPool([0], config, "cpu", event);
+  return createWorkerPool([0], config, "cpu", event, launch);
 }
 
 function createWorkerPool(
   ids: readonly number[], config: AccelerationConfig,
   backend: "cuda" | "dml" | "webgpu" | "cpu",
-  event: (message: WorkerEvent) => void
+  event: (message: WorkerEvent) => void, launch: WorkerLauncher = spawn
 ): ManagedWorkerPool {
   const native = backend === "webgpu" || backend === "cpu";
   const sourceDir = dirname(fileURLToPath(import.meta.url));
@@ -228,7 +230,28 @@ function createWorkerPool(
     worker.requests.clear();
   }
 
-  for (const id of ids) {
+  // Replaying unanswered, read-only inference questions on the same adapter
+  // preserves provider affinity and reuses committed SQLite window rows.
+  // Explicit fatal messages, protocol errors and memory violations are not
+  // transient exits and must remain hard failures.
+  function sendRequest(worker: Worker, id: number, request: Pending): void {
+    const input = worker.child.stdin;
+    if (!input || input.destroyed) {
+      rejectWorker(worker, new Error("GPU " + worker.id + " worker input is unavailable."));
+      worker.child.kill("SIGKILL");
+      return;
+    }
+    try {
+      input.write(JSON.stringify({ id, question: request.question }) + "\n", (error: Error | null = null) => {
+        if (error instanceof Error) worker.diagnostics.push("Worker write: " + error.message);
+      });
+    } catch (error) {
+      rejectWorker(worker, error instanceof Error ? error : new Error("GPU worker write failed."));
+      worker.child.kill("SIGKILL");
+    }
+  }
+
+  function startWorker(id: number, slot: number, restarts: number, requests: Map<number, Pending>): Worker {
     // The current ONNX Runtime Node binding does not expose physical
     // WebGPU adapter selection. The native plugin's Python binding does.
     // Code Guards and scheduling remain in Bun; only GPU execution is external.
@@ -236,7 +259,7 @@ function createWorkerPool(
       ? process.env.CODE_GUARDS_WEBGPU_PYTHON ?? (process.platform === "win32" ? "python" : "python3")
       : process.execPath;
     const args = native ? [nativeWorkerFile ?? ""] : [workerFile];
-    const child = spawn(executable, args, {
+    const child = launch(executable, args, {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -253,8 +276,7 @@ function createWorkerPool(
       child.once("close", code => resolve(code === 0));
       child.once("error", () => resolve(false));
     });
-    const worker: Worker = { child, id, requests: new Map<number, Pending>(), failed: null, diagnostics: [], exit };
-    workers.push(worker);
+    const worker: Worker = { child, id, requests, failed: null, diagnostics: [], exit };
     // The native ONNX model worker can terminate during initialisation.
     // Without a listener, EPIPE on Bun's Writable stdin can become an
     // unhandled process error instead of a useful diagnostic.
@@ -268,7 +290,7 @@ function createWorkerPool(
       worker.diagnostics.push("Worker stdin: " + error.message);
     });
     stderr.on("data", (data: Buffer | string) => {
-      const lines = String(data).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      const lines = String(data).replace(/\0/g, "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
       worker.diagnostics.push(...lines);
       if (worker.diagnostics.length > 32) worker.diagnostics.splice(0, worker.diagnostics.length - 32);
     });
@@ -319,12 +341,31 @@ function createWorkerPool(
     child.once("error", error => rejectWorker(worker,
       new Error("GPU " + id + " worker process failed: " + error.message)));
     child.once("close", (code, signal) => {
-      if (!worker.failed && (!closed || worker.requests.size > 0 || code !== 0)) {
-        const detail = worker.diagnostics.slice(-12).join(" | ");
-        rejectWorker(worker, new Error("GPU " + id + " worker exited: " +
-          String(code ?? signal) + (detail ? ". Native stderr: " + detail : "")));
+      if (worker.failed || (closed && !worker.requests.size && code === 0)) return;
+      const detail = worker.diagnostics.slice(-12).join(" | ");
+      const failure = new Error("GPU " + id + " worker exited: " +
+        String(code ?? signal) + (detail ? ". Native stderr: " + detail : ""));
+      if (!closed && native && code !== null && code !== 0 && restarts < 2) {
+        console.error("[Code Guards] " + failure.message + "; restarting the same adapter (" +
+          (restarts + 1) + "/2), replaying " + worker.requests.size + " unanswered questions.");
+        try {
+          const replacement = startWorker(id, slot, restarts + 1, worker.requests);
+          workers[slot] = replacement;
+          for (const [requestId, request] of replacement.requests) sendRequest(replacement, requestId, request);
+          return;
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          rejectWorker(worker, new Error(failure.message + "; restart failed: " + reason));
+          return;
+        }
       }
+      rejectWorker(worker, failure);
     });
+    return worker;
+  }
+
+  for (const id of ids) {
+    workers.push(startWorker(id, workers.length, 0, new Map<number, Pending>()));
   }
 
   // Sample independently of IPC progress so a long-running model load or
@@ -354,22 +395,11 @@ function createWorkerPool(
       const worker = workers[index] ?? null;
       if (!worker) return Promise.reject(new Error("No GPU worker available."));
       if (worker.failed) return Promise.reject(worker.failed);
-      const input = worker.child.stdin;
-      if (!input || input.destroyed) return Promise.reject(new Error("GPU " + worker.id + " worker input is unavailable."));
       const id = ++nextId;
       return new Promise((resolve, reject) => {
-        worker.requests.set(id, { resolve, reject });
-        try {
-          input.write(JSON.stringify({ id, question }) + "\n", (error: Error | null = null) => {
-            if (error instanceof Error) {
-              // The subprocess may have emitted a more useful fatal error.
-              // Save EPIPE for the close handler rather than masking it.
-              worker.diagnostics.push("Worker write: " + error.message);
-            }
-          });
-        } catch (error) {
-          rejectWorker(worker, error instanceof Error ? error : new Error("GPU worker write failed."));
-        }
+        const request = { question, resolve, reject };
+        worker.requests.set(id, request);
+        sendRequest(worker, id, request);
       });
     },
     close(): void {
