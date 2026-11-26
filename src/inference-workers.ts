@@ -354,7 +354,7 @@ function createWorkerPool(
           for (const [requestId, request] of replacement.requests) sendRequest(replacement, requestId, request);
           return;
         } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error);
+          const reason = error instanceof Error ? error.message : typeof error === "string" ? error : "Non-Error worker launch failure";
           rejectWorker(worker, new Error(failure.message + "; restart failed: " + reason));
           return;
         }
